@@ -251,5 +251,7 @@ Credentials stay with the controller; a worker's local remote settings cannot
 change the authenticated destination. Only the configured default branch supplies
 publication ancestry and deployment authority.
 
-Source delivery uses the existing repository poll. Native pushes of arbitrary
-branches are not implemented by this source replication path.
+This completes the source-fetch portion of GG's retained Git-access repair
+(`30a272b`), through the existing repository poll rather than a new privileged
+source-sync command. Native pushes of arbitrary branches are not implemented by
+this source replication path.

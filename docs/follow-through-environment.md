@@ -161,19 +161,19 @@ was absent. The service fixture now reads its manager's environment for both
 daemon and detached-worker starts. After that correction, repository observation
 and deployment converged to `a0b33e197d8e69bbb054ba908cd4ba13c7559cff`, including
 the priority regression fix. Health reported that exact revision and the done
-receipt count remained one. The retained fixture used port 18099 at the time of that observation.
+receipt count remained one. `orgself` remains running on port 18099.
 
 Focused receipt/conversation/control tests passed in the warm Linux container
 (24 tests). The local related state, conversation, world, task and deployment
 checks passed (66 tests). These are targeted continuation results, not a claim
 that a fresh full A–D run was repeated. The original 31/1 run remains evidence
-of the failure that led to this fix. That fixture run did not deploy any production instance.
+of the failure that led to this fix. GG production has not received this code.
 
 ## What it has already caught
 
 - **A held offset multiplied one update into a thousand messages** — main's
   poller re-queued every redelivery of an update still owed a reply, and each
-  copy re-sent the reply. A downstream instance had found this (2bf4183); the
+  copy re-sent the reply. Live fire had found this on gg (2bf4183); the
   environment reproduced it hermetically before the fix was ported, which is
   what earned the port.
 - **A task's trailers misparsed under Git 2.39** — `for-each-ref`'s
