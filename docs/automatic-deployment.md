@@ -276,3 +276,22 @@ The Linux acceptance test exercises real split identities, build import, HTTP
 identity and rollback in a disposable environment; it requires Linux/root and must
 be rerun on the intended host before adopting the systemd driver. Other platform
 drivers require their own external-observation and interruption proof.
+
+### Release-owned systemd driver bootstrap
+
+A protected stable wrapper can execute `scripts/systemd-target.py` from the
+current harness release instead of an independently installed Python package.
+Resolve the script to its immutable release path **before** executing it, for
+example `entry=$(readlink -f /opt/INSTANCE/current/scripts/systemd-target.py)`,
+then `exec /usr/bin/python3 -B "$entry" --config /etc/INSTANCE/steward.yaml
+--settings /etc/INSTANCE/target.yaml "$@"` (on one shell line). Use the instance's
+controller interpreter and protected configuration paths.
+
+The bootstrap prepends that release's `src` and `vendor` to Python's import path
+and calls the existing deployment CLI with its resolved `worker_entry`. The
+supervised worker therefore executes the same immutable script, core and vendored
+dependencies even if `current` moves after dispatch. It does not depend on
+`PYTHONPATH` surviving `systemd-run`, and adds no second deployment implementation.
+Keep that release available while its workers run. Installing or switching the
+stable wrapper remains a protected operator/coordinator operation; source
+publication alone does not perform that change.

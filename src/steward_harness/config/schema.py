@@ -486,11 +486,19 @@ class DeskConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    provider: ProviderFamily | None = None
+    profile: ProviderProfile | None = None
+    access: Literal["operator", "read-only"] = "operator"
+    readable_roots: tuple[str, ...] = ()
     inbox_dir: str = "/var/lib/steward/desk-inbox"
     events_file: str = "/var/lib/steward/desk/events.jsonl"
 
     @model_validator(mode="after")
     def validates_paths(self) -> "DeskConfig":
+        for path in self.readable_roots:
+            _require_bounded_absolute("desk readable root", path)
+        if self.readable_roots and self.access != "read-only":
+            raise ValueError("desk readable_roots require read-only access")
         _require_bounded_absolute("desk inbox_dir", self.inbox_dir)
         _require_bounded_absolute("desk events_file", self.events_file)
         return self
@@ -566,6 +574,9 @@ class StewardConfig(BaseModel):
 
     @model_validator(mode="after")
     def validates_cross_references(self) -> "StewardConfig":
+        if (self.desk and self.desk.provider is not None
+                and self.desk.provider not in self.provider.family_order):
+            raise ValueError("desk provider must be in provider.family_order")
         for name in (*self.procedures, *self.rhythms, *self.targets):
             if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", name):
                 raise ValueError(f"invalid procedure, rhythm or target name: {name!r}")

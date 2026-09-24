@@ -630,3 +630,26 @@ def test_rhythm_output_owner_is_explicit_and_uses_configured_transport():
     configured=base | {"telegram":dict(chat_id=123, allowed_users=[7], topics={"steward":0}),
                       "rhythms": {"review": rhythm | {"owner":"telegram:0"}}}
     assert StewardConfig.model_validate(configured)
+
+
+def test_desk_model_and_authority_configuration():
+    from steward_harness.config.schema import DeskConfig
+
+    assert DeskConfig().provider is None
+    assert DeskConfig().profile is None
+    assert DeskConfig().access == "operator"
+    config = StewardConfig.model_validate({
+        "identity": {"name": "test", "slug": "test"},
+        "provider": {"default_family": "codex", "fallback_families": [],
+                     "models": {"codex": {"fast": "gpt-5.6-luna"}}},
+        "desk": {"provider": "codex", "profile": "fast", "access": "read-only"},
+    })
+    assert config.desk.profile == "fast"
+    assert resolve_model("codex", "fast", config.provider.models).model == "gpt-5.6-luna"
+    for provider in ("", "unconfigured"):
+        with pytest.raises(ValidationError, match="desk provider"):
+            StewardConfig.model_validate({"identity": {"name": "test", "slug": "test"}, "desk": {"provider": provider}})
+    with pytest.raises(ValidationError):
+        DeskConfig(profile="arbitrary-client-model")
+    with pytest.raises(ValidationError):
+        DeskConfig(access="write-everywhere")

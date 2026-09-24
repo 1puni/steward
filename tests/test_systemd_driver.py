@@ -348,3 +348,51 @@ def test_observation_rejects_writable_evidence_without_probing_build_paths(tmp_p
     release_root.chmod(0o777)
     with pytest.raises(PermissionError, match="write controller-owned release root"):
         cli._check_observation_boundary(config, config_path, settings_path, settings)
+
+
+def test_release_bootstrap_worker_pins_core_and_vendor_after_pointer_moves(tmp_path, monkeypatch):
+    """Execute the real dispatched bootstrap with only stdlib and release contents."""
+    import os
+    import shutil
+
+    config, settings, _, revision, _, jobs, _ = installed(tmp_path, monkeypatch)
+    installed_pointer = tmp_path / "driver-current"
+    entries = []
+    for name in ("release-a", "release-b"):
+        release = tmp_path / name
+        entry = release / "scripts" / "systemd-target.py"
+        entry.parent.mkdir(parents=True)
+        shutil.copyfile(Path(__file__).parents[1] / "scripts/systemd-target.py", entry)
+        core = release / "src" / "steward_harness" / "deploy"
+        core.mkdir(parents=True)
+        (core.parent / "__init__.py").touch()
+        (core / "__init__.py").touch()
+        (core / "cli.py").write_text(
+            "import json,sys\nfrom pathlib import Path\nimport release_dependency\n"
+            "def main(*, worker_entry):\n"
+            "    print(json.dumps({'entry':worker_entry,'core':str(Path(__file__).resolve()),"
+            "'dependency':release_dependency.RELEASE,'argv':sys.argv[1:]}))\n"
+            "    return 0\n"
+        )
+        vendor = release / "vendor"
+        vendor.mkdir()
+        (vendor / "release_dependency.py").write_text(f"RELEASE = {name!r}\n")
+        entries.append(entry)
+    installed_pointer.symlink_to(entries[0].parents[1], target_is_directory=True)
+    entry = installed_pointer / "scripts/systemd-target.py"
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps(dict(target="production", revision=revision))))
+    # The real CLI's existing worker_entry hook must retain the immutable script.
+    assert cli.main(["--config", str(config), "--settings", str(settings), "apply"], worker_entry=entry) == 0
+    worker = jobs[-1][jobs[-1].index("--collect") + 1:]
+    assert worker[2] == str(entries[0])
+    installed_pointer.unlink()
+    installed_pointer.symlink_to(entries[1].parents[1], target_is_directory=True)
+    # -S rules out installed Python packages as well as absent PYTHONPATH.
+    result = subprocess.run([worker[0], "-S", *worker[1:]], cwd=tmp_path,
+                            env={"PATH": os.defpath}, capture_output=True, text=True, check=True)
+    report = json.loads(result.stdout)
+    assert report["entry"] == str(entries[0])
+    assert report["core"].startswith(str(entries[0].parents[1] / "src"))
+    assert report["dependency"] == "release-a"
+    assert report["argv"] == worker[3:]
+    assert not list(entries[0].parents[1].rglob("*.pyc"))

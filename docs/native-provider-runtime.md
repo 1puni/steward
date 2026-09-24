@@ -416,3 +416,67 @@ resume, child artifacts and memory recall from Git. Those are dated observations
 not a current suite total or proof that a deployed rhythm completed.
 Use runtime readiness for instance-level acceptance and the
 [upgrade procedure](../migration-handoff.md) before moving real native histories.
+
+## Trusted desk cognition policy
+
+Optional `desk.provider` and `desk.profile` seed a new desk conversation through
+the ordinary admission path, before its first native call. Omitted values inherit
+`provider.family_order[0]` and `provider.default_profile`. The selected provider
+must belong to the configured family order. Existing conversation lineage is
+preserved; changing these defaults does not silently retarget active sessions.
+Configured fallback providers still apply when they support the required access
+boundary. Browser visitors cannot set either
+field. A configured desk profile also suppresses the trusted inbox's per-message
+profile hint; leaving it unset preserves the existing phone ingress behavior.
+
+For Crosstrees the coordinator can select `desk.provider: codex` and
+`desk.profile: fast`, with `provider.models.codex.fast: gpt-5.6-luna`, after checking
+the installed model catalogue and upgrading safely. This is an instance override,
+not a new generic model default. No `gpt-6-luna` alias is supplied.
+
+`desk.access` defaults to `operator`, preserving existing desk/phone authority.
+`read-only` rejects both task proposals and task actions at controller completion
+acceptance, including replay of an unaccepted prepared completion. It applies to
+every desk topic, including private bearer ingress; a client cannot override it.
+Telegram conversations retain their configured authority. Public inputs/replies
+are not appended to the shared Git world, and a previously prepared writable
+world turn cannot be accepted through the read-only desk.
+
+`desk.readable_roots` is the trusted allowlist of public directories or individual
+files. It requires read-only access and defaults to an empty list: no product
+files are implicitly readable. The prompt gives only this public map, with no
+private repository/world auto-orientation. Select already public deployed data,
+not an entire checkout: tracked native transcripts, memories, task files, `.git`
+and sibling worktrees can all be private. Symlinks cannot grant reads beyond the
+selected paths. Do not put credentials or private data inside a public grant.
+
+The Codex adapter gives each conversation a persistent private native home under
+`<native_home>/.steward-read-scopes/<hash>`, with a separate empty working directory.
+Only the provider authentication file is linked from the operator home. Operator
+configuration, plugins, skills, memories and session histories are not imported.
+Use a canonical native-home path; symlinked private scope directories are rejected.
+The native process can retain its own conversation, but model tools cannot read
+that home, another visitor's home, or the operator's home. Preserve these private
+homes alongside the controller's conversation lineage during backup/upgrade.
+Previously unscoped native sessions are not imported into them.
+
+The adapter requires the named `steward-public` permission profile on both thread
+start/resume and turn start, granting minimal system runtime reads plus the
+explicit public paths and empty working directory, no writes and no network.
+It disables apps, MCP inheritance, plugins, hooks, memory tools, host skill
+discovery, browser/computer/image tools, delegation and approval escalation.
+Shell children inherit no provider credentials or host environment beyond a fixed
+system PATH. Before a model turn, the adapter verifies the native effective
+configuration and the confirmed permission profile; conflicting managed settings
+or an unsupported protocol fail closed. Codex 0.153.4 was exercised with actual
+sandbox reads, symlink escape, writes and loopback denial, and app-server
+configuration/profile confirmation without starting model inference.
+
+Providers that do not declare and implement scoped reads are skipped for this
+access mode, including Claude/GLM today. An unavailable Codex cannot silently fall
+back to an unconstrained provider. Normal operator requests retain their existing
+provider behavior. These local tests do not establish the installed C provider's
+login, model availability or real reply journey. Keep public Crosstrees access
+contained until the coordinator verifies the upgraded runtime, installed native
+policy, two independent visitor conversations and rejected actions, followed by
+independent reopening review. See the [Crosstrees route contract](../instances/crosstrees/README.md#public-visitor-transport-and-containment).

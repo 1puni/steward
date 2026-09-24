@@ -602,6 +602,10 @@ class StewardDaemon:
             workspace=checkpoint or Path(self.config.provider.workdir).resolve(),
             timeout_seconds=self.config.provider.timeout_seconds,
 
+            desk_provider=self.config.desk.provider if self.config.desk else None,
+            desk_profile=self.config.desk.profile if self.config.desk else None,
+            desk_access=self.config.desk.access if self.config.desk else "operator",
+            desk_readable_roots=tuple(map(Path, self.config.desk.readable_roots)) if self.config.desk else (),
             telegram_actions=(
                 self.config.telegram.agent_actions
                 if self.config.telegram is not None
@@ -1002,7 +1006,7 @@ class StewardDaemon:
             message = inbox.claim(message)
             try:
                 if not events.has_reply(message.msg_id):
-                    if message.profile is not None:
+                    if message.profile is not None and self.config.desk.profile is None:
                         conversation = conversations.conversation_for("desk", str(message.topic_id))
                         if conversation.profile != message.profile:
                             conversations.set_profile(
