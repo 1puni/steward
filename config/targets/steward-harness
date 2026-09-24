@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /opt/steward-driver/bin/python -m steward_harness.deploy.cli --config /etc/steward/steward.yaml --settings /etc/steward/targets/steward-harness.yaml "$@"

@@ -1,0 +1,62 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Linting
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE & OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime state / logs / databases
+*.db
+*.db-wal
+*.db-shm
+*.log
+releases/
+worktrees/
+state/
+credentials/
+.worktrees/
+
+# Per-run evidence stays on the machine that made it; it can carry operator
+# messages, and this repository is shared across instances. The inspector
+# page under output/stewardship-flow/ is source.
+/output/*
+!/output/stewardship-flow/

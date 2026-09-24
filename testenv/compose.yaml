@@ -1,0 +1,61 @@
+# Follow-through acceptance environment.
+#
+# Docker packages a local Linux test host. The harness image boots real
+# systemd; only Bot API and model responses are simulated. The runner assigns
+# fresh project names and builds the shared native-ownership fixture image.
+# MODE, CONFIG_SRC and STUB_PLAN select the scenario.
+#
+# The fake Bot API's control plane is published on the host so assertions
+# and injections are plain HTTP from the driver.
+
+services:
+  fake-botapi:
+    image: python@sha256:581429e3df12d76e6af4be5ab7d0e7fc2013eb57dc23d2de691411c8efdbb970
+    command: python /testenv/fake_botapi.py
+    volumes:
+      - ./fake_botapi.py:/testenv/fake_botapi.py:ro
+      - journal:/journal
+      # The managed repository's origin: seeded by the harness entrypoint,
+      # served as an HTTPS git remote from here.
+      - gitremote:/git
+    ports:
+      - "127.0.0.1:${FAKE_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/__test/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  harness:
+    build:
+      context: .
+      dockerfile: systemd.Dockerfile
+    image: steward-systemd-acceptance:local
+    privileged: true
+    cgroup: private
+    tmpfs:
+      - /run
+      - /run/lock
+    stop_signal: SIGRTMIN+3
+    entrypoint: ["/bin/sh", "/testenv/harness-init.sh"]
+    environment:
+      MODE: ${MODE:-acceptance}
+      CONFIG_SRC: ${CONFIG_SRC:-/testenv/steward.acceptance.yaml}
+      STUB_PLAN: ${STUB_PLAN:-/testenv/plans/acceptance.json}
+    volumes:
+      # The checkout, read-only, exactly as the boundary acceptance mounts it.
+      - ..:/source:ro
+      - ./harness-init.sh:/testenv/harness-init.sh:ro
+      - ./steward.acceptance.yaml:/testenv/steward.acceptance.yaml:ro
+      - ./steward.selftest.yaml:/testenv/steward.selftest.yaml:ro
+      - ./plans:/testenv/plans:ro
+      - state:/var/lib/steward
+      - gitremote:/git
+    depends_on:
+      fake-botapi:
+        condition: service_healthy
+
+volumes:
+  journal:
+  state:
+  gitremote:

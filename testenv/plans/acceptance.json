@@ -1,0 +1,29 @@
+{
+  "steps": [
+    {
+      "match": "FOLLOW-THROUGH-PROOF",
+      "reply": "Recorded the follow-through proof in the world at docs/follow-through-proof.md.",
+      "files": {
+        "docs/follow-through-proof.md": "# Follow-through proof\n\nFOLLOW-THROUGH-PROOF-A4\n"
+      }
+    },
+    {
+      "match": "CANCEL-CASE",
+      "sleep": 10,
+      "reply": "Wrote docs/cancel-proof.md; this turn should never land.",
+      "files": {
+        "docs/cancel-proof.md": "# Must not land\n\nCANCEL-CASE-B7\n"
+      }
+    },
+    {
+      "match": "HANG-RECOVERY",
+      "reply": "Recovered after the dead poll and recorded docs/hang-recovery-proof.md.",
+      "files": {
+        "docs/hang-recovery-proof.md": "# Hang recovery proof\n\nHANG-RECOVERY-C2\n"
+      }
+    },
+    {
+      "reply": "Acknowledged; no scripted work for this prompt."
+    }
+  ]
+}

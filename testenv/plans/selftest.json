@@ -1,0 +1,43 @@
+{
+  "steps": [
+    {
+      "match": "ORG-HELLO",
+      "reply": "Ready to work on the harness.",
+      "files": {
+        "docs/org-proof.md": "ORG-CONVERSATION\n"
+      }
+    },
+    {
+      "match": "ORG-AFTER-DEPLOY",
+      "reply": "The replacement steward is answering.",
+      "files": {
+        "docs/after-deploy.md": "ORG-AFTER-DEPLOY\n"
+      }
+    },
+    {
+      "match": "## Harness task result",
+      "reply": "Assessed the self-improve-proof task result."
+    },
+    {
+      "match": "SELF-IMPROVE-PROPOSAL",
+      "reply": "I will open one task on the harness repository for the proof.\nTASK_PROPOSAL: {\"repository\": \"steward-harness\", \"title\": \"Record the self-improvement proof\", \"brief\": \"Write docs/self-improve-proof.md containing the line SELF-IMPROVE-PROOF-MARKER plus wording requested from the operator, then finish the task.\"}"
+    },
+    {
+      "match": "OPERATOR-ANSWER-D9",
+      "reply": "Applied the operator answer.\nCOMMIT: docs: record the self-improvement proof\nDISPOSITION: idle\nQUESTION: NONE",
+      "files": {
+        "docs/self-improve-proof.md": "SELF-IMPROVE-PROOF-MARKER\nOPERATOR-ANSWER-D9\n"
+      }
+    },
+    {
+      "match": "SELF-IMPROVE-PROOF-MARKER",
+      "reply": "I need the operator wording.\nCOMMIT: docs: prepare self-improvement proof\nDISPOSITION: ask\nQUESTION: What wording should the proof include?",
+      "files": {
+        "docs/self-improve-proof.md": "SELF-IMPROVE-DRAFT\n"
+      }
+    },
+    {
+      "reply": "Acknowledged; no scripted work for this prompt."
+    }
+  ]
+}

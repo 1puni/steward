@@ -1,0 +1,47 @@
+"""Configuration package for steward-harness."""
+
+from steward_harness.config.loader import load_config
+from steward_harness.config.schema import (
+    CommandProbeSpec,
+    CommandSpec,
+    ControllerConfig,
+    FilesystemProbeSpec,
+    IdentityConfig,
+    IncidentPolicy,
+    PipelineConfig,
+    ProbeSpec,
+    ProviderConfig,
+    ProviderFamily,
+    ProviderProfile,
+    RepairMode,
+    RepositoryConfig,
+    StewardConfig,
+    TelegramAdapterCommandConfig,
+    TelegramAgentAction,
+    TelegramConfig,
+    UntrustedExecutionConfig,
+    WorldConfig,
+)
+
+__all__ = [
+    "CommandProbeSpec",
+    "CommandSpec",
+    "ControllerConfig",
+    "FilesystemProbeSpec",
+    "IdentityConfig",
+    "IncidentPolicy",
+    "PipelineConfig",
+    "ProbeSpec",
+    "ProviderConfig",
+    "ProviderFamily",
+    "ProviderProfile",
+    "RepairMode",
+    "RepositoryConfig",
+    "StewardConfig",
+    "TelegramAdapterCommandConfig",
+    "TelegramAgentAction",
+    "TelegramConfig",
+    "UntrustedExecutionConfig",
+    "WorldConfig",
+    "load_config",
+]

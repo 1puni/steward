@@ -1,0 +1,19 @@
+:root {color-scheme:light dark;--background:light-dark(#fff,#181818);--foreground:light-dark(#202020,#efefef);--muted-foreground:light-dark(#626262,#aaa);--border:light-dark(#ddd,#444);--viz-series-1:light-dark(#367bb2,#77b9e7);--viz-series-2:light-dark(#b16b36,#e5ac76);--viz-series-3:light-dark(#37865b,#72c794);--destructive:light-dark(#a83f22,#ed916a)}
+* {box-sizing:border-box}
+body {margin:0;background:var(--background);color:var(--foreground);font:14px/1.5 system-ui,sans-serif}
+main {max-width:1080px;margin:auto;padding:24px}
+h3 {font-size:16px;font-weight:500}
+select,button {font:inherit;color:inherit;background:var(--background)}
+select {max-width:100%;min-width:0;border:1px solid var(--border);border-radius:6px;padding:7px 28px 7px 10px}
+label {font-weight:500}
+.viz-row {display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.text-small {font-size:12px}
+.form-select {flex:1 1 260px}
+summary {font-weight:500;cursor:pointer}
+details {scroll-margin-top:20px}
+pre {font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:color-mix(in srgb,var(--foreground) 4%,var(--background));padding:18px}
+code {font:inherit}
+.table {border-collapse:collapse;width:100%}
+.table th,.table td {text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid var(--border);font-weight:400}
+.table th {font-weight:500}
+@media(max-width:500px){main{padding:16px}select{font-size:16px}pre{padding:12px}}

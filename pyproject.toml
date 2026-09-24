@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "steward-harness"
+version = "0.1.0"
+description = "Universal declarative autonomous project steward harness"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Evita Stenqvist" }
+]
+dependencies = [
+    "pydantic>=2.5.0",
+    "pyyaml>=6.0.1",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pylint>=3.3",
+    "radon>=6.0",
+    "vulture>=2.14",
+]
+
+[project.scripts]
+steward = "steward_harness.cli:main"
+steward-deploy = "steward_harness.deploy.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/steward_harness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.pylint.similarities]
+# Cross-file duplication scan (scripts/analyze.sh). Imports and signatures are
+# ignored so R0801 reports real logic clones, not boilerplate.
+min-similarity-lines = 8
+ignore-imports = true
+
+[tool.vulture]
+# 80 keeps unused imports/functions/classes (high confidence) and skips
+# attributes/variables that may be accessed dynamically. Lower it for a
+# deeper pass.
+min_confidence = 80

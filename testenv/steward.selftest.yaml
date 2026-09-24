@@ -1,0 +1,81 @@
+# Steward configuration for the self-improvement acceptance environment.
+#
+# Identical to steward.acceptance.yaml, plus the one managed repository the
+# harness may be given work on: a clone of this checkout itself, with the
+# suite (a fast subset; the full suite is the operator's own gate) as its
+# gate. Deployment replaces this daemon through the container process launcher.
+# The release engine and exact-SHA health check are the production path.
+identity:
+  name: "acceptance-steward"
+  slug: "acceptance"
+
+execution:
+  user: "steward"
+  group: "steward"
+  home: "/home/steward"
+  tmpdir: "/tmp"
+  # The stub CLI reads its script from the environment; the broker strips
+  # everything not allowlisted here, so the plan rides in by name.
+  inherited_environment:
+    - "PATH"
+    - "LANG"
+    - "STUB_PLAN"
+
+controller:
+  poll_seconds: 1
+  workers: 4
+  health_bind: "127.0.0.1:8420"
+
+incident_policy:
+  confirm_after_failures: 2
+  transient_retries: 1
+  repair_attempts_per_24h: 3
+  landed_changes_per_24h: 2
+  recovery_cooldown_seconds: 30
+
+provider:
+  default_family: "claude"
+  fallback_families: []
+  default_profile: "fast"
+  timeout_seconds: 240
+  workdir: "/var/lib/steward/work"
+  state_db: "/var/lib/steward/state.db"
+  claude_executable: "/usr/local/bin/claude-stub"
+  native_homes:
+    claude: "/home/steward/native/claude"
+
+telegram:
+  token_path: "/etc/steward/telegram-token"
+  chat_id: -1009990001111
+  allowed_users:
+    - 70001
+  topics:
+    operator: 0
+  botapi_base: "http://fake-botapi:8081"
+  media_max_mb: 5
+  inbound_media_dir: "/var/lib/steward/inbound-media"
+  delivery_outbox_dir: "/home/steward/outbox"
+  delivery_quarantine_dir: "/var/lib/steward/outbox-quarantine"
+  delivery_roots:
+    - "/home/steward/artifacts"
+
+world:
+  root: "/var/lib/steward/world"
+
+repositories:
+  steward-harness:
+    path: "/home/steward/steward-harness"
+    remote_url: "https://fake-botapi:8443/steward-harness.git"
+    default_branch: "main"
+    gates:
+      # src-layout: import the candidate, not the bootstrap pip installation.
+      - argv:
+          - python
+          - -c
+          - "import sys; sys.path.insert(0, 'src'); import pytest; raise SystemExit(pytest.main(['-q', 'tests/test_task_charter.py', 'tests/test_task_status.py']))"
+        timeout_seconds: 300
+
+targets:
+  selftest:
+    ref: repositories/steward-harness/main
+    driver: /usr/local/bin/acceptance-target

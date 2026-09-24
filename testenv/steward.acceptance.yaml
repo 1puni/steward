@@ -1,0 +1,61 @@
+# Steward configuration for the follow-through acceptance environment.
+#
+# The Telegram transport points at the fake Bot API container; the provider
+# is the scripted stub CLI. Everything else is the production topology in
+# miniature: root controller, dropped identity for model work, a git world.
+identity:
+  name: "acceptance-steward"
+  slug: "acceptance"
+
+execution:
+  user: "steward"
+  group: "steward"
+  home: "/home/steward"
+  tmpdir: "/tmp"
+  # The stub CLI reads its script from the environment; the broker strips
+  # everything not allowlisted here, so the plan rides in by name.
+  inherited_environment:
+    - "PATH"
+    - "LANG"
+    - "STUB_PLAN"
+
+controller:
+  poll_seconds: 1
+  workers: 4
+  health_bind: "127.0.0.1:8420"
+
+incident_policy:
+  confirm_after_failures: 2
+  transient_retries: 1
+  repair_attempts_per_24h: 3
+  landed_changes_per_24h: 2
+  recovery_cooldown_seconds: 30
+
+provider:
+  default_family: "claude"
+  fallback_families: []
+  default_profile: "fast"
+  timeout_seconds: 120
+  workdir: "/var/lib/steward/work"
+  state_db: "/var/lib/steward/state.db"
+  claude_executable: "/usr/local/bin/claude-stub"
+  native_homes:
+    claude: "/home/steward/native/claude"
+
+telegram:
+  token_path: "/etc/steward/telegram-token"
+  chat_id: -1009990001111
+  allowed_users:
+    - 70001
+  topics:
+    steward: 0
+  botapi_base: "http://fake-botapi:8081"
+  media_max_mb: 5
+  inbound_media_dir: "/var/lib/steward/inbound-media"
+  delivery_outbox_dir: "/home/steward/outbox"
+  delivery_quarantine_dir: "/var/lib/steward/outbox-quarantine"
+  delivery_roots:
+    - "/home/steward/artifacts"
+
+world:
+  root: "/var/lib/steward/world"

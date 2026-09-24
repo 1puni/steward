@@ -1,0 +1,358 @@
+<div id="steward-flow">
+  <div class="viz-row">
+    <label class="form-label" for="sf-trace">Trace a signal</label>
+    <select class="form-select" id="sf-trace">
+      <option value="all">Whole lifecycle</option>
+      <option value="conversation">Conversation to outcome</option>
+      <option value="rhythm">Rhythm to findings</option>
+      <option value="readonly">Read-only review</option>
+      <option value="ownership">Ownership query</option>
+      <option value="repair">Repair after a failed gate</option>
+      <option value="world-repair">World conflict reconciliation</option>
+      <option value="release">Publication and target</option>
+    </select>
+  </div>
+  <div class="sf-compare">
+    <section><h3>Before</h3><div class="text-small">Baseline · e2a7777</div><div id="sf-old"></div></section>
+    <section><h3>Reviewed snapshot</h3><div class="text-small">0c91c67 · September 14, 2026 · prompts below use the working tree</div><div id="sf-new"></div></section>
+  </div>
+  <div class="viz-row text-small sf-legend"><span>→ Implemented signal</span><span>Boxes: owners / durable facts</span><span>Cognition boxes open their prompts</span></div>
+  <div id="sf-detail" class="text-small" aria-live="polite"></div>
+  <details class="sf-evidence">
+    <summary>Inspect the signals and their sources</summary>
+    <div class="viz-row">
+      <label class="form-label" for="sf-signal">Signal</label>
+      <select class="form-select" id="sf-signal"></select>
+    </div>
+    <div id="sf-signal-detail" aria-live="polite"></div>
+  </details>
+  <details id="sf-prompts" class="sf-evidence">
+    <summary>Prompts at cognition boundaries</summary>
+    <div class="viz-row">
+      <label class="form-label" for="sf-stage">Cognition stage</label>
+      <select class="form-select" id="sf-stage"></select>
+    </div>
+    <div id="sf-prompt-meta" class="text-small" aria-live="polite"></div>
+    <details open><summary id="sf-prompt-heading">Harness prompt · shared runtime utility</summary><pre class="sf-prompt"><code id="sf-prompt-text"></code></pre></details>
+    <details><summary>Files and instructions read separately</summary><pre class="sf-prompt"><code id="sf-prompt-reads"></code></pre></details>
+    <div id="sf-prompt-output" class="text-small"></div>
+    <div id="sf-prompt-exclusions" class="text-small sf-scope"></div>
+  </details>
+  <div class="text-small sf-scope">Source snapshot, not live telemetry. Read-only procedures bypass publication. Probes, transports and execution locks omitted.</div>
+<script type="application/json" id="sf-models">
+{
+ "old": {
+  "nodes": [
+   ["conversation", 0, 0, "Conversation", "message + intent", "cognition"],
+   ["rhythm", 1, 0, "Recurring definition", "world Markdown + schedule", "fact"],
+   ["world", 0, 1, "World acceptance", "Git + SQL receipt", "fact"],
+   ["runner", 1, 1, "Rhythm runner", "scheduled world turn", "cognition"],
+   ["task", 0, 2, "Registered task", "SQL intent + input rows", "fact"],
+   ["work", 1, 2, "Native task", "Git work + closure", "cognition"],
+   ["publish", 0, 3, "Repository owner", "rebase · gates · push", "fact"],
+   ["blocked", 1, 3, "Blocked task", "retained work + reason", "fact"],
+   ["main", 0, 4, "Observed main", "published task history", "fact"],
+   ["target", 1, 4, "Built-in release", "repository deploy policy", "fact"],
+   ["assessment", 0, 5, "Result assessment", "owning conversation", "cognition"],
+   ["external", 1, 5, "Running service", "health / rollback", "external"]
+  ],
+  "edges": [
+   ["conversation", "world", "candidate", ["conversation"], "conversations.py → world/turn_checkpoint.py"],
+   ["rhythm", "runner", "due", ["rhythm"], "recurring.py + schedules.py + rhythms.py"],
+   ["runner", "world", "world edits", ["rhythm"], "RhythmRunner._advance → ConversationService.run_scheduled_turn", "side"],
+   ["world", "task", "admit / steer", ["conversation", "rhythm"], "ConversationService.accept_prepared → StateDatabase task records"],
+   ["task", "work", "intent + inputs", ["conversation", "rhythm", "repair"], "TaskRunner reads registered task and pending SQL input", "side"],
+   ["work", "publish", "idle checkpoint", ["conversation", "rhythm", "release"], "RepositoryReconciler integrates retained branch", "diagonal"],
+   ["publish", "blocked", "conflict / red", ["repair"], "RepositoryReconciler failure → explicit block", "side"],
+   ["blocked", "work", "explicit retry", ["repair"], "Task retry / owner assessment required", "up"],
+   ["publish", "main", "gated push", ["conversation", "rhythm", "release"], "landing/merger.py → Git transport"],
+   ["main", "target", "desired SHA", ["release"], "StewardKernel → release_due → built-in deploy engine", "side"],
+   ["target", "external", "activate / health", ["release"], "deploy/engine.py → service and health"],
+   ["main", "assessment", "task outcome", ["conversation"], "pending task results → ConversationService.deliver_task_result"],
+   ["assessment", "world", "accepted follow-up", ["conversation"], "assessment uses ordinary world acceptance", "outer"]
+  ]
+ },
+ "new": {
+  "nodes": [
+   ["conversation", 0, 0, "Conversation", "message + intent", "cognition"],
+   ["rhythm", 1, 0, "Rhythm", "interval / Git quiet", "fact"],
+   ["world", 0, 1, "World acceptance", "Git + SQL receipt", "fact"],
+   ["procedure", 1, 1, "Procedure binding", "instructions · model · access", "fact"],
+   ["reconcile", 1, 2, "Conflict repair", "only on world conflict", "cognition"],
+   ["task", 0, 3, "Accepted task", "private Git ref + document", "fact"],
+   ["work", 1, 3, "Task cognition", "task file + Git history", "cognition"],
+   ["publish", 0, 4, "Repository owner", "final SHA · gates · reviews", "fact"],
+   ["evidence", 1, 4, "Required reviews", "ordinary tasks + verdict", "cognition"],
+   ["main", 0, 5, "Published ref", "one outcome / write task", "fact"],
+   ["target", 1, 5, "Named target", "ready / busy / blocked", "fact"],
+   ["assessment", 0, 6, "Result assessment", "world turn · may be silent", "cognition"],
+   ["external", 1, 6, "Destination", "observed SHA + readiness", "external"]
+  ],
+  "edges": [
+   ["conversation", "world", "candidate", ["conversation", "world-repair"], "conversations.py → world/turn_checkpoint.py"],
+   ["rhythm", "procedure", "due + exact input", ["rhythm", "readonly"], "Procedures.advance_rhythms: interval or new Git commits settled for quiet duration; accepted batches prevent repetition; no overlapping run"],
+   ["procedure", "task", "captured run", ["rhythm", "readonly"], "Procedures.request → TaskStore.create: frozen instructions, model, access, exact input, activity batch and explicit owner", "capture"],
+   ["world", "task", "admit / steer", ["conversation", "rhythm", "readonly", "repair", "release"], "accepted world effects → authorized TaskStore Git commits; follow-up may be workspace-write"],
+   ["task", "work", "account / answer", ["conversation", "rhythm", "readonly", "repair", "ownership", "release"], "TaskStore → TaskRunner: accepted task file, Git history and explicit input. A requested ownership answer returns on the same task; no unsolicited peer-state snapshot", "side"],
+   ["work", "publish", "write task idle", ["conversation", "rhythm", "release", "repair"], "Accepted workspace-write checkpoint → RepositoryReconciler; read-only procedures never enter publication", "diagonal"],
+   ["publish", "task", "repair needed", ["repair"], "RepositoryReconciler → TaskStore.request_repair → owning task", "repair"],
+   ["publish", "evidence", "candidate + policy", ["release"], "Procedures.require creates ordinary read-only tasks", "side"],
+   ["evidence", "publish", "verdict", ["release"], "TaskRunner accepts verdict; Procedures.require enforces it", "back"],
+   ["publish", "main", "exact-base push", ["conversation", "rhythm", "release"], "single-parent candidate; provenance retained before remote lease push"],
+   ["main", "target", "desired SHA", ["release"], "Targets.advance resolves configured ref independently", "side"],
+   ["target", "evidence", "same SHA", ["release"], "Targets.advance → Procedures.require; target review covers whole tree", "up"],
+   ["evidence", "target", "verdict", ["release"], "Procedures.require checks accepted verdict bound to exact candidate and policy before target satisfaction"],
+   ["target", "external", "observe / apply", ["release"], "Observe first; busy or blocked defers reviews and apply. Otherwise require evidence, apply if needed, then observe exact readiness. Failed desired revisions do not imply successful deployment"],
+   ["main", "assessment", "owned outcome", ["conversation", "rhythm"], "Observed publication → pending task result → owning conversation; retained candidate/base/work provenance survives lost push observation"],
+   ["assessment", "world", "accepted follow-up", ["conversation", "rhythm", "readonly", "repair", "release"], "ConversationService world acceptance; frozen receipts prevent repeat accepted effects; completed scheduled review may remain SILENT", "outer"],
+   ["work", "assessment", "owned findings", ["rhythm", "readonly", "repair"], "Accepted read-only findings, questions and failures return through task-result receipts. Workspace-write completion waits for publication. owner:null and requirement-only reviews retain evidence without owner assessment", "feedback"],
+   ["external", "assessment", "dated observation", ["release"], "Targets._retain_result → existing result receipt → ConversationService assessment. Only an owned task whose published candidate exactly equals the desired target revision receives it. Identical observations are deduplicated; changed and recovered states may return again", "gap"],
+   ["work", "task", "query", ["ownership"], "TASK_QUERY in normal ask closure → controller reads accepted task metadata and live locks → normal answer input → same task resumes. At most 10 matching tasks; no task bodies or owner identities; results are dated evidence, not an authority grant", "back"],
+   ["world", "reconcile", "conflict", ["world-repair"], "WorldTurnCheckpoint invokes the configured resolver only when world integration conflicts; daemon.py:resolve composes the conflict prompt", "diagonal"],
+   ["reconcile", "world", "retry acceptance", ["world-repair"], "Resolver edits return to world integration and acceptance checks; the resolver does not admit task effects", "reconcile-return"]
+  ]
+ }
+}
+</script>
+</div>
+<style>
+ #steward-flow .sf-compare {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;margin-top:18px}
+ #steward-flow section {min-width:0}
+ #steward-flow h3 {margin:0 0 4px}
+ #steward-flow .sf-diagram {display:block;width:100%;overflow:visible}
+ #steward-flow .sf-diagram text {fill:var(--foreground)}
+ #steward-flow .sf-node rect {fill:color-mix(in srgb,var(--viz-series-1) 9%,var(--background));stroke:var(--border);stroke-width:1}
+ #steward-flow .sf-node[data-kind="cognition"] rect {fill:color-mix(in srgb,var(--viz-series-2) 11%,var(--background))}
+ #steward-flow .sf-node[data-kind="external"] rect {fill:color-mix(in srgb,var(--viz-series-3) 11%,var(--background))}
+ #steward-flow .sf-node .sf-name {font-weight:500}
+ #steward-flow .sf-edge path {fill:none;stroke:var(--muted-foreground);stroke-width:1.3}
+ #steward-flow .sf-edge[data-gap="true"] path {stroke:var(--destructive);stroke-dasharray:5 4}
+ #steward-flow .sf-edge text {paint-order:stroke;stroke:var(--background);stroke-width:5;stroke-linejoin:round}
+ #steward-flow .sf-dim {opacity:.13}
+ #steward-flow .sf-gap-key {color:var(--destructive)}
+ #steward-flow .sf-legend {margin:8px 0}
+ #steward-flow .sf-scope {margin-top:8px;color:var(--muted-foreground)}
+ #steward-flow .sf-evidence {margin-top:14px}
+ #steward-flow .sf-evidence .viz-row {margin-top:12px}
+ #steward-flow .sf-evidence summary {cursor:pointer}
+ #steward-flow .sf-evidence table {margin-top:12px}
+ #steward-flow .sf-evidence th {width:110px}
+ #steward-flow .sf-evidence td {overflow-wrap:anywhere}
+ #steward-flow .sf-edge-hit {fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke}
+ #steward-flow .sf-edge[data-selected="true"] path:not(.sf-edge-hit) {stroke:var(--viz-series-1);stroke-width:2}
+ #steward-flow .sf-edge[data-gap="true"][data-selected="true"] path:not(.sf-edge-hit) {stroke:var(--destructive)}
+ #steward-flow .sf-edge {cursor:pointer}
+ #steward-flow #sf-prompts details {margin-top:14px}
+ #steward-flow .sf-prompt {white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;max-width:100%;margin-top:12px}
+ #steward-flow #sf-prompt-meta {margin-top:10px;overflow-wrap:anywhere}
+ #steward-flow .sf-node-link {cursor:pointer}
+ @media(max-width:740px) {#steward-flow .sf-compare {grid-template-columns:minmax(0,1fr);gap:24px}}
+</style>
+
+<script>
+(() => {
+ const root=document.getElementById('steward-flow');
+ const select=root.querySelector('#sf-trace');
+ const signalSelect=root.querySelector('#sf-signal');
+ const stageSelect=root.querySelector('#sf-stage');
+ const localInspector=location.protocol==='http:'&&['127.0.0.1','localhost'].includes(location.hostname);
+ let promptRequest=0;
+ const stageForNode={new:{conversation:'conversation',work:'task',evidence:'review',assessment:'assessment',reconcile:'world-repair'},old:{conversation:'old-conversation',work:'old-task',runner:'old-reflection',assessment:'old-assessment'}};
+ async function showPrompt(id){
+  if(!localInspector)return;
+  const request=++promptRequest;
+  stageSelect.value=id;
+  for(const name of ['text','reads','meta','output','exclusions'])root.querySelector('#sf-prompt-'+name).textContent='';
+  root.querySelector('#sf-prompt-heading').textContent='Rendering '+(stageSelect.selectedOptions[0]?.textContent||id);
+  root.querySelector('#sf-prompt-text').textContent='Rendering from the runtime utility…';
+  try{
+   const response=await fetch('/api/prompt/'+encodeURIComponent(id),{cache:'no-store'});
+   if(!response.ok)throw Error('Prompt renderer returned '+response.status);
+   const sample=await response.json();if(request!==promptRequest)return;
+   root.querySelector('#sf-prompt-heading').textContent=sample.mode;
+   root.querySelector('#sf-prompt-text').textContent=sample.prompt;
+   root.querySelector('#sf-prompt-reads').textContent=sample.reads;
+   const historical=id.startsWith('old-');
+   const freshness=sample.modified_sources.length?'Uncommitted rendering sources: '+sample.modified_sources.join(', '):historical?'Committed historical source':'Rendering sources match HEAD';
+   root.querySelector('#sf-prompt-meta').textContent=[sample.source.join(' → '),sample.characters.toLocaleString()+' characters',(historical?'Historical source at ':'Working tree HEAD ')+sample.revision,freshness,'rendered '+sample.rendered_at].join(' · ');
+   root.querySelector('#sf-prompt-output').textContent='Accepted response: '+sample.output;
+   root.querySelector('#sf-prompt-exclusions').textContent=sample.scope;
+  }catch(error){if(request===promptRequest){root.querySelector('#sf-prompt-heading').textContent='Prompt unavailable';root.querySelector('#sf-prompt-text').textContent=error.message+' · Select a stage to retry.';}}
+ }
+ stageSelect.addEventListener('change',()=>showPrompt(stageSelect.value));
+ if(localInspector){
+  fetch('/api/stages',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('Prompt stages unavailable');return r.json();}).then(stages=>{
+   for(const [id,label] of Object.entries(stages)){
+    const option=document.createElement('option');option.value=id;option.textContent=label;stageSelect.append(option);
+   }
+   const requested=new URLSearchParams(location.search).get('stage');
+   showPrompt(requested&&stages[requested]?requested:stageSelect.value);
+   if(requested)root.querySelector('#sf-prompts').open=true;
+  }).catch(error=>root.querySelector('#sf-prompt-meta').textContent=error.message);
+ }else{
+  stageSelect.disabled=true;
+  const link=document.createElement('a');link.href='http://127.0.0.1:8766/';link.textContent='Open the local inspector to render prompts from the runtime utilities';link.target='_blank';link.rel='noopener';
+  root.querySelector('#sf-prompt-meta').replaceChildren(link);
+  root.querySelector('#sf-prompts').querySelectorAll('details').forEach(e=>e.hidden=true);
+ }
+ const NS='http://www.w3.org/2000/svg';
+ const make=(tag,attrs={},text)=>{const el=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))el.setAttribute(k,v);if(text!==undefined)el.textContent=text;return el;};
+ // Each edge retains the source that justifies it. These are curated contracts,
+ // not a dependency graph inferred from import counts or a live event stream.
+ const models=JSON.parse(root.querySelector('#sf-models').textContent);
+ const details={'world-repair':'Only an integration conflict invokes repair cognition. Its edits return to world acceptance before dependent task effects may proceed.',all:'Same task engine for work and reviews; publication, target readiness and accepted world knowledge remain separate facts.',conversation:'Intent → accepted world effect → task → observed publication → owner assessment → accepted follow-up.',rhythm:'Intervals or new Git activity after quiet; no overlap. Monitoring includes configured rhythms with no runs and distinguishes quiet inactivity from missed intervals.',readonly:'Read-only findings → configured owner → world acceptance; no product push. Current task ownership is available through an explicit query.',ownership:'An explicit read through the existing ask/answer boundary. No match is not proof that differently titled work is unowned.',repair:'Actionable failure returns to its owning task. Unknown intent asks; repeated unchanged failure waits. Owner assessment returns through world acceptance to an authorized answer or retry on the same task.',release:'Exact evidence gates publication and targets. Dated target changes return to the exact published task’s owner; ownerless or skipped candidates get no inferred recipient. An authorized follow-up crosses world acceptance before task action.'};
+ const proofs={
+  'world:reconcile':['world/turn_checkpoint.py; daemon.py:resolve','Source-inspected conditional path; resolver tests were outside the recorded lifecycle run'],
+  'reconcile:world':['world/turn_checkpoint.py','Source-inspected return to acceptance; no new runtime verification claimed'],
+  'rhythm:procedure':['procedures.py:advance_rhythms','test_quiet_rhythms.py; test_rewrite_convergence.py'],
+  'procedure:task':['procedures.py:request','test_rewrite_convergence.py; test_task_charter.py'],
+  'world:task':['conversations.py:accept_prepared','test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup'],
+  'task:work':['task_runner.py:_work; _answer_query','test_procedure_worker_uses_git_instead_of_injected_peer_state; test_query_answers_same_task_and_survives_crash_before_answer'],
+  'work:publish':['task_runner.py; repository_reconciler.py','test_workspace_write_rhythm_executes_maintenance_and_publishes_ordinary_work'],
+  'publish:task':['task_store.py:request_repair','test_semantic_gate_repair_and_repeated_no_progress_are_visible'],
+  'publish:evidence':['procedures.py:require','test_publication_reviews_final_collapsed_candidate_and_invalidates_moving_base'],
+  'evidence:publish':['procedures.py:require','test_full_tree_review_finds_defect_in_intervening_commit'],
+  'publish:main':['repository_reconciler.py:_publish_task','test_rebased_push_crash_before_retip_recovers_exact_candidate'],
+  'main:target':['targets.py:advance','test_named_targets_follow_independent_refs_and_driver_timeout_is_local'],
+  'target:evidence':['targets.py:advance; procedures.py:require','test_target_requires_exact_input_and_procedure_evidence_and_external_observation'],
+  'evidence:target':['procedures.py:require','test_target_requires_exact_input_and_procedure_evidence_and_external_observation'],
+  'target:external':['targets.py:advance','test_blocked_target_keeps_observing_without_applying_or_sticking_to_old_ref'],
+  'main:assessment':['conversations.py:deliver_task_result','test_task_result_delivery.py'],
+  'assessment:world':['conversations.py:_assess_task_result','test_crash_after_accepted_assessment_replays_without_repeating_cognition'],
+  'work:assessment':['conversations.py:_assess_task_result','test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup; test_silent_scheduled_review_keeps_evidence_and_stays_quiet_after_restart'],
+  'external:assessment':['targets.py:_retain_result → conversations.py:_assess_task_result','test_target_feedback_follows_exact_owner_transitions_and_restarts'],
+  'work:task':['task_query.py:ownership_answer → TaskRunner._answer_query','test_query_answers_same_task_and_survives_crash_before_answer; test_query_bounds_results_and_observes_live_lock_without_exposing_content'],
+  'conversation:world':['conversations.py; world/turn_checkpoint.py','World-acceptance tests were outside this review’s 52-test run']
+ };
+ function signalDetail(){
+  const [key,index]=signalSelect.value.split(':');
+  const model=models[key],edge=model?.edges[Number(index)];
+  if(!edge)return;
+  const [from,to,label,,source,,missing]=edge;
+  const node=id=>model.nodes.find(n=>n[0]===id)[3];
+  const proof=key==='new'?proofs[from+':'+to]:null;
+  const rows=[['Model',key==='new'?'Reviewed snapshot · 0c91c67 · September 14, 2026':'Historical baseline · e2a7777'],['Signal',label],['From',node(from)],['Receiver',node(to)],['Contract',source],['Evidence',missing?'Absent in reviewed source':key==='new'?'Curated source review. Verification references below describe scoped checks, not a fresh test run or live telemetry.':'Historical source comparison']];
+  if(proof)rows.push(['Source',proof[0]],['Verification',proof[1]]);
+  const table=document.createElement('table');table.className='table table-sm';
+  const body=document.createElement('tbody');
+  for(const [heading,value] of rows){
+   const tr=document.createElement('tr'),th=document.createElement('th'),td=document.createElement('td');
+   th.scope='row';th.textContent=heading;td.textContent=value;tr.append(th,td);body.append(tr);
+  }
+  table.append(body);root.querySelector('#sf-signal-detail').replaceChildren(table);
+  root.querySelectorAll('.sf-edge').forEach(e=>e.dataset.selected=String(root.querySelector('.sf-evidence').open&&e.dataset.signal===signalSelect.value));
+ }
+ function signals(){
+  const previous=signalSelect.value;signalSelect.replaceChildren();
+  for(const key of ['new','old']){
+   const group=document.createElement('optgroup');group.label=key==='new'?'Reviewed snapshot':'Historical baseline';
+   models[key].edges.forEach((edge,index)=>{
+    if(select.value!=='all'&&!edge[3].includes(select.value))return;
+    const option=document.createElement('option');option.value=key+':'+index;
+    const node=id=>models[key].nodes.find(n=>n[0]===id)[3];
+    option.textContent=node(edge[0])+' → '+node(edge[1])+': '+edge[2];group.append(option);
+   });
+   if(group.childElementCount)signalSelect.append(group);
+  }
+  if([...signalSelect.options].some(option=>option.value===previous))signalSelect.value=previous;
+  signalDetail();
+ }
+ function draw(key){
+  const host=root.querySelector('#sf-'+key), width=host.getBoundingClientRect().width;
+  if(!width)return;
+  const compact=root.querySelector('.sf-compare').getBoundingClientRect().width<=740&&select.value!=='all';
+  const shown=compact?models[key].edges.filter(edge=>edge[3].includes(select.value)):models[key].edges;
+  const shownIds=new Set(shown.flatMap(edge=>edge.slice(0,2)));
+  const shownNodes=compact?models[key].nodes.filter(node=>shownIds.has(node[0])):models[key].nodes;
+  if(!shownNodes.length){
+   const note=document.createElement('p');note.className='text-small';note.textContent='No matching path in this comparison.';host.replaceChildren(note);return;
+  }
+  const rows=[...new Set(shownNodes.map(node=>node[2]))].sort((a,b)=>a-b);
+  const w=Math.floor(width), narrow=w<400, margin=25, gap=narrow?22:34;
+  const nw=(w-2*margin-gap)/2, nh=84, row=138, top=24, height=top+(compact?rows.length-1:Math.max(...rows))*row+nh+26;
+  const svg=make('svg',{viewBox:`0 0 ${w} ${height}`,width:w,height,class:'sf-diagram',role:'group','aria-label':`${key==='old'?'Before':'Reviewed snapshot'}: ${select.options[select.selectedIndex].text}`});
+  svg.append(make('title',{},`${key==='old'?'Baseline':'Reviewed snapshot'} stewardship orchestration`));
+  const defs=make('defs');
+  for(const [id,color] of [['arrow','var(--muted-foreground)'],['gap','var(--destructive)']]){
+   const marker=make('marker',{id:`sf-${key}-${id}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});
+   marker.append(make('path',{d:'M 1 1 L 9 5 L 1 9',fill:'none',stroke:color,'stroke-width':1.5}));defs.append(marker);
+  }svg.append(defs);
+  const nodes=Object.fromEntries(shownNodes.map(n=>[n[0],{n,x:margin+n[1]*(nw+gap),y:top+(compact?rows.indexOf(n[2]):n[2])*row}]));
+  const activeNodes=new Set();
+  for(const [edgeIndex,edge] of models[key].edges.entries()){
+   if(compact&&!edge[3].includes(select.value))continue;
+   const [a,b,label,traces,source,route,isGap]=edge, A=nodes[a],B=nodes[b];
+   const active=select.value==='all'||traces.includes(select.value);if(active){activeNodes.add(a);activeNodes.add(b);}
+   let d,lx,ly;const ax=A.x+nw/2,ay=A.y+nh,bx=B.x+nw/2,by=B.y;
+   if(route==='outer'){
+    d=`M ${A.x} ${A.y+nh/2} H 8 V ${B.y+nh/2} H ${B.x}`;lx=8;ly=(A.y+B.y)/2+nh/2;
+   }else if(route==='feedback'){
+    const x=w-7;d=`M ${A.x+nw} ${A.y+nh/2} H ${x} V ${B.y+nh+16} H ${bx} V ${B.y+nh}`;lx=(bx+x)/2;ly=B.y+nh+14;
+   }else if(route==='repair'){
+    d=`M ${A.x+16} ${A.y} V ${B.y+nh}`;lx=A.x+nw/2;ly=(A.y+B.y+nh)/2-9;
+   }else if(route==='side'||route==='back'||route==='gap'){
+    const forward=B.x>A.x;const y=A.y+(route==='back'?49:25);const x1=forward?A.x+nw:A.x,x2=forward?B.x:B.x+nw;
+    d=`M ${x1} ${y} H ${x2}`;lx=(x1+x2)/2;ly=y-8;
+   }else if(route==='capture'){
+    const x=A.x-gap/3;d=`M ${A.x} ${A.y+25} H ${x} V ${B.y-20} H ${bx} V ${B.y}`;lx=bx;ly=B.y-8;
+   }else if(route==='reconcile-return'){
+    const x=B.x+nw+gap/3;d=`M ${A.x} ${A.y+nh/2} H ${x} V ${B.y+nh/2} H ${B.x+nw}`;lx=x;ly=(A.y+B.y)/2+nh/2;
+   }else if(route==='up'){
+    const x=A.x+nw-14;d=`M ${x} ${A.y} V ${B.y+nh}`;lx=x;ly=(A.y+B.y+nh)/2;
+   }else{
+    const mid=(ay+by)/2;d=`M ${ax} ${ay} C ${ax} ${mid} ${bx} ${mid} ${bx} ${by}`;lx=(ax+bx)/2;ly=mid-5;
+   }
+   const signalId=key+':'+edgeIndex;
+   const g=make('g',{class:'sf-edge'+(active?'':' sf-dim'),'data-gap':!!isGap,'data-signal':signalId,'data-tooltip':`${label} · ${source}`});
+   g.append(make('path',{d,class:'sf-edge-hit',style:'stroke:transparent;stroke-width:14'}));
+   g.addEventListener('click',()=>{
+    if(!active)return;
+    root.querySelector('.sf-evidence').open=true;
+    signalSelect.value=signalId;signalDetail();
+    root.querySelector('.sf-evidence').scrollIntoView({block:'start'});
+   });
+   const path=make('path',{d,'marker-end':`url(#sf-${key}-${isGap?'gap':'arrow'})`});
+   if(b==='external')path.setAttribute('marker-start',`url(#sf-${key}-arrow)`);
+   g.append(path);
+   const t=make('text',{x:lx,y:ly,'text-anchor':'middle',class:'text-small'},label);
+   // Cross-lane labels occupy the clear band above the boxes, never their text.
+   if(route==='side'||route==='back'||route==='gap'){t.setAttribute('y',A.y+(route==='back'?nh+15:-8));}
+   if(route==='diagonal'){t.setAttribute('x',ax);}
+   if(route==='outer'||route==='reconcile-return'){t.setAttribute('transform',`rotate(-90 ${lx} ${ly})`);}
+   if(route==='up'){t.setAttribute('x',A.x+nw/2);t.setAttribute('y',ly+(key==='old'?12:-12));}
+   if(a==='evidence'&&b==='target'){t.setAttribute('y',ly+14);}
+   g.append(t);svg.append(g);
+  }
+  for(const [id,o] of Object.entries(nodes)){
+   const n=o.n,g=make('g',{class:'sf-node'+(activeNodes.has(id)?'':' sf-dim'),'data-kind':n[5]});
+   g.append(make('rect',{x:o.x,y:o.y,width:nw,height:nh,rx:9}));
+   // Split labels at actual width instead of scaling a desktop diagram down.
+   for(const [txt,y,cls] of [[n[3],o.y+27,'sf-name'],[n[4],o.y+58,'text-small']]){
+    const limit=Math.max(13,Math.floor(nw/(cls==='sf-name'?7.8:6.4)));
+    const words=txt.split(' '), lines=[''];for(const word of words){let i=lines.length-1;if((lines[i]+' '+word).trim().length>limit&&lines[i])lines.push(word);else lines[i]=(lines[i]+' '+word).trim();}
+    const t=make('text',{x:o.x+nw/2,y:y-(lines.length>1?5:0),'text-anchor':'middle',class:cls});
+    lines.slice(0,2).forEach((line,i)=>t.append(make('tspan',{x:o.x+nw/2,dy:i?14:0},line)));g.append(t);
+   }
+   let stage=stageForNode[key]?.[id];
+   if(key==='new'&&id==='work'&&select.value==='repair')stage='repair';
+   if(key==='new'&&id==='work'&&select.value==='ownership')stage='ownership-answer';
+   if(key==='new'&&id==='work'&&['rhythm','readonly'].includes(select.value))stage='reflection';
+   if(key==='new'&&id==='assessment'&&['rhythm','readonly'].includes(select.value))stage='reflection-assessment';
+   if(key==='new'&&id==='assessment'&&select.value==='release')stage='target-assessment';
+   if(stage){
+    const link=make('a',{href:localInspector?'#sf-prompts':'http://127.0.0.1:8766/?stage='+stage+'#sf-prompts',class:'sf-node-link','aria-label':'Inspect '+stage+' prompt'});
+    if(localInspector)link.addEventListener('click',()=>{root.querySelector('#sf-prompts').open=true;showPrompt(stage);});
+    else link.setAttribute('target','_blank');
+    link.append(g);svg.append(link);
+   }else svg.append(g);
+  }
+  host.replaceChildren(svg);
+ }
+ function render(){draw('old');draw('new');root.querySelector('#sf-detail').textContent=details[select.value];signals();}
+ select.addEventListener('change',render);
+ signalSelect.addEventListener('change',signalDetail);
+ root.querySelector('.sf-evidence').addEventListener('toggle',signalDetail);
+ new ResizeObserver(render).observe(root.querySelector('.sf-compare'));
+ render();
+})();
+</script>

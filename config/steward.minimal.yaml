@@ -1,0 +1,38 @@
+# First-install template. Replace the remote, IDs, CLI path and gate for your host.
+# See docs/getting-started.md and docs/automatic-deployment.md.
+identity:
+  name: Example Steward
+  slug: example
+execution:
+  user: steward
+  group: steward
+  home: /home/steward
+  tmpdir: /home/steward/tmp
+provider:
+  default_family: claude
+  fallback_families: []
+  default_profile: balanced
+  claude_executable: /usr/local/bin/claude
+  native_homes:
+    claude: /home/steward/native/claude
+  workdir: /home/steward/work
+  state_db: /var/lib/steward-controller/state.db
+controller:
+  workers: 8
+  health_bind: 127.0.0.1:8420
+world:
+  root: /home/steward/world
+telegram:
+  token_path: /etc/steward/telegram-token
+  chat_id: -1001234567890
+  allowed_users: [12345678]
+  topics: {steward: 0}
+  inbound_media_dir: /var/lib/steward-inbound
+repositories:
+  app:
+    path: /home/steward/repos/app
+    remote_url: ssh://git@github.com/YOUR-OWNER/app.git
+    default_branch: main
+    gates:
+      - argv: [npm, test, --, --runInBand]
+        timeout_seconds: 300

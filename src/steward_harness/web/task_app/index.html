@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tasks</title>
+<style>
+  :root { color-scheme: light dark; --line: color-mix(in srgb, currentColor 15%, transparent); }
+  body { margin: 0; padding: 1rem; font: 15px/1.45 system-ui, sans-serif;
+         background: var(--tg-theme-bg-color, Canvas); color: var(--tg-theme-text-color, CanvasText); }
+  h1 { font-size: 1rem; margin: 0 0 .25rem; }
+  #counts { opacity: .65; font-size: .85rem; margin-bottom: 1rem; }
+  #error { color: #c0392b; }
+  .task { border-top: 1px solid var(--line); padding: .7rem 0; cursor: pointer; }
+  .task h2 { font-size: .95rem; font-weight: 600; margin: 0; }
+  .meta { opacity: .65; font-size: .8rem; margin-top: .15rem; }
+  .reason { margin-top: .35rem; font-size: .85rem; }
+  .detail { margin-top: .5rem; font-size: .85rem; white-space: pre-wrap;
+            border-left: 2px solid var(--line); padding-left: .7rem; }
+  .badge { display: inline-block; font-size: .7rem; letter-spacing: .04em;
+           text-transform: uppercase; padding: .05rem .35rem; border: 1px solid var(--line);
+           border-radius: .25rem; }
+  .waiting, .blocked, .proposed { font-weight: 700; }
+  .done, .cancelled { opacity: .55; }
+</style>
+</head>
+<body>
+<h1 id="heading">Tasks</h1>
+<div id="counts"></div>
+<div id="error" hidden></div>
+<div id="tasks"></div>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

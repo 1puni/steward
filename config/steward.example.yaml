@@ -1,0 +1,211 @@
+# Example Steward Configuration
+
+identity:
+  name: "example-steward"
+  slug: "example"
+
+# The controller may run as root because it owns landing and deployment. Every
+# model-controlled process is dropped to this ordinary account first. Keep it
+# out of sudo/docker groups; grant its broad working access with normal Unix
+# ownership or ACLs instead.
+execution:
+  user: "steward"
+  group: "steward"
+  home: "/home/steward"
+  tmpdir: "/tmp"
+
+controller:
+  poll_seconds: 5
+  # One budget for everything the steward schedules for itself: task slices,
+  # publication, deployment, rhythms, desk messages, probes, result delivery.
+  workers: 8
+  # Hourly retention preserves dirty/unaccepted work; retire clean idle world sessions.
+  world_session_idle_seconds: 604800 # seven days
+  # Loopback healthz reporting the running release SHA (STEWARD_RELEASE_SHA);
+  # the deploy gate below requires an exact match before keeping a release.
+  health_bind: "127.0.0.1:8420"
+
+incident_policy:
+  confirm_after_failures: 2
+  transient_retries: 1
+  repair_attempts_per_24h: 3
+  landed_changes_per_24h: 2
+  recovery_cooldown_seconds: 1800
+
+provider:
+  default_family: "codex"      # primary provider
+  fallback_families: ["claude", "glm"]  # ordered automatic fallback
+  default_profile: "balanced"  # fast | balanced | deep
+  timeout_seconds: 1200
+  workdir: "/var/lib/steward/work"
+  state_db: "/var/lib/steward/state.db"
+  claude_executable: "/usr/local/bin/claude"
+  codex_executable: "/usr/bin/codex"
+  glm_credential_path: "/etc/steward/zai-token"
+  # The Claude-CLI families target one Anthropic-compatible endpoint. Route
+  # their turns through a discounting gateway (e.g. cheaperinference.com) by
+  # storing its key in the credential file and pointing the base URL there;
+  # model IDs under `models` must then match that gateway's exact catalog.
+  # GLM always reads glm_credential_path; Claude keeps native-home login
+  # unless its optional base URL + credential pair is configured together.
+  # glm_anthropic_base_url: "https://api.cheaperinference.com"
+  # claude_anthropic_base_url: "https://api.cheaperinference.com"
+  # claude_credential_path: "/etc/steward/cheaperinference-token"
+  # Per-provider model overrides, by profile. A bare string names the model and
+  # leaves the built-in reasoning effort for that profile alone; a mapping
+  # declares both, and an omitted `effort` sends no effort flag at all so the
+  # provider chooses. That last spelling is what a gateway needs when it does
+  # not accept the native effort vocabulary.
+  # models:
+  #   claude:
+  #     deep: "claude-opus-4-6"
+  #   glm:
+  #     deep: { model: "glm-5.3", effort: "high" }
+  #     balanced: { model: "glm-5.3" }
+  # Provision each selected provider's home as the execution account, including
+  # its login and approved native settings/plugins. Remove unused providers
+  # from fallback_families instead of relying on a personal-home fallback.
+  native_homes:
+    codex: "/home/steward/native/codex"
+    claude: "/home/steward/native/claude"
+    glm: "/home/steward/native/glm"
+
+# Presence of this block configures one fixed-chat Telegram transport.
+telegram:
+  token_path: "/etc/steward/telegram-token"
+  chat_id: -1001234567890
+  allowed_users:
+    - 12345678
+    - 87654321
+  # Also admit whoever currently administers `chat_id`, so granting someone
+  # admin in the group grants them the steward. `allowed_users` above stays
+  # required and remains the break-glass list that works when Telegram does
+  # not. The bot need not be an administrator itself, but it must be able to
+  # list them: startup proves that call and refuses to poll if it fails.
+  allow_group_administrators: false
+  topics:
+    steward: 0
+    incidents: 2
+    qa: 4
+    cartographer: 6
+    rigger: 8
+  # Point this at a self-hosted Bot API to lift Telegram's cloud file cap.
+  # botapi_base: "http://127.0.0.1:8081"
+  media_max_mb: 50
+  # Controller writes 0640 files here and grants the execution group read-only
+  # access; do not place this spool beside the private state database.
+  inbound_media_dir: "/var/lib/steward/inbound-media"
+  # Optional model-requested actions remain controller-executed and fixed to
+  # chat_id. The provider receives marker syntax, never the bot token.
+  agent_actions:
+    - "pin_reply"
+    - "pin_message"
+  delivery_outbox_dir: "/home/steward/app-state/outbox"
+  delivery_quarantine_dir: "/var/lib/steward/outbox-quarantine"
+  delivery_roots:
+    - "/home/steward/app-state/artifacts"
+    - "/home/steward/app-state/shots"
+  # Product commands remain product-owned executables. The harness owns their
+  # Telegram syntax, menu entry, authorization, topic scope, and honest result.
+  adapter_commands:
+    build:
+      description: "[app] Build and deliver a signed APK."
+      argument_mode: "none"
+      allowed_topics: ["steward"]
+      command:
+        argv: ["/opt/app-steward/build-apk.sh"]
+        cwd: "/home/steward/app"
+        timeout_seconds: 30
+
+# Presence of this block configures the steward's Git world; omit it for a
+# worldless, read-only conversational runtime that orients in the checkout at
+# provider.workdir, so a single-repository organisation keeps its charter and
+# documentation map repository-owned until it needs a world.
+world:
+  root: "/var/lib/steward/world"
+  # Canonical durable knowledge belongs in docs/ at its lowest owning Git world.
+
+# Install instruction files and drivers as controller-owned files.
+procedures:
+  security-glm:
+    instructions: /etc/steward/procedures/security-review.md
+    provider: glm
+    model: {model: glm-5.3}
+    access: read-only
+  security-second:
+    instructions: /etc/steward/procedures/security-review.md
+    provider: codex
+    model: {model: gpt-5.6-sol, effort: high}
+    access: read-only
+rhythms:
+  weekly-security:
+    schedule: 604800
+    procedure: security-glm
+    input: repositories/app/main
+    owner: telegram:0  # Assess findings in the owning world and return useful results.
+targets:
+  app:
+    ref: repositories/app/main
+    driver: /usr/local/libexec/steward-targets/app
+    requires: [security-glm, security-second]
+  steward-harness:
+    ref: repositories/steward-harness/main
+    driver: /usr/local/libexec/steward-targets/steward-harness
+
+# Optional world.reconcile names a workspace-write procedure for world conflicts;
+# otherwise world reconciliation uses the configured default cognition settings.
+
+# To enable the web desk panel, configure this block. The sidecar queues panel
+# messages into inbox_dir as
+# {"kind":"message","text":...,"origin":"web","id":...[,"topic":N]} JSON
+# files; the daemon drains them as steward turns and appends panel
+# events. A new "topic" id lazily starts a new desk session lineage.
+# desk:
+#   inbox_dir: "/var/lib/steward/desk-inbox"
+#   events_file: "/var/lib/steward/desk/events.jsonl"
+
+repositories:
+  app:
+    path: "/home/steward/app"
+    remote_url: "ssh://git@example.invalid/app.git"
+    default_branch: "main"
+    gates:
+      - argv: ["cargo", "check", "--manifest-path", "app/src-tauri/Cargo.toml"]
+        timeout_seconds: 300
+      - argv: ["pnpm", "--prefix", "app", "build"]
+        timeout_seconds: 600
+  autorouting:
+    path: "/home/steward/auto-routing"
+    remote_url: "ssh://git@example.invalid/auto-routing.git"
+    default_branch: "main"
+    gates:
+      - argv: ["cargo", "test"]
+        timeout_seconds: 300
+
+  # Self-deployment: the harness repo is just another managed repository.
+  # Work happens in a worktree off main, the suite is the gate, and a landed
+  # SHA stages into an immutable release the daemon itself runs from —
+  # deployed through a transient unit so the deploy can restart steward.
+  steward-harness:
+    path: "/home/steward/steward-harness"
+    remote_url: "ssh://git@example.invalid/steward-harness.git"
+    default_branch: "main"
+    gates:
+      # `--extra dev` is load-bearing, and this is the line people copy. pytest
+      # is an optional dependency, so a plain `uv run pytest` syncs an
+      # environment without it and then falls through to whatever pytest is on
+      # PATH — green on a developer machine, `Failed to spawn: pytest` on a
+      # server that has none.
+      - argv: ["uv", "run", "--frozen", "--extra", "dev", "pytest", "-q"]
+        timeout_seconds: 600
+pipelines:
+  app-build:
+    repository: "app"
+    observation_interval_seconds: 300
+    repair_mode: "autonomous"
+    probe:
+      type: "command"
+      command:
+        argv: ["curl", "--fail", "--silent", "--show-error", "--max-time", "30",
+               "http://127.0.0.1:8080/healthz"]
+        timeout_seconds: 35

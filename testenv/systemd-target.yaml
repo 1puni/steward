@@ -1,0 +1,5 @@
+service: acceptance-steward.service
+release_root: /opt/steward-releases
+current_symlink: /opt/steward-current
+health_url: http://127.0.0.1:8420/healthz
+timeout_seconds: 120
