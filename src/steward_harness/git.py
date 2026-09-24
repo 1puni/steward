@@ -52,6 +52,40 @@ IN_PROGRESS_GIT_MARKERS = (
 )
 
 
+def is_git_path_query(args: tuple[str, ...]) -> bool:
+    """Only built-in metadata queries with no object, worktree or transport IO.
+
+    This is controller command selection, never a classifier for model commands.
+    Unknown options/config overrides deliberately keep the owned-unit boundary.
+    """
+    if not args or args[0] != "rev-parse":
+        return False
+    options = args[1:]
+    if options[:1] == ("--path-format=absolute",):
+        options = options[1:]
+    if options in (("--show-toplevel",), ("--git-common-dir",)):
+        return True
+    return bool(options) and len(options) <= 2 * len(IN_PROGRESS_GIT_MARKERS) and len(options) % 2 == 0 and all(
+        flag == "--git-path" and marker in IN_PROGRESS_GIT_MARKERS
+        for flag, marker in zip(options[::2], options[1::2], strict=True)
+    )
+
+
+def git_operation_paths(git: Callable[..., str]) -> dict[str, Path]:
+    """Resolve all interruption markers in one Git invocation, including worktrees.
+
+    Keep Git's path routing rather than guessing the common/per-worktree layout.
+    Ambiguous line-delimited paths fail closed before any caller mutates state.
+    """
+    args = ["rev-parse", "--path-format=absolute"]
+    for marker in IN_PROGRESS_GIT_MARKERS:
+        args.extend(("--git-path", marker))
+    paths = git(*args).splitlines()
+    if len(paths) != len(IN_PROGRESS_GIT_MARKERS) or any(not Path(p).is_absolute() for p in paths):
+        raise ValueError("Git returned ambiguous operation marker paths")
+    return dict(zip(IN_PROGRESS_GIT_MARKERS, map(Path, paths), strict=True))
+
+
 def controller_git_dir(state_db: str | Path, repository: str) -> Path:
     """Return one repository's controller-owned bare object-store path."""
     state_path = Path(state_db)
@@ -169,8 +203,8 @@ def run_agent_git(
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run Git that touches agent-owned state without controller credentials."""
-    return broker.run(
-        hardened_git_argv(*args),
+    return broker.run_controller_git(
+        args,
         cwd=cwd,
         timeout=timeout,
         extra_env=extra_env,

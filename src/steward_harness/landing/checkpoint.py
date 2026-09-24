@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from steward_harness.git import (
-    IN_PROGRESS_GIT_MARKERS,
+    git_operation_paths,
     STEWARD_ACTOR_EMAIL,
     STEWARD_ACTOR_NAME,
     run_agent_git,
@@ -145,11 +145,7 @@ class WorktreeCheckpointer:
         return True
 
     def _reject_in_progress_git_operation(self) -> None:
-        for marker in IN_PROGRESS_GIT_MARKERS:
-            raw_path = self._git("rev-parse", "--git-path", marker).stdout.strip()
-            marker_path = Path(raw_path)
-            if not marker_path.is_absolute():
-                marker_path = self.root / marker_path
+        for marker, marker_path in git_operation_paths(lambda *args: self._git(*args).stdout).items():
             if self.execution_broker.path_exists(marker_path):
                 raise WorktreeCheckpointError(
                     f"Provider left an unfinished Git operation: {marker}"

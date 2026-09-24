@@ -9,7 +9,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from steward_harness.git import IN_PROGRESS_GIT_MARKERS, agent_git
+from steward_harness.git import git_operation_paths, agent_git
 from steward_harness.kernel import repository_lease
 from steward_harness.state import ConversationId, TaskId
 from steward_harness.task_lock import task_lock
@@ -32,8 +32,8 @@ def _head_if_clean(broker, repository: Path, path: Path) -> str:
         raise ValueError("checkout belongs to another repository")
     if git("status", "--porcelain", "--untracked-files=all", "--ignored"):
         raise ValueError("dirty, untracked or ignored files")
-    for marker in IN_PROGRESS_GIT_MARKERS:
-        if broker.path_exists(Path(git("rev-parse", "--path-format=absolute", "--git-path", marker))):
+    for marker, marker_path in git_operation_paths(git).items():
+        if broker.path_exists(marker_path):
             raise ValueError(f"unfinished Git operation: {marker}")
     return git("rev-parse", "HEAD")
 

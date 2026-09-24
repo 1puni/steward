@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from steward_harness.git import (
-    IN_PROGRESS_GIT_MARKERS,
+    git_operation_paths,
     ISOLATED_GIT_ENV,
     run_agent_git,
     steward_commit_argv,
@@ -126,8 +126,7 @@ class WorldTurnCheckpoint:
         # to the session. Resume them as-is; acceptance will reconcile later.
         if self._git(path, "status", "--porcelain").stdout.strip():
             return
-        for marker in IN_PROGRESS_GIT_MARKERS:
-            git_path = Path(self._git(path, "rev-parse", "--path-format=absolute", "--git-path", marker).stdout.strip())
+        for git_path in git_operation_paths(lambda *args: self._git(path, *args).stdout).values():
             if self.broker.path_exists(git_path):
                 return
         # Only completed acceptance for this world authorizes retiring the

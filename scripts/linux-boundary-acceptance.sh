@@ -47,7 +47,7 @@ chmod 755 "$scratch"
 chown -R root:root "$scratch"
 chmod -R go-w "$scratch"
 if [ "$#" = 0 ]; then
-    set -- tests/test_boundary_acceptance.py tests/test_linux_deployment_acceptance.py tests/test_host_ownership.py
+    set -- tests/test_boundary_acceptance.py tests/test_linux_deployment_acceptance.py tests/test_host_ownership.py tests/test_git_metadata.py tests/test_git_operation_paths.py
 fi
 systemd-run --quiet --pipe --wait --collect --unit="$unit" \
     -p "WorkingDirectory=$scratch" -p "Environment=PYTHONPATH=$scratch/src" \

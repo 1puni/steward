@@ -176,15 +176,6 @@ read-only `ClaudeRuntime.execute` request completed with `dev_intent` before
 `init`; only event types were retained. Synthetic lifecycle and stream regressions
 live in `tests/test_runtime_lifecycle.py` and `tests/test_claude_stream.py`.
 
-For the GuruGee consumer pinned to
-`f90adf804c653383581930775e44ca94b0b2aeb5`, the coordinator should select a gated,
-published harness revision containing this parser correction and compatible
-native-session work, then update the dependency through GuruGee's normal upgrade
-procedure. This correction changes no configuration or state schema. Repeat the
-synthetic read-only adapter probe on the selected release before relying on
-reflection runs. The parser probe does not validate a consumer dependency
-upgrade, live workers, or Sleep scheduling; those remain separate rollout checks.
-
 The result's `user_message_uuid` is optional. If absent, the serial native
 command lifecycle identifies its root; a conflicting explicit identity fails.
 Cancellation, discarded commands, missing results, malformed protocol fields,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from steward_harness.git import IN_PROGRESS_GIT_MARKERS, agent_git, run_agent_git, validate_object_id
+from steward_harness.git import git_operation_paths, agent_git, run_agent_git, validate_object_id
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 
 
@@ -137,10 +137,7 @@ class WorktreeManager:
         if self.execution_broker.resolve_path(expected_path) != self.execution_broker.resolve_path(actual_path):
             raise WorktreeError("Retained worktree no longer belongs to the managed repository")
 
-        for marker in IN_PROGRESS_GIT_MARKERS:
-            marker_path = Path(self._git("rev-parse", "--git-path", marker, cwd=path))
-            if not marker_path.is_absolute():
-                marker_path = path / marker_path
+        for marker, marker_path in git_operation_paths(lambda *args: self._git(*args, cwd=path)).items():
             if self.execution_broker.path_exists(marker_path):
                 raise WorktreeError(
                     f"Retained worktree has an unfinished Git operation: {marker}"

@@ -77,7 +77,7 @@ repository/world's acceptance path.
 ## Execution ownership
 
 On Linux, a configured host execution identity requires a root controller,
-cgroup v2, kernel pidfds and the systemd system manager. Each brokered invocation
+cgroup v2, kernel pidfds and the systemd system manager. General brokered execution
 runs in a unique transient service. A protected guardian pins the original
 controller process with a pidfd before starting the workload. Systemd owns descendants before
 the workload starts, including children that call `setsid()`, and tears down the
@@ -87,6 +87,20 @@ root-owned, non-writable namespaces. The launcher uses the resolved interpreter
 with isolated mode and site initialization disabled; credentials travel in a private temporary
 file, never service arguments. The guardian's workload child drops supplementary
 groups, GID and UID before executing model-controlled code.
+
+Controller-selected Git path queries have a narrower direct lane: built-in
+`rev-parse --show-toplevel`, `--git-common-dir`, and `--git-path` for the fixed
+interruption markers, optionally with absolute path output. Interruption guards
+resolve all markers in one query, including linked-worktree paths, and reject
+ambiguous output. Unknown commands, extra environment and input use owned units.
+
+The direct lane checks fixed root-owned executable namespaces and uses a fixed
+environment. A controller-owned timeout watchdog drops Git to the execution UID
+and GID with empty supplementary groups and no-new-privileges before entering
+the repository. These admitted queries do not spawn helpers; repository config
+is still parsed as the agent. The watchdog bounds blocked reads and orphan
+lifetime after controller death to at most 60 seconds. Cancellation kills the
+process group. Arbitrary Git and model-selected commands retain systemd ownership.
 
 Native interruption precedes containment when the provider protocol remains
 available. Invocation termination has its own bounded systemd grace. This does
