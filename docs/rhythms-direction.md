@@ -53,8 +53,12 @@ an entry README; existing checkouts can be linked into it. Native cognition star
 there, while its task account and checkpoint remain in a separate retained task
 worktree. The accepted run captures the directory so retries keep the same scope.
 Before cognition the existing credential-free Git transfer refreshes observed
-remote refs in the configured repositories without moving their HEADs or touching
-local changes. Manual `/rhythm run` uses the same working directory. Workspace-write procedures
+`refs/steward/remote/<branch>` refs in every configured repository without moving
+its HEAD, changing `origin/<branch>` or touching local changes. These labels are
+observations, not new authority; read source at the configured default branch
+under this namespace. See
+[source and retained findings](provenance-discovery.md#observed-source-and-retained-findings).
+Manual `/rhythm run` uses the same working directory. Workspace-write procedures
 cannot select an external working directory.
 
 Quiet snapshots remain controller-owned admission metadata in accepted Git. They

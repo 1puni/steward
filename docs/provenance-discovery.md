@@ -22,6 +22,35 @@ sections retain the source beside the input; consumption does not erase it.
 An assistant answer to one task is evidence of that answer, not a standing
 operator grant to other tasks.
 
+## Observed source and retained findings
+
+For an organisation-root read-only rhythm, the controller refreshes every
+configured clone's `refs/steward/remote/<branch>` before cognition. These are
+convenience labels for observed remote commits, not new acceptance, publication
+or deployment authority. Working HEADs, local changes and `origin/<branch>`
+remain unchanged and can be old. Read source at the observed ref, recording the
+resolved SHA and observation time; follow that revision's README and docs map:
+
+```sh
+git -C app show -s --format=%H refs/steward/remote/main
+git -C app show refs/steward/remote/main:README.md
+```
+
+Substitute the configured default branch for `main`. Read-only procedure findings
+can be retained in task-ref commit messages without publication to product main:
+
+```sh
+git -C app log --all --decorate --oneline
+git -C app show -s --format=full <evidence-commit>
+```
+
+These readable refs provide findings and provenance. Controller-private accepted
+task Git, current locks and result-delivery receipts have separate roles. Absence
+from product main or inability to read private stores does not establish lost or
+unaccepted work. A prior finding also does not establish current source or live
+behavior: reobserve installed releases and public responses when relevant.
+Missing delivery evidence should be reported as unverified delivery, not failure.
+
 ## Current ownership on request
 
 Historical Git evidence cannot prove who owns work now. A task that needs this
@@ -34,7 +63,7 @@ supplies the answer; no new query task, read server or snapshot directory exists
 The configured repository set bounds the read. Results include up to ten accepted
 unfinished tasks whose titles contain every requested word, their observed status,
 accepted revision, and same-conversation/another-conversation/unowned labels.
-They omit task bodies and private owner identities. Empty text reads the first ten
+They omit task bodies, completed results and private owner identities. Empty text reads the first ten
 unfinished tasks in that repository. Truncation is explicit; no matching title does
 not prove no differently titled task owns the finding. The timestamp describes the
 read, not a lease. Subsequent task actions still cross ordinary ownership and
