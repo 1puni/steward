@@ -176,13 +176,11 @@ read-only `ClaudeRuntime.execute` request completed with `dev_intent` before
 `init`; only event types were retained. Synthetic lifecycle and stream regressions
 live in `tests/test_runtime_lifecycle.py` and `tests/test_claude_stream.py`.
 
-Consumers should select a gated, published harness revision containing this
-parser correction and compatible native-session work, then update through their
-normal upgrade procedure. This correction changes no configuration or state
-schema. Repeat the synthetic read-only adapter probe on the selected release
-before relying on reflection runs. The parser probe does not validate a consumer
-dependency upgrade, live workers, or Sleep scheduling; those remain separate
-rollout checks.
+Consumers should select a gated, published revision containing this parser
+correction and compatible native-session work, then follow their normal upgrade
+procedure. Repeat the synthetic read-only adapter probe on the selected release;
+it does not validate a dependency upgrade, live workers or reflection scheduling.
+This parser correction changes no configuration or state schema.
 
 The result's `user_message_uuid` is optional. If absent, the serial native
 command lifecycle identifies its root; a conflicting explicit identity fails.
@@ -344,7 +342,8 @@ another `thread/read` snapshot. Native runtime SQLite remains private to the
 launch and is discarded with it. Every invocation starts a new provider process;
 transcript resume does not preserve native queue, goal or background-job state
 held outside those transcripts. Persistent process and database continuity remain
-unimplemented in this release. Private links are removed after the provider exits; candidate records
+unimplemented in this release. Private links are removed after the provider exits;
+candidate records
 and useful partial work remain. Separate launches never retarget a shared link.
 Directory creation and cleanup use the execution broker. Existing symlinks in
 mapped record directories are rejected, and setup shares the execution deadline.

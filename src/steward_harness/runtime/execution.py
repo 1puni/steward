@@ -669,6 +669,25 @@ class UntrustedExecutionBroker:
                        "setpriv", f"--reuid={uid}", f"--regid={gid}", "--clear-groups", "--", *command]
         return "umask 077; " + shlex.join(command)
 
+    def run_controller_git(
+        self, args: tuple[str, ...], *, cwd: str | Path, timeout: float,
+        extra_env: Mapping[str, str] | None = None, input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Use direct dropped UID only for audited controller metadata reads."""
+        from steward_harness.git import is_git_path_query
+        from steward_harness.runtime.git_metadata import run_metadata
+
+        if (self.enabled and sys.platform == "linux" and is_git_path_query(args)
+                and extra_env is None and input_text is None):
+            self._require_boundary()
+            _user, uid, gid, _home = self._resolved_identity()
+            if os.geteuid() != 0 or uid == 0 or gid == 0:
+                raise ExecutionBoundaryUnavailable("direct Git requires a distinct non-root identity")
+            return run_metadata(args, cwd=cwd, timeout=timeout, home=self.home,
+                                identity=self._identity_kwargs())
+        return self.run(hardened_git_argv(*args), cwd=cwd, timeout=timeout,
+                        extra_env=extra_env, input_text=input_text)
+
     def run(
         self,
         command: Sequence[str],

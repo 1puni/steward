@@ -253,3 +253,97 @@ assert process.returncode == 0, err
         assert _gone(child)
     finally:
         subprocess.run(['systemctl', 'stop', owner], capture_output=True, timeout=15)
+
+
+def test_direct_git_path_query_drops_uid_and_cannot_read_controller_config(broker, monkeypatch):
+    from steward_harness.git import run_agent_git
+    from steward_harness.runtime import ownership
+
+    execution, root = broker
+    repository = root / 'repository'
+    assert execution.run(['git', 'init', str(repository)], cwd=root, timeout=10).returncode == 0
+    secret = root / 'controller-private-config'
+    secret.write_text('[core]\nrepositoryformatversion = 0\n')
+    secret.chmod(0o600)
+    with (repository / '.git/config').open('a') as config:
+        config.write(f'\n[include]\npath = {secret}\n')
+
+    def unexpected_unit(*args, **kwargs):
+        raise AssertionError('audited path query must not start a transient unit')
+
+    monkeypatch.setattr(ownership, 'popen', unexpected_unit)
+    result = run_agent_git(execution, 'rev-parse', '--show-toplevel', cwd=repository, timeout=3)
+    assert result.returncode != 0
+    assert 'Permission denied' in result.stderr
+    # Read access is the sole failure: the identical path query works when the
+    # included config is readable, still without taking the systemd lane.
+    secret.chmod(0o644)
+    result = run_agent_git(execution, 'rev-parse', '--show-toplevel', cwd=repository, timeout=3)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(repository)
+
+
+@pytest.mark.parametrize('failure', ['controller-death', 'supervisor-death', 'cancel'])
+def test_direct_git_watchdog_is_controller_owned_and_contains_failures(broker, failure):
+    execution, root = broker
+    repository = root / 'repository'
+    assert execution.run(['git', 'init', str(repository)], cwd=root, timeout=10).returncode == 0
+    fifo = root / 'blocked-config'
+    os.mkfifo(fifo, 0o644)
+    with (repository / '.git/config').open('a') as config:
+        config.write(f'\n[include]\npath = {fifo}\n')
+    code = '''import sys
+from steward_harness.config.schema import UntrustedExecutionConfig
+from steward_harness.runtime.execution import UntrustedExecutionBroker
+broker = UntrustedExecutionBroker(UntrustedExecutionConfig(user='nobody'))
+broker.run_controller_git(('rev-parse', '--show-toplevel'), cwd=sys.argv[1], timeout=5)
+'''
+    controller = subprocess.Popen([sys.executable, '-c', code, str(repository)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    descendants = []
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            children = Path(f'/proc/{controller.pid}/task/{controller.pid}/children').read_text().split()
+            if children:
+                supervisor = int(children[0])
+                grandchildren = Path(f'/proc/{supervisor}/task/{supervisor}/children').read_text().split()
+                if grandchildren:
+                    child = int(grandchildren[0])
+                    if Path(f'/proc/{child}/comm').read_text().strip() == 'git':
+                        descendants = [supervisor, child]
+                        break
+            time.sleep(.01)
+        assert len(descendants) == 2
+        assert Path(f'/proc/{supervisor}').stat().st_uid == 0
+        assert Path(f'/proc/{child}').stat().st_uid == pwd.getpwnam('nobody').pw_uid
+        account = pwd.getpwnam('nobody')
+        status = dict(line.split(':', 1) for line in Path(f'/proc/{child}/status').read_text().splitlines())
+        assert status['Uid'].split() == [str(account.pw_uid)] * 4
+        assert status['Gid'].split() == [str(account.pw_gid)] * 4
+        assert not status['Groups'].strip()
+        assert status['NoNewPrivs'].strip() == '1'
+        assert int(status['CapEff'], 16) == int(status['CapPrm'], 16) == 0
+        # An agent must not be able to disable the orphan watchdog.
+        denied = execution.run(['/bin/kill', '-STOP', str(supervisor)], cwd=root, timeout=3)
+        assert denied.returncode != 0
+        if failure == 'controller-death':
+            controller.kill()
+        elif failure == 'supervisor-death':
+            os.kill(supervisor, signal.SIGKILL)
+        else:
+            controller.send_signal(signal.SIGINT)
+        controller.communicate(timeout=12)
+        deadline = time.monotonic() + 7
+        while not all(_gone(pid) for pid in descendants):
+            assert time.monotonic() < deadline, 'direct Git escaped its deadline'
+            time.sleep(.02)
+    finally:
+        if controller.poll() is None:
+            controller.kill()
+        if descendants:
+            try:
+                os.killpg(descendants[0], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        controller.communicate(timeout=12)
