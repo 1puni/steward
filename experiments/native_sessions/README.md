@@ -328,7 +328,7 @@ the proposed directory meaning and the actual native controls.
 
 ## Installed Claude/GLM queue check, 2026-09-08
 
-The exact five-file queue change committed as `6e403eb` passed five calls on GG's
+The exact five-file queue change committed as `6e403eb` passed five calls using an
 installed Claude Code **2.1.259**, using GLM **5.3** through the enforced UID/GID
 978 broker. The isolated candidate was archive `53da518` plus those overrides;
 no concurrent state/daemon changes were included. Its 126 source/dependency
