@@ -62,7 +62,7 @@ layer deciding which version of a thought is canonical. Knowledge changes the
 same way code changes: visibly, reviewably, and with provenance.
 
 This does not mean shoving every operational detail into Git. SQLite owns the
-small amount of scheduler state needed to resume exact work. Trusted remotes
+small amount of conversation and turn state needed to resume exact work. Trusted remotes
 and live releases own their external truth. Git owns the durable worlds and
 the proposed changes to them. Each thing gets to be what it is good at.
 
@@ -130,6 +130,12 @@ stale beliefs, and sometimes make strange cross-cutting connections when the
 obvious linear process shuts up for a minute. Steward rhythms borrow that
 shape. They do not pretend the machine is literally asleep or dreaming.
 
+To be precise about who does what: the harness ships the clock (a rhythm is an
+interval or a quiet period that triggers a procedure) and a generic reflection
+skill that knows the three shapes below. When your steward looks around, how
+often it sleeps and what it is allowed to dream about is policy, and policy
+belongs to your instance. Nothing recurs until you configure it.
+
 ### Light
 
 Light is cheap, frequent awareness. What changed? What arrived? What deserves
@@ -155,8 +161,8 @@ patterns, strategic opportunities, obsolete machinery, and the surprising
 useful shit nobody explicitly requested.
 
 Not every REM thought should become work. That is the point of separating
-cognition from authority. A rhythm may update its owning Git world or propose
-an ordinary task. It cannot manufacture permission to land code, deploy a
+cognition from authority. A rhythm's findings go back to the conversation that
+owns it, which may record them in its world or propose an ordinary task. It cannot manufacture permission to land code, deploy a
 service, or declare an incident.
 
 The same tiny kernel still disposes.
@@ -213,16 +219,12 @@ local policy, demand evidence, and choose whether it becomes shared reality.
 That is the roadmap now. Not a speculative feature inventory. Real worlds find
 the gaps; Git carries the lessons home.
 
-## Real-world examples will live here
+## The whole claim
 
-We will expand this document with concrete stories from live stewards: failures recovered, knowledge consolidated, surprising REM
-connections, self-healing pull requests, and cases where one small abstraction
-removed an unreasonable amount of machinery.
-
-Those examples should be real. Until we have them, we will not manufacture
-parables to make the architecture sound clever.
-
-For now, the claim is simple:
+No parables. When live stewards produce stories worth telling (a failure
+recovered, a world that stayed coherent, a REM connection nobody asked for, one
+small abstraction that deleted an unreasonable amount of machinery), they get
+told with their evidence. Until then, the claim is simple:
 
 > Put truth in files. Put the files in Git. Let intelligence propose changes
 > to a branch. Put a tiny deterministic bastard in charge of deciding what

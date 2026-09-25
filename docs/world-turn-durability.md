@@ -49,8 +49,8 @@ receipts for that world, it advances to the current input revision: acceptance
 may have rebased those candidates, and merging them again would replay old edits.
 Unaccepted local commits still require a merge. Both paths refuse to overwrite
 ignored local files. If that refresh conflicts, the harness aborts its merge
-and reports the conflicting paths; it must not hand its conflict markers to the next native turn. Both
-histories remain intact. This refusal does not resolve the content conflict.
+and reports the conflicting paths; it must not hand its conflict markers to the next
+native turn. Both histories remain intact. This refusal does not resolve the content conflict.
 Interrupted native edits and Git operations still belong to their session.
 
 ## Preparation and application
@@ -128,12 +128,9 @@ alone cannot reconstruct missing edits. A turn that could not take its owner's
 checkout never reached a provider, so it is withdrawn: its replay starts it
 afresh from the same source.
 
-The published host implementation rematerializes accepted owner checkouts from
-Git and retains unprepared interrupted work. Ignored files were therefore not
-durable. The active development-environment migration
-retains owner environments, including ignored files; its
-acceptance record owns readiness for
-that change. Integration checkouts remain disposable in both arrangements.
+Owner checkouts are retained between turns, including ignored files such as an
+installed environment, until [idle retention](#idle-session-retention) retires a
+clean one. Integration checkouts are always disposable.
 
 Cancellation cannot erase applied world edits. It can suppress a still-unadmitted
 task effect. Clearing a session must not orphan its prepared update. Dirty or
@@ -161,7 +158,8 @@ replay reclaims the same turn identity, including after restart. Other interrupt
 executions remain non-replayable without inspecting their retained work. Accepted
 turns do not reacquire the world lease for workspace sweeping: owner workspaces
 persist until eligible for background retention, application owns its integration
-cleanup, and legacy sweeping is startup work. This prevents unrelated cleanup contention from replacing a valid reply.
+cleanup, and orphan sweeping is startup work. Unrelated cleanup contention
+therefore cannot replace a valid reply.
 
 [World checkpoint tests](../tests/test_world_turn_checkpoint.py) and
 [world durability tests](../tests/test_world_durability.py) exercise real Git
@@ -170,7 +168,5 @@ concurrent edits, retained evidence and dependent admission. They establish the
 behavior exercised under their fixture identities, not native authentication
 or live Telegram delivery.
 
-An upgrade must preserve owner checkouts, world refs, native originals,
-unfinished checkouts, SQL and adjacent receipts together. See the
-[upgrade procedure](upgrading.md); schema conversion cannot restore
-content that an older release already discarded.
+An upgrade must preserve owner checkouts, world refs, native originals, unfinished
+checkouts, SQL and adjacent receipts together; see [upgrading](upgrading.md).

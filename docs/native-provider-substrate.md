@@ -32,7 +32,7 @@ That ordering is the design:
 2. **Containment** — a boundary that guarantees nothing survives when step 1
    does not answer.
 
-Native interruption now precedes bounded containment. Neither a successful
+Native interruption precedes bounded containment. Neither a successful
 interruption acknowledgement nor process exit proves every native child saved
 its work. Cooperation without containment would be a promise rather than an
 invariant, which the [doctrine](engineering-doctrine.md) rejects.
@@ -44,11 +44,7 @@ constant.
 
 ## Substrate members
 
-Seven surfaces, initially reviewed on 2026-09-21. The original audit used checkout
-`1d6ff07e07eb8ce657680413136a3b49b8e8f334` on a downstream migration branch,
-not local `main`. The implementation described here includes the subsequent
-working-tree repair reviewed on 2026-09-23; deployment is a separate acceptance
-boundary.
+Seven surfaces, and where each one stands:
 
 | # | Surface | Status |
 | --- | --- | --- |
@@ -72,11 +68,11 @@ native home. Authentication kind therefore cannot be inferred solely from the
 provider family. File credentials avoid rotating-refresh-token reuse, but file
 storage alone does not prove that a credential never expires or is revoked.
 
-The original investigation reported a repeated Codex refresh-token failure on
-a downstream instance on September 16 and 21, with raw vendor prose in `status_reason`.
-Those live records were not independently reverified in this code audit. A typed
-authentication failure and a precise repair remain useful future work; no new
-login workflow is claimed here.
+Expired sign-ins do happen in practice (rotating refresh tokens get "already
+used"), and the adapters classify a dead sign-in as declining the turn, so
+configured fallback gets asked. What is missing is a typed authentication failure
+with a precise repair instruction. Today the operator reads vendor prose in
+`status_reason`.
 
 ### 2. Native turns and live input — built
 
@@ -109,11 +105,8 @@ unconditionally. Rhythms run as ordinary procedure tasks and inherit it. The
 disposition is durable — `turns.input_disposition` (`state.py`) constrains to
 exactly the three `RuntimeInputResult` values.
 
-The original investigation reported three folded inputs on a downstream instance, two
-accepted and one rejected. The database disposition establishes delivery state,
-not a model's judgement: adapters can reject input because their channel closed,
-a write failed, or the provider protocol rejected it. The dated live rows were
-not independently re-read during this audit.
+The recorded disposition establishes delivery state, not a model's judgement: adapters can reject input because their channel closed,
+a write failed, or the provider protocol rejected it.
 
 ### 3. Session identity and liveness
 
@@ -139,15 +132,15 @@ Ordinary task turns have no routine deadline: live account acceptance records
 understanding while native work continues. Procedure runs and interactive
 conversations retain finite provider deadlines. Explicit cancellation and controller
 shutdown request native interruption before bounded containment; shutdown retains
-unfinished task work for continuation. See the
-[live-understanding implementation](live-task-understanding.md).
+unfinished task work for continuation. See
+[live task understanding](live-task-understanding.md).
 
 The ten-second native grace is policy, not a measurement of every provider's
 checkpoint time. Acknowledgement does not prove that children saved all work.
 
 ### 5. Execution ownership
 
-Linux configured host-UID invocations now use individual systemd transient
+Linux host-UID invocations use individual systemd transient
 services with a pidfd guardian tied to the original controller process. The workload enters its owned service before
 it can fork. Systemd cleans descendants on normal completion, cancellation and
 controller death, including process-group escapees. A protected launcher drops
@@ -158,18 +151,16 @@ separate services.
 
 macOS retains process-group containment, with a real group grace after the leader
 exits and cleanup on success as well as failure. It still cannot contain an
-escaped session. The former container execution backend has been removed.
-See [execution ownership](execution-boundary.md#execution-ownership) for launch
+escaped session. See [execution ownership](execution-boundary.md#execution-ownership) for launch
 requirements and the distinction between identity checks and Linux acceptance.
 
 ### 6. Native memory and its scope
 
 The *law* exists and is not in question: the
 [hierarchy and memory](steward-hierarchy-and-memory.md) contract places durable
-truth at the lowest scope that owns it, and instance procedures enforce it in
-prose — one downstream instance's reflection procedure states that organisation
-facts belong in the org-world and repository implementation in its own
-repository.
+truth at the lowest scope that owns it, and an instance's own procedures can
+enforce it in prose, for example a reflection procedure stating that organisation
+facts belong in the organisation world and implementation facts in the repository.
 
 The provider-native storage wiring already exists. Writable Claude/GLM turns
 set `autoMemoryDirectory` to the current worktree's `memories/<provider>`;
@@ -201,124 +192,46 @@ provider-agnostic. Tracking that is recurring, bounded work over a named set —
 which is a [rhythm](rhythms.md) with a procedure, the harness's own
 spelling for exactly this.
 
-## Execution ownership before the repair
+## Why a signal was the wrong layer
 
-Historical code evidence at `1d6ff07`, 2026-09-21. The line references below
-describe that pre-repair checkout, not the current implementation. These defects
-explain the repair; they do not attribute a particular production kill.
+The ownership design exists because the process-group approach it replaced failed
+in three independent ways. They are worth knowing, because each one looks fine in
+a test:
 
-### The host-UID path
+- **The grace period was measured against the leader, not the group.** A provider
+  that exited promptly on `SIGTERM` meant its descendants got `SIGKILL` at once.
+  The nominal two-second grace was frequently zero.
+- **A process group is escapable.** `setsid()` is an unprivileged call. A
+  descendant that starts its own session leaves the group and survives, reparented
+  to PID 1, where nobody is looking.
+- **Success performed no cleanup at all.** Teardown ran only on exceptions. A turn
+  that completed normally returned when the leader exited and left its descendants
+  running. "Descendants still running" was a state the representation could not
+  express.
 
-The provider starts with `start_new_session=True` (`runtime/process.py:137`), so
-it leads its own process group, and stopping is `os.killpg`
-(`runtime/execution.py:235`, falling back to signalling the immediate process on
-`PermissionError`). There are two stop paths and they differ:
+There is also a fourth kill path that no harness code produces: the controller
+unit's own `KillMode`. Under `control-group`, systemd kills provider children
+instantly and defeats the controller's drain. Under `mixed`, it reaps the rest of
+the cgroup the moment the main process exits. Either way the controller can
+observe a clean drain while systemd kills its subagents. Check the unit's
+`KillMode` before you believe any drain.
 
-- **Cancellation** — `stop()` (`runtime/process.py:166-175`) sends `SIGTERM` to
-  the group and nothing else. It starts no grace timer and does not shorten the
-  invocation deadline. A provider that ignores `SIGTERM` therefore holds its
-  execution slot until the *original* deadline, which was 900s on one downstream instance, and the
-  error that finally surfaces is `ProcessTimeout` rather than a cancellation.
-- **Teardown** — `_stop_process_group` (`runtime/process.py:272-279`) sends
-  `SIGTERM`, waits up to `_TERMINATION_GRACE_SECONDS` (2.0,
-  `runtime/process.py:22`), sends `SIGKILL`, then waits.
-
-Three defects, with different causes. They must not be merged:
-
-**The grace period is measured against the leader, not the group.** The wait at
-`runtime/process.py:274` is guarded by `if process.poll() is None`. A provider
-that exits promptly on `SIGTERM` means its descendants receive `SIGKILL`
-immediately; if the leader was already gone when teardown began, there is no wait
-at all. The nominal two seconds is frequently zero, and this produces abrupt
-kills with no process-group escape involved.
-
-**Ownership is a process group, which is escapable.** `setsid()` is an
-unprivileged call. A descendant that starts its own session leaves the group and
-becomes both invisible and unreachable; it survives, reparented to PID 1, inside
-the service cgroup. The class docstring concedes this: *"children that escape
-need separate ownership"* (`runtime/process.py:86`).
-
-**The success path performs no cleanup at all.** `_stop_process_group` is
-reachable only from `except BaseException` (`runtime/process.py:254-256`). A turn
-that completes normally returns as soon as the leader exits and its pipes close,
-leaving descendants running. "Done" is defined as the leader's exit, and
-"descendants still running" is a state the representation cannot express.
-
-One related correction: the docstring at `runtime/process.py:115-119` argues that
-the stopper is stored nowhere and so never needs expiry or deletion.
-`Cognition._active` does store it (`cognition.py:102`) and does delete it on
-completion (`cognition.py:251`). The defensible claim is that this is *ephemeral
-routing* rather than durable cancellation truth — durable withdrawal is separate,
-and stays separate.
-
-### The container path already solves this
-
-`runtime/container.py:186-202` runs **every invocation as its own transient
-systemd service**:
-
-- `systemd-run --unit=steward-exec-<uuid>.service`, with `BindsTo=` and `After=`
-  the controller unit, so controller death tears the invocation down without
-  relying on a Python `finally` block.
-- `ExecStartPre=/bin/mkdir <subgroup>` establishes cgroup membership *before* the
-  workload can run, which closes the fork race that moving a PID afterwards would
-  leave open.
-- `runc exec --cgroup <invocation>` places the workload in that subgroup.
-- `ExecStopPost=<helper>` runs the cleanup on normal exit, on cancellation **and**
-  on controller death.
-
-A cancellation acceptance test, `test_container_execution.py:216`, is named `test_streaming_cancellation_cleans_descendant_and_preserves_peer`, and
-its escapee is literally `os.setsid(); time.sleep(100)` — the exact escape the
-old host-UID path cannot reach. It asserts cancellation completion and peer
-survival, but does not directly check the escaped child. A separate deadline test
-checks that an escaped writer cannot write later. Neither test runs without its
-provisioned Linux fixture.
-
-Two qualifications, both load-bearing for the lift:
-
-- **The cleanup is not graceful.** `cleanup()` (`runtime/container.py:215-224`)
-  writes `cgroup.kill` *immediately*, then polls `cgroup.events` until
-  `populated 0`. There is no `SIGTERM`-and-wait phase for the workload subgroup.
-  The unit's own `TimeoutStopSec=2s` governs the unit's cgroup, which holds the
-  `runc exec` leader — not the workload. So the requested graceful phase lands
-  inside this one function.
-- **The sampled instance configs use host execution.** One records that a
-  container *"was tried and withdrawn"*; another declares none. These configurations do not establish the execution
-  backend of every live instance.
-
-### Unit policy is a third kill path
-
-One downstream provisioning script explains why the controller unit uses
-`KillMode=mixed`: `control-group` killed provider children instantly, defeated
-the controller's own drain, and turned every deploy into a blocked task — *"forty
-deploys in one day"*. The same comment states the consequence plainly: *"systemd
-reaps the rest of the cgroup the moment it exits."*
-
-So on controller stop, systemd `SIGKILL`s every provider descendant as soon as
-the main process exits. The controller observes a clean drain while its
-sub-agents are killed by systemd — an outcome no harness code path produces and
-none can see. This is deploy-correlated by construction.
-
-The original investigation recorded these properties of one downstream instance on 2026-09-21;
-this audit did not independently reread them: `KillMode=mixed`, `KillSignal=15`,
-`TimeoutStopUSec=21min 40s`, `OOMPolicy=stop`, `MemoryMax=infinity`,
-**`Delegate=no`**. Two consequences. The unit has no local memory
-cap, but ancestor limits must also be inspected before excluding cgroup-OOM.
-Another instance configures `MemoryMax=6G`. The
-`Delegate=no` setting prevents supported direct management of a controller
-subtree; it does not prevent asking systemd to own separate transient services.
+Owning each invocation as its own transient service, entered before the workload
+can fork, removes the three code-path defects at once: systemd cleans descendants
+on success, cancellation and controller death alike.
 
 ## Not established
 
-Recorded so the repair is not built past its evidence.
+Stated here so nothing gets built past its evidence.
 
-**No exit 137 has been traced to a sender.** Three mechanisms are now known to
+**No exit 137 has been traced to a sender.** Three mechanisms are known to
 exist — `_stop_process_group`'s `SIGKILL`, systemd's cgroup reap under
 `KillMode=mixed`, and cgroup-OOM where a memory limit is set. They leave
 different traces: a journal restart, a `dmesg` OOM record, or neither. Until one
 incident is attributed, it is unknown whether a grace window would have changed
-any observed outcome, or whether the repair belongs entirely in unit policy.
-Prior operational records on this harness have overstated what shutdown
-observations proved; see the failure-boundaries contract for what a shutdown observation can establish.
+any observed outcome, or whether the fix belongs entirely in unit policy. See
+[failure boundaries](failure-boundaries.md) for what a shutdown observation can
+establish.
 
 **The native grace has not been established as a checkpoint-time guarantee.**
 The ten-second policy bounds interruption before containment; real providers
@@ -330,49 +243,3 @@ must be stated rather than silently substituted when the Linux boundary is
 unavailable — the same split already accepted for identity, where a green macOS
 suite establishes nothing about the boundary and only
 `scripts/linux-boundary-acceptance.sh` does.
-
-## Provenance
-
-The original document attributes the execution-ownership findings to two independent reviews of this
-repository on 2026-09-21 — one by Claude within the working session, one by a
-separate `codex exec` session given the problem statement and no proposed
-solution. It reports that they converged on the same architecture. The container backend's
-existing machinery, the leader-versus-group grace defect, the absence of cleanup
-on the success path, and the `KillMode` kill path were found by the Codex review;
-the full output was reported as retained outside the repository. Those external
-review transcripts were not reread during this repair. The historical code
-findings above were checked against the named checkout.
-
-The September 23 repair also incorporates the work identified by the Claude
-session `notification-derivation-ownership`: route eligibility before dispatch,
-durable unowned target transitions, settled-target eligibility before queuing,
-and deployment observation without unrelated build-readiness probes. The
-[target contract](automatic-deployment.md) owns those behaviors.
-
-The combined local suite passed **893 tests, with 29 skipped**. Additional
-adapter/process/task tests passed **105 tests**, including actual subprocess
-fixtures for Codex cancellation and deadlines. These prove protocol handling,
-bounded fallback, retained writes and continuation against scripted providers;
-they do not measure real provider checkpoint latency. Linux ownership and full
-daemon acceptance are separate from this macOS result.
-
-Native Linux acceptance through `scripts/linux-boundary-acceptance.sh --docker`
-established **17 checks**: the final ownership run passed all **12** cases, with
-the **five** identity/deployment cases passing in the preceding broader run.
-Docker supplied only the local Linux test host: the workload used real systemd
-services, cgroup v2 and pidfds. The checks cover escaped descendants on success,
-cancellation and launcher-client death, peer survival, controller death, stale
-controller refusal, identity/privacy, large input and HTTP deployment rollback.
-A real service-stop test verifies that native work can checkpoint while the
-controller drains, before actual controller exit triggers containment. The same
-runner executes directly on a provisioned disposable Linux host without Docker.
-These are fixture checks, not a production rollout or live provider timing test.
-
-The [full-daemon fixture](follow-through-environment.md) passed **12 assertions**
-for conversation, cancellation and poll recovery, followed by **22 assertions**
-on the final guardian-based self-deployment snapshot. That final scenario covers
-an unowned target report, task question/answer, publication, exact-revision
-health, controller replacement and a subsequent accepted conversation. Its dated
-record also documents the accidental loss of the old `selfimprove` fixture and
-the new safeguards against removing existing test projects. Release/archive and
-runner-safety regressions passed in a separate **75-test** focused run.

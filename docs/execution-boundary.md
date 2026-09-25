@@ -1,6 +1,7 @@
 # Controller and Agent OS Identities
 
-The production shape is deliberately two identities:
+The production shape is deliberately two identities: one that holds the keys, and
+one that does the thinking. They never share a process.
 
 | Identity | Owns | Must not own |
 | --- | --- | --- |
@@ -22,7 +23,7 @@ execution:
   tmpdir: /tmp
 ```
 
-The account remains an ordinary, useful VPS account. Give it normal ownership of
+The account remains an ordinary, useful host account. Give it normal ownership of
 repositories, provider configuration, caches, build directories, and any other working
 data the agents should use. Do not add it to `sudo`, `docker`, or another group that
 confers equivalent host control. File and socket permissions are the authority boundary.
@@ -42,8 +43,7 @@ same owner and group at `0660`. The harness refuses to create this shared inode.
 execution identity and any cooperating external writer can open it for an advisory lock,
 but cannot replace its controller-owned namespace. This is an intentional bounded
 availability capability: a cooperating writer can delay world mutation by holding the
-lock, without gaining controller state or secret access. Existing installations that set
-`world.lock_dir` must repair this layout before upgrading. Each repository also declares
+lock, without gaining controller state or secret access. Each repository also declares
 its trusted `remote_url`. HTTPS and SSH URLs may not contain credentials, and a
 split-identity instance rejects local filesystem remotes. The controller binds that URL
 and the default branch to a private bare store beside the state database; a later
@@ -120,15 +120,10 @@ the controller service alone does not limit these workloads; resource policy
 must cover their slice or invocation units. This ownership boundary adds no
 per-invocation memory or CPU budget.
 
-Before upgrading an older installation, verify the installed launcher namespace
-is protected. Older release exports could produce `0775` directories and `0664`
-files; the updated exporter uses `tar.umask=0022`. Extraction preserves those
-archive modes even when staging runs unprivileged with umask `077`, so service
-identities can traverse directories and execute committed executables without
-granting group or other write access. Existing releases are not
-rewritten automatically. Stage with the updated trusted driver, or correct the
-controller-owned installation's permissions as part of the explicit upgrade,
-before enabling the new launcher.
+The launcher namespace must be protected. Release exports use `tar.umask=0022`,
+and extraction preserves those modes even when staging runs unprivileged with
+umask `077`, so service identities can traverse directories and execute committed
+executables without anyone gaining group or other write access.
 
 Systemd owns these transient service cgroups, so the controller does not need
 `Delegate=yes` for this design. A Linux launch without the required ownership
@@ -160,12 +155,11 @@ does not repair their ownership by writing as root. Verify the resulting permiss
 a real task worktree and world. Do not solve access errors by granting sudo. Git-world
 `episodes.md` contains newline-delimited structured episode records; free-form turn text
 cannot impersonate a record boundary. It is created and appended by the agent identity
-and must be a regular file owned by that identity. Before upgrading an older
-installation that created it as root, change that one file's ownership to the configured
-agent; the harness deliberately fails closed instead of preserving mixed ownership.
+and must be a regular file owned by that identity; if it is not, the harness fails closed
+rather than live with mixed ownership.
 Git-world checkpoints ignore system and global Git configuration, reject local
 clean/process filters, disable signing, and disable hooks and fsmonitor. This prevents
-staging model-authored attributes from becoming another command- execution path outside
+staging model-authored attributes from becoming another command-execution path outside
 the provider sandbox. Orientation and light-rhythm file reads are bounded and performed
 by the agent identity through no-follow path traversal. The controller never opens
 model-writable world content on the model's behalf.
@@ -206,12 +200,12 @@ of the controller trust boundary and owns the injected broker's host-policy proo
 omission always uses the fail-closed complete-instance factory. There is no boolean or
 environment-variable bypass.
 
-The boundary is mandatory when the instance can push a fast-forward landing, deploy a
-systemd release, operate Telegram with a controller token. `systemctl` remains
+The boundary is mandatory when the instance can push a landing, deploy a systemd
+release, or operate Telegram with a controller token. `systemctl` remains
 controller-owned. The boundary is optional only for inert/local configurations with no
 such controller authority.
 
-Before production cutover, verify at least:
+Before going live, verify at least:
 
 ```bash
 sudo -u steward id
@@ -234,8 +228,8 @@ in the agent repository are consistency labels, not authority. Release staging t
 continues to work if the agent checkout disappears after the exact commit was imported,
 while an agent-only commit cannot become a release.
 
-Git worlds remain local durable knowledge. Their checkpoints are agent-brokered, and the
-retired named-remote publication path cannot turn model-controlled Git configuration
+Git worlds remain local durable knowledge. Their checkpoints are agent-brokered, and
+there is no world publication path that could turn model-controlled Git configuration
 into controller transport authority. Signed or otherwise credentialed product actions
 still need a separately scoped broker; an untrusted adapter must not be given those
 secrets directly.

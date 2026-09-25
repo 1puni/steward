@@ -1,6 +1,8 @@
 # Execution lifecycle
 
-The [kernel contract](kernel-contract.md) owns the invariants.
+How a task actually runs, slice by slice: what it is made of, how its status is
+derived, how a slice closes, and what cancellation does and does not do. The
+[kernel contract](kernel-contract.md) owns the invariants.
 
 ## Task representation
 
@@ -22,8 +24,8 @@ publish with the product work as commit messages; request bodies and routing do 
 Every slice receives every accepted input, because a saved session may prove missing or
 cognition may fall back to another provider; only the pending ones are consumed.
 
-The [rewrite contract](git-native-tasks.md) specifies replication, conflicts,
-private metadata and migration. [Git journeys](../tests/test_git_tasks.py) exercise
+The [Git-native task contract](git-native-tasks.md) specifies replication,
+conflicts and private metadata. [Git journeys](../tests/test_git_tasks.py) exercise
 fresh intake, authorship, answers, cancellation and publication recovery.
 
 ## Execution state
@@ -43,16 +45,16 @@ in SQL.
 
 ### Persistent task-lock files
 
-`<provider.workdir>/task-locks/<task-id>.lock` is a persistent file used for
+`<state_db>.tasks.git.locks/<task-id>.lock` is a persistent file used for
 kernel `flock` coordination. The runner and repository publisher take the same
 lock; release closes the descriptor without removing the file. Process exit
 also releases the kernel lock. Files therefore accumulate across finished tasks
 by design: their existence, count and modification times do not establish which
 tasks are live.
 
-Use `/tasks` or `/task show <id>` for task status. Repository tooling uses
-`GitTaskStore` and `locked_tasks()` read the same exclusion: a
-non-blocking exclusive lock probe identifies held locks, while an existing
+Use `/tasks` or `/task show <id>` for task status. `GitTaskStore` and
+`locked_tasks()` read the same exclusion: a non-blocking exclusive lock probe
+identifies held locks, while an existing
 unlocked file contributes no running task. Run probes as the controller identity
 with access to the lock files; an unreadable file is skipped, so an unprivileged
 scan cannot establish that no tasks are running.
@@ -130,7 +132,8 @@ withdrawal prevents it, while an already-started push may land. External observa
 then reports that landing honestly. A failed gate cannot overwrite cancellation.
 
 Ignored files and uncommitted local work remain in retained worktrees. A fresh machine
-recovers accepted Git checkpoints; transporting local-only work is part of migration.
+recovers accepted Git checkpoints; moving local-only work to another host is your job,
+and part of any [upgrade](upgrading.md).
 
 The controller checks retention on its first pass and hourly thereafter, through
 its shared worker budget. A terminal (`done` or `cancelled`) task checkout can be
@@ -146,7 +149,7 @@ warning in the controller log. A retry can rematerialize accepted work.
 
 ## Recurring work and world recovery
 
-Rhythms now create ordinary procedure tasks over captured inputs. They have no
+Rhythms create ordinary procedure tasks over captured inputs. They have no
 separate world-turn execution or default policy seeding. One run per interval and
 no overlap with incomplete runs are derived from accepted task records. See the
 [convergence journeys](../tests/test_rewrite_convergence.py).

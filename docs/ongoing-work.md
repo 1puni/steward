@@ -11,11 +11,11 @@ repository and one conversation transport.
 
 ## A task is a Git record
 
-There is no task table and no task queue file. A task is two Git records with
-the same name.
+There is no task table and no task queue file. A task is a Git ref, plus the
+branch its work happens on.
 
 **The accepted record** lives in a bare repository the controller owns
-privately, at `<provider.state_db>.tasks.git` — with the default
+privately, at `<provider.state_db>.tasks.git`. With
 `state_db: /var/lib/steward/state.db`, that is
 `/var/lib/steward/state.db.tasks.git`, mode `0700`, owned by the controller
 identity. One task is one ref, `refs/heads/tasks/<task-id>`, whose tree holds
@@ -37,45 +37,29 @@ Keep the existing fixtures passing. If a caller needs behaviour the streaming
 reader does not have, stop and ask rather than widening the reader's contract.
 ```
 
-The frontmatter is the controller's; the body is the durable request. Every
-decision about the task is a commit on that ref: an answer, a note, a
-cancellation, a retained publication candidate, a repair demand. Nothing about
-a task's progress is stored in SQL. The fields the controller maintains are
-`repository`, `title`, `origin`, `source`, `owner`, `priority`, `hold`
-(`proposed`, `blocked` or `cancelled`), `reason`, `work` (the retained work
-commit), `resume`, and the `publication`, `repair` and `procedure` blocks.
+The frontmatter is the controller's. The body is the task's account: it starts
+as the brief, and a running agent can revise it (see
+[live task understanding](live-task-understanding.md)). Every decision about
+the task is a commit on that ref: an answer, a note, a cancellation, a retained
+publication candidate, a repair demand. Nothing about a task's progress is
+stored in SQL. The frontmatter fields are `repository`, `title`, `origin`,
+`source`, `owner`, `priority`, `hold` (`proposed`, `blocked` or `cancelled`),
+`reason`, `work` (the retained work commit), `resume`, and the `repair` and
+`procedure` blocks. Nothing else validates.
 
-**The working record** lives in the product repository, on a branch named
-`tasks/<task-id>`, in a file at `tasks/<task-id>.md`. That file has two
-authors. The harness owns the frontmatter and appends one numbered section per
-execution; below the frontmatter the body is the session's to write — plan,
-scope, crossed-off subtasks, an explanation of why something turned out to be
-impossible. The session is told, in its prompt, that this file is where earlier
-slices left their account.
-
-```markdown
----
-task: task-9f2c1ab5d4e6470fa1c3b8e7d0925a41
-repository: app
-origin: conversation
-provider: codex
----
-
-Remove the CSV importer and move its two callers to the streaming reader.
-...
-
-## 1 — continue · refactor: route reporting through the streaming reader
-
-Moved `reports/weekly.py`. `reports/adhoc.py` still needs the column-order
-shim; started it on this branch.
-```
+**The work branch** lives in the product repository's agent-side clone, named
+`tasks/<task-id>`. The native session commits there as it likes. Each slice ends
+with one checkpoint commit the harness makes: its subject is the session's
+`COMMIT:` line, its message body is the session's findings, and its trailers
+record the disposition. There is no task-prose file in the product checkout; the
+accepted account is its one owner, and the prompt carries it.
 
 **Identity.** A task ID looks like `task-9f2c1ab5d4e6470fa1c3b8e7d0925a41`: the
-literal prefix plus 32 hex characters. It is globally unique across every
-managed repository, because it is one ref in one namespace. The same string is
-the branch name, the worktree directory name and the path segment on the task
-board, so it is spelled out rather than opaque — you will type it into `/task`
-commands. `archive` and `recurring` are reserved and cannot be task IDs.
+literal prefix plus 32 hex characters. It is unique across every managed
+repository, because it is one ref in one namespace. The same string is the
+branch name, the worktree directory name and the path segment on the task
+board, so it is spelled out rather than opaque. You will be typing it into
+`/task` commands.
 
 ## Getting work admitted
 
@@ -92,9 +76,9 @@ Three constraints decide whether that becomes a task:
 
 - The marker must be the **last** line of the reply, and there must be exactly
   one marker in it. A turn proposes at most one task.
-- `repository` must name a configured repository whose `modes` include
-  `core_requested`. Anything else is refused with a visible rejection; a
-  conversation cannot grant itself a repository it was not given.
+- `repository` must name a configured repository. Configuring a repository is
+  the authority to work in it; anything else is refused with a visible
+  rejection. A conversation cannot grant itself a repository it was not given.
 - `repository`, `title` and `brief` are all required and all strings. The title
   is capped at 256 characters, the brief at 8000.
 
@@ -106,7 +90,7 @@ proposed the task becomes its `owner`, which is where its result comes back.
 The brief is the whole durable request. Write it as though the session that
 reads it has never seen the conversation, because that is the case: the task
 runs in its own worktree with its own provider session, and what it gets is the
-brief plus whatever the account file already says. State the outcome you want,
+brief, the accepted account and whatever Git history it can read. State the outcome you want,
 the constraint you care about, and what should happen when the work hits
 something you did not anticipate.
 
@@ -165,8 +149,8 @@ and the task simply never left the queue.
 
 - the work commit, retained in the accepted record's `work` field and kept in
   the accepted graph as a parent, so another machine can restore it;
-- the account file, appended to and committed by every slice — including a
-  slice that changed no product file;
+- the findings, as the checkpoint commit's message, including for a slice that
+  changed no product file;
 - the disposition and any blocking question, as `Disposition:` and `Reason:`
   trailers on that commit.
 
@@ -198,10 +182,10 @@ the accepted record and the work branch are on disk; an interrupted task is
 yielded by the next pass like any other. Two things do not survive a move to
 another machine: the native provider session (a new one starts from the durable
 record, which is why the record has to be good enough to work from) and anything
-left uncommitted or ignored in the retained worktree. If an invocation deadline
-is hit while the provider session is still alive, the harness commits whatever is
-in the tree and marks the task to resume, so the next tick continues rather than
-starting over.
+left uncommitted or ignored in the retained worktree. If a slice is interrupted
+while its provider session is still alive (a procedure deadline, a controller
+shutdown), the harness commits whatever is in the tree and marks the task to
+resume, so the next pass continues rather than starting over.
 
 ## One-off work versus recurring work
 
@@ -277,8 +261,8 @@ asks or fails, its outcome goes through the ordinary task-result assessment path
 in that conversation: the owner's session sees the brief and the findings as
 *evidence*, can record what matters in the world, can propose a follow-up task
 within the repository authority it already has, and returns a concise update
-through its transport. It can also decide nothing needs saying and reply
-`SILENT`, which retains the evidence and sends nothing. Assessment cannot grant
+through its transport. It can also decide nothing needs saying and complete
+without a final message, which retains the evidence and sends nothing. Assessment cannot grant
 itself repository access it did not have, and cannot steer tasks owned by
 another conversation.
 
@@ -296,8 +280,8 @@ owner it was created with.
 
 `access: read-only` means the procedure examines a candidate and produces a
 verdict. Its workspace must stay byte-identical to the candidate it was given —
-any changed tracked file or new untracked file other than the task's own account
-file rejects the evidence. It ends with `VERDICT: PASS` or `VERDICT: FAIL`
+any changed tracked file or new untracked file rejects the evidence. The
+harness writes and commits the findings itself. It ends with `VERDICT: PASS` or `VERDICT: FAIL`
 alongside the ordinary closure, and it **never publishes product work**.
 
 `access: workspace-write` means the procedure changes the repository, and its
@@ -336,15 +320,14 @@ publisher never edits code to make a check pass. If a repair leaves the product
 tree unchanged on the same base and still red, the task blocks and waits for a
 decision rather than burning attempts.
 
-**A findings-only task still publishes its account.** Every valid slice appends
-its section to `tasks/<task-id>.md` and commits, so a task that changed no
-product file at all still has a commit ahead of the base. That commit goes
-through gates and lands on your default branch. The reason is that the account
-*is* the product of an investigation, and a record that only exists in
-controller-private storage is a record nobody on the team can read. The
-consequence is worth stating plainly: if every push to your default branch
-starts an expensive deployment, an investigation will start one too. Know that
-before you onboard such a repository.
+**A findings-only task still lands a commit.** Every valid slice ends in a
+checkpoint commit, so a workspace-write task that changed no product file is
+still a commit ahead of the base. When it closes `idle`, that work goes through
+the gates and lands on your default branch as a `steward: accept tasks/<id>`
+commit with no file changes, carrying `Steward-Work` and `Steward-Base`
+trailers. If every push to your default branch starts an expensive deployment,
+an investigation will start one too. Know that before you onboard such a
+repository.
 
 Read-only procedure runs are the exception — they retain their evidence and
 verdict in the accepted record and never become a publication candidate.
@@ -399,9 +382,10 @@ Be clear about these before you design a body of work around the harness.
   lands, start that". A task is admitted, runs and ends. If work has stages,
   either write the stages into one brief and let the slices carry it, or let the
   owning conversation propose the next task when it assesses the last result.
-- **No time or money budget.** `provider.timeout_seconds` bounds a single
-  invocation, not a task. A task that keeps closing `continue` keeps costing.
-  Nothing here will stop a provider from being expensive.
+- **No time or money budget.** Ordinary task turns have no routine deadline at
+  all, and `provider.timeout_seconds` bounds only procedure runs and conversation
+  turns. A task that keeps closing `continue` keeps costing. Nothing here will
+  stop a provider from being expensive.
 - **No fairness scheduler.** `controller.workers` (default 8) is one shared
   budget for everything the steward schedules for itself. `priority` orders the
   queue; it reserves nothing and preempts nothing.
@@ -414,10 +398,11 @@ Be clear about these before you design a body of work around the harness.
   the revision.
 - **Cancelling does not interrupt a running gate.** A withdrawn task can wait for
   a gate to finish before the publisher observes the withdrawal.
-- **Findings are public.** The task brief and every slice's findings travel to
-  the product repository with the work. Assume everyone who can read that
-  repository reads them. Private routing and provider session tokens stay in the
-  controller's record and are never rendered into product files.
+- **The product remote gets outcomes, not diaries.** The pushed commit carries
+  the collapsed tree and `Steward-Work`/`Steward-Base` trailers. Brief, account
+  and findings stay in the accepted task store (and in `tasks.remote_url`, if you
+  configured one) and on the agent-side work branch. Anything a model can read,
+  every other task in that clone can read too, so do not put secrets in a brief.
 - **One controller.** The accepted store is single-writer. A second live
   controller against a replicated store is not supported; moving hosts means
   fencing the old one first.

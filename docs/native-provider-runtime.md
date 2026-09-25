@@ -1,13 +1,14 @@
 # Native provider runtime
 
-Production uses the native Linux host runtime described below. The former
-container execution backend is removed and is not a supported configuration.
+The harness does not reimplement an agent. It runs the real ones: Codex through
+App Server, and Claude Code (for both the Claude and GLM families) through its
+stream-json protocol, each over the untrusted process broker and each in its own
+private configuration home. Native tools, subagents and task decomposition stay
+provider-owned. What the harness owns is the boundary around them: which home,
+which identity, which input, and whether the result is accepted into Git.
 
-Each selected built-in runtime requires explicit stewardship-owned configuration.
-Codex uses App Server over the existing untrusted process broker.
-Claude and GLM load their native workflows from their own configuration homes.
-Native tools and task decomposition remain provider-owned. Task/world acceptance
-continues through the existing Git and SQLite boundary.
+Production runs these on a Linux host under the separate execution identity.
+There is no container execution backend.
 
 Task-result assessment is completion cognition in the owning conversation.
 Working tasks report findings and normal closure; they do not decide whether to
@@ -54,13 +55,13 @@ uses the same provider and current input under its existing provenance fence.
 
 The Claude and GLM families speak the Claude CLI's Anthropic-compatible
 protocol, so one explicit endpoint selection routes either family through a
-discounting gateway without touching lifecycle code:
+third-party gateway without touching lifecycle code:
 
 ```yaml
 provider:
-  glm_anthropic_base_url: "https://api.cheaperinference.com"
-  claude_anthropic_base_url: "https://api.cheaperinference.com"
-  claude_credential_path: "/etc/steward/cheaperinference-token"
+  glm_anthropic_base_url: "https://gateway.example.com"
+  claude_anthropic_base_url: "https://gateway.example.com"
+  claude_credential_path: "/etc/steward/gateway-token"
 ```
 
 GLM targets `glm_anthropic_base_url` (default `https://api.z.ai/api/anthropic`)
@@ -139,8 +140,9 @@ to the outstanding server request; Claude documents `AskUserQuestion` through it
 [Codex app-server contract](https://developers.openai.com/codex/app-server) and
 [Claude user-input contract](https://code.claude.com/docs/en/agent-sdk/user-input).
 
-As of September 12 this harness has not connected those question callbacks to controller
-cognition. Codex's adapter rejects all server requests, including ordinary questions.
+The harness has not yet connected those question callbacks to controller cognition.
+Codex's adapter answers every server request with an error, ordinary questions
+included, because it never grants authority just to keep a transport moving.
 Claude SDK support also does not prove the installed CLI adapter handles its control
 protocol. This remains an explicit runtime gap, separate from live text steering.
 
@@ -151,8 +153,8 @@ protocols, so answering ordinary questions must not silently grant extra authori
 Implement and prove the native response correlation, cancellation and unresolved-question
 behavior before claiming that this works for either adapter.
 
-See the [inspected upgrade handoff](upgrading.md) for the current schema and the
-[live source journey](../experiments/native_sessions/README.md).
+The [native probes](../experiments/native_sessions/README.md) include a live-source
+journey through a real provider.
 
 ## Claude and GLM native input
 
@@ -170,17 +172,9 @@ informational and may arrive before initialization or during a turn without a
 session identity. They neither establish a session nor complete a command.
 The adapter still requires `system/init` with a valid session UUID and effective
 model, the expected identity on resume, and a successful correlated terminal
-result. The `dev_intent` exception was verified against the installed Claude Code
-2.1.281 project-scanner envelope using synthetic Android project input. An actual
-read-only `ClaudeRuntime.execute` request completed with `dev_intent` before
-`init`; only event types were retained. Synthetic lifecycle and stream regressions
-live in `tests/test_runtime_lifecycle.py` and `tests/test_claude_stream.py`.
-
-Consumers should select a gated, published revision containing this parser
-correction and compatible native-session work, then follow their normal upgrade
-procedure. Repeat the synthetic read-only adapter probe on the selected release;
-it does not validate a dependency upgrade, live workers or reflection scheduling.
-This parser correction changes no configuration or state schema.
+result. A real Claude Code project scanner does emit `dev_intent` before `init`,
+which is why the parser tolerates it; regressions live in
+`tests/test_runtime_lifecycle.py` and `tests/test_claude_stream.py`.
 
 The result's `user_message_uuid` is optional. If absent, the serial native
 command lifecycle identifies its root; a conflicting explicit identity fails.
@@ -190,12 +184,10 @@ operator/controller origin and author use the same JSON text envelope as Codex.
 This preserves native queue semantics without claiming all providers steer in
 the same way or introducing a second source ledger.
 
-The installed Claude Code 2.1.220 transport through GLM supplied the verified
-lifecycle evidence; downstream versions must support that protocol. The native
-SDK inspected during this work drops the lifecycle frames, so wrapping it would
-remove the completion evidence rather than simplify this boundary. Probe
-results and the observed macOS Bash sandbox limitation are recorded in the
-[experiments](../experiments/native_sessions/README.md).
+Installed Claude Code CLIs must support this lifecycle protocol. The Python agent
+SDK drops the lifecycle frames, so wrapping it would remove the completion evidence
+rather than simplify anything. The [native probes](../experiments/native_sessions/README.md)
+record what the installed CLIs actually do.
 
 GLM runs through `ClaudeRuntime(family="glm", base_url=..., credential_path=...)`
 pointed at the z.ai Anthropic-compatible endpoint (`https://api.z.ai/api/anthropic`
@@ -290,9 +282,9 @@ launch owns the overlay, so it never mutates shared configuration or adds skill
 links to a candidate Git tree. Restricted
 non-native launches retain their existing customization limits.
 
-Codex 0.153.4 `skills/list` and Claude Code 2.1.220 SDK initialization both
-reported both actual linked skills. These discovery probes made no model request.
-The wheel includes both skills; discovery and cleanup are regression tested.
+Both providers' own discovery (`skills/list` on Codex, SDK initialization on
+Claude Code) reports the linked skills. The wheel includes both skills; discovery
+and cleanup are regression tested.
 See [Codex skills](https://learn.chatgpt.com/docs/build-skills) and
 [Claude skills](https://code.claude.com/docs/en/skills).
 
@@ -309,8 +301,8 @@ of native goals, skills, plugins, or agents. Configure that steward's integratio
 there. The disposable probe disables account-backed apps to exclude personal
 integrations; that fixture flag is not a product policy.
 
-With a native home, Claude/GLM no longer use safe mode or suppress all settings and
-MCP loading. Writable turns allow the native Agent tool alongside search, file,
+With a native home, Claude/GLM do not run in safe mode and do not suppress settings
+or MCP loading. Writable turns allow the native Agent tool alongside search, file,
 and shell tools. The native sandbox and request-specific permission mode remain
 enforced. Read-only turns retain their limited tool grants.
 
@@ -337,13 +329,12 @@ linked to that private home. Each launch owns its own links into the candidate:
 - Claude/GLM `projects/` writes native project/session files beneath
   `artefacts/<provider>/projects/`; the memory setting points to `memories/<provider>/`.
 
-The provider writes original files directly. Codex no longer requests or writes
-another `thread/read` snapshot. Native runtime SQLite remains private to the
+The provider writes original files directly; the harness writes no
+`thread/read` snapshots of its own. Native runtime SQLite remains private to the
 launch and is discarded with it. Every invocation starts a new provider process;
 transcript resume does not preserve native queue, goal or background-job state
-held outside those transcripts. Persistent process and database continuity remain
-unimplemented in this release. Private links are removed after the provider exits;
-candidate records
+held outside those transcripts. Persistent process and database continuity are
+not built yet. Private links are removed after the provider exits; candidate records
 and useful partial work remain. Separate launches never retarget a shared link.
 Directory creation and cleanup use the execution broker. Existing symlinks in
 mapped record directories are rejected, and setup shares the execution deadline.
@@ -353,8 +344,7 @@ executing. Native originals and memory are committed into the candidate; once
 accepted, the Git world is their source and the materialized checkout is removed.
 A latest interrupted turn without a prepared receipt retains its checkout as its
 only evidence. Startup and turn completion derive that live set from root turns,
-world receipts, and declared conversation/rhythm ownership. Obsolete current and
-legacy `event-*` worktrees are reclaimed; the controller object store owns every
+world receipts, and declared conversation/rhythm ownership. Obsolete worktrees are reclaimed; the controller object store owns every
 prepared candidate. Ignored environments are disposable and must be recreated.
 Task checkouts follow the same rule: queued or open pre-checkpoint work may still
 own evidence; checkpoints and task branches own everything after that boundary,
@@ -364,14 +354,6 @@ Native resume selects the exact session's original file from the current
 candidate. It uses Codex's experimental native transcript path or Claude's
 `--resume` file path. Missing/ambiguous records block with the saved session
 identity; they do not silently start a fresh session.
-
-**Upgrade existing native worlds:** move their tracked memory from
-`native/<provider>/memory/` to `memories/<provider>/`. Before resuming an existing
-private session, import its original native records into the paths above and
-checkpoint them at the owning scope. Codex JSON `thread/read` snapshots are not
-native rollouts. Keep private authentication and databases out of this import.
-Inspect the actual session and any child/sidecar files; there is no blanket
-provider-home copy or automatic history reset. No SQLite schema change is needed.
 
 Read-only calls retain private native storage and do not create candidate
 record directories. Original records contain conversation and tool data and
@@ -391,12 +373,11 @@ retains its ordinary next-tick continuation.
 The cleanup endpoint requires App Server's experimental API capability, which
 this adapter declares. A failed/malformed cleanup acknowledgement cannot produce
 a successful candidate. This uses the documented
-[native terminal cleanup API](https://learn.chatgpt.com/docs/app-server#clean-background-terminals),
-tested against installed Codex 0.153.4.
+[native terminal cleanup API](https://learn.chatgpt.com/docs/app-server#clean-background-terminals).
 
-The previously surviving foreground fixture shell now stops through native
-cleanup, including production cancellation and same-session resume. This is
-not proof of arbitrary detached descendants or cleanup after provider/host
+Codex will acknowledge an interrupt while a foreground shell it started keeps
+running; native cleanup is what actually stops it, and the probes check both
+cancellation and same-session resume afterwards. This is not proof of arbitrary detached descendants or cleanup after provider/host
 failure. Linux host-UID invocations now use individual systemd services for
 descendant containment; macOS process groups retain the escaped-group limitation.
 See [execution ownership](execution-boundary.md#execution-ownership).
@@ -410,9 +391,8 @@ completion and live-input correlation. [Runtime lifecycle](../tests/test_runtime
 and [world durability](../tests/test_world_durability.py) cover retained work and
 acceptance.
 
-The [native probe record](../experiments/native_sessions/README.md) preserves
-installed-provider journeys, versions and limits: correction during execution,
-resume, child artifacts and memory recall from Git. Those are dated observations,
-not a current suite total or proof that a deployed rhythm completed.
-Use runtime readiness for instance-level acceptance and the
-[upgrade procedure](upgrading.md) before moving real native histories.
+The [native probes](../experiments/native_sessions/README.md) drive installed
+providers through correction during execution, resume, child artifacts and memory
+recall from Git. A passing probe is evidence about that provider version on that
+machine, not proof that a deployed rhythm completed. Before moving real native
+histories between versions, follow the [upgrade procedure](upgrading.md).

@@ -1,24 +1,25 @@
-# Read the task file and Git history
+# Read the task account and Git history
 
-The agent reads its `tasks/<task-id>.md` account and uses `git log` and
-`git show` in its checkout for provenance and earlier work. Repository and
-world README files point to their existing documentation and episodes.
+The prompt carries a task's identity, its accepted account (the `task.md` body,
+which starts as the brief), attributed pending input and the execution protocol.
+Everything else the agent finds for itself. Earlier slices' findings are the
+messages of the work branch's commits, so `git log` and `git show` in its checkout
+are the history. Repository and world README files point to the documentation
+that already exists.
 
-An admitted procedure's frozen instructions are included once in its task
-file. Changing the configured policy after admission does not replace them.
-The prompt carries the task identity, task-file path, attributed task input
-and execution protocol; it does not repeat the account or procedure text.
+An admitted procedure's instructions are frozen into its accepted task document
+once, at admission. Changing the configured policy afterwards does not rewrite a
+run that already exists.
 
 There is no generated history map, copied Git log, task-state snapshot or
-provenance export directory. Git remains the history. The controller retains
-its private admission, credential and execution boundaries; a Git publication
-alone is not proof of live deployment.
+provenance export directory. Git is the history. Copying it into the prompt would
+make a second history that is already stale by the time the model reads it.
 
 Pending inputs derive their source from the accepted input commit's
 `Steward-Source` trailer. Direct operator commands, accepted assistant actions
 and controller query observations remain distinct in both startup context and
-live native input. Missing historical provenance is unverified. New account
-sections retain the source beside the input; consumption does not erase it.
+live native input. Missing provenance is unverified, not assumed. Consuming an
+input does not erase where it came from.
 An assistant answer to one task is evidence of that answer, not a standing
 operator grant to other tasks.
 

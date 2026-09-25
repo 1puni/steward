@@ -1,6 +1,7 @@
 # Named targets and executable drivers
 
-Publication and target satisfaction are independent. An accepted task lands one
+Landing a commit and running it are different facts, and this page keeps them
+apart. Publication and target satisfaction are independent. An accepted task lands one
 single-parent outcome on its repository's default branch. Each configured target
 then follows its own ref and uses an installed executable to observe and apply an
 exact revision. A task remains landed if a target is unavailable.
@@ -122,7 +123,7 @@ not compete for the same external endpoint. Driver descendants are killed when
 the finite invocation ends; long-running work belongs in a supervisor, not an
 orphaned background child. Failures and timeouts remain local to that target.
 
-`blocked` defaults to false for existing drivers. It reports that applying this
+`blocked` defaults to false. It reports that applying this
 requested revision cannot usefully advance the target; `details` explains the
 required intervention. The controller keeps observing but does not apply or
 start prerequisite reviews while blocked. Readiness still describes the actual
@@ -175,8 +176,8 @@ A changed local ref is immediately eligible; otherwise the interval bounds the
 next remote refresh and health observation. Explicit `/git target` forces a fresh
 observation. Blocked, pending and failed states remain observable because external
 repair can happen at the same revision. Observation verifies protected deployment
-evidence without probing build-workspace readiness. Container observation still
-checks mount policy; apply and build require the full execution boundary.
+evidence without probing build-workspace readiness; apply and build require the
+full execution boundary.
 
 ## Included systemd release driver
 
@@ -249,8 +250,8 @@ failure. Observe reports the actual serving revision and readiness, which will
 not match the condemned desired revision. Prefer moving the desired ref to a
 corrected or rollback revision. Retrying the same condemned SHA requires an
 operator to deliberately remove its `.<sha>.failed` marker after diagnosis,
-with target convergence quiesced, before running apply; running worker alone
-no longer bypasses condemnation.
+with target convergence quiesced, before running apply; a running worker alone
+does not bypass condemnation.
 
 Artifact pruning keeps the five newest release directories plus the active
 release and the explicitly retained healthy rollback release. It removes older
@@ -259,20 +260,16 @@ Condemnation survives artifact removal and repeated pruning, so requesting an
 old failed SHA still requires the explicit operator clearance described above.
 Failure markers have no age or count limit tied to artifact retention.
 
-## Migration and proof
+## Proving a driver
 
-`repositories.*.deploy`, `executor`, `health_reports_sha`, the ambient `work_branch`
-and `/git deploy` are removed. Move platform settings into installed driver
-configuration and bind a named target. Use `/git target <name>` for an immediate
-convergence attempt. Root `rhythms` now references procedures; old world
-`tasks/recurring` files are preserved historical material and are never seeded or
-scheduled automatically. Export their instructions into accepted procedure files
-and translate their intended intervals explicitly.
+Run `scripts/linux-boundary-acceptance.sh` on the intended host before trusting the
+systemd driver there. It exercises real split identities, build import, HTTP
+identity and rollback in a disposable environment, and it needs Linux and root.
+Any other platform driver needs its own proof of external observation and of what
+happens when it is interrupted halfway. A driver you have never seen roll back is a
+driver that cannot roll back.
 
-Do not treat this branch as a live rollout. Historical instance configurations in
-`instances/` describe their recorded deployments and need a deliberate migration.
-The [rewrite contract](git-native-tasks.md) covers Git task migration and privacy.
-The Linux acceptance test exercises real split identities, build import, HTTP
-identity and rollback in a disposable environment; it requires Linux/root and must
-be rerun on the intended host before adopting the systemd driver. Other platform
-drivers require their own external-observation and interruption proof.
+Configuration keys from older versions (`repositories.*.deploy`, `executor`,
+`health_reports_sha`, `work_branch`) fail validation; platform settings belong in
+the installed driver's own configuration, bound through a named target. Use
+`/git target <name>` for an immediate convergence attempt.

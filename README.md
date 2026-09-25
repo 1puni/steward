@@ -245,8 +245,9 @@ What that does **not** mean:
   suite runs against fixtures and a scripted provider.
 - **Publication pushes to the default branch.** No pull requests, no release tags.
   If your branch rules require PRs, that integration is still an open decision.
-  Findings-only tasks publish their account too, so if every push to `main` starts
-  an expensive deploy, know that before you onboard the repository.
+  A findings-only task still lands a commit (no file changes, just its trailers), so
+  if every push to `main` starts an expensive deploy, know that before you onboard
+  the repository.
 - **No spending limit.** The worker budget bounds concurrency, invocation deadlines
   bound calls, and nothing bounds total spend. Model pins in `provider.models` are
   not watched either; a newer model can ship while you stay on the old one.

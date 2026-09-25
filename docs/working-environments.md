@@ -1,15 +1,17 @@
 # Source-derived working environments
 
-> September 7 workspace decision, later superseded in part by a container-retention effort that was withdrawn. The text below describes rematerialized checkouts and is the current policy on native Linux execution.
-
-Decided and implemented locally on 2026-09-07 following operator correction.
+A checkout is a place to work, not a place to keep things. What survives is what
+Git holds: accepted world history, controller candidate objects, task branches.
+Everything else in a working directory is rematerialised from its owning source
+when it is next needed, and ignored files are disposable.
 
 ## Problem and conduct
 
-A native session survived a message, but its working checkout did not. Accepted
-turns removed the directory, including ignored environments and local artifacts.
-Absolute output paths consequently described disposable storage. This confused
-checkpoint lifetime with the lifetime of ongoing work.
+The failure this prevents is easy to walk into. A native session survives from one
+message to the next, but its checkout does not, so an absolute output path it
+mentioned now points at storage that no longer exists. Checkpoint lifetime and the
+lifetime of ongoing work are different things, and the owning source, not the
+directory, is what carries work forward.
 
 The conduct rule in the [hierarchy contract](steward-hierarchy-and-memory.md) says:
 “Intent flows down. Work happens at the owning scope. Evidence and references
@@ -46,10 +48,10 @@ and task materializations.
 
 ## Permission audit
 
-| Observed restriction | Action and reason |
+| Restriction | Current behaviour and reason |
 | --- | --- |
 | Conversation and rhythm cwd follows execution ID. | Use an owner-specific checkout while work is unprepared; after checkpoint or acceptance, rematerialize from controller Git or the accepted world. |
-| Broker checks configured writable directories, but Cognition drops that grant before native execution. | Pass the broker's existing directory list through Cognition to native adapters. Workdir, native homes, managed repositories, and Git world are available to writable executions. |
+| Broker checks configured writable directories. | Cognition passes that same directory list to native adapters. Workdir, native homes, managed repositories, and Git world are available to writable executions. |
 | Native adapters already support extra writable roots, local tools, and network access. | Reuse those mechanisms. No new permission configuration or provider-specific lifecycle branch. |
 | Broker separates controller credentials, releases, and execution UID. | Retain: these protect publication/deployment authority, not the location of ordinary investigation. |
 | Read-only requests and explicit attachment delivery roots. | Retain their distinct purposes. Inspection requests remain read-only; filesystem access alone does not authorise sending every readable file to Telegram. |
@@ -57,9 +59,7 @@ and task materializations.
 Extra access does not automatically checkpoint changes in every directory.
 Repository-local work still belongs in its repository and follows the existing
 candidate/gate/publication path. Parent worlds carry their own decisions and
-references, not copied child truth. The upstream change belongs here; recovering
-a downstream instance's actual artefacts and assessing its deployed state
-belongs downstream.
+references, not copied child truth.
 
 ## Evidence and limits
 
@@ -71,11 +71,10 @@ ownership. Runtime tests verify that writable operations receive configured
 directories and read-only operations do not.
 
 These tests use controlled cognition; they do not demonstrate a new live provider
-session, Telegram delivery, or downstream deployment. Accepted SVG content now
-survives rematerialization. Durable delivery should still identify the accepted owner,
-relative file, and revision, and use the configured attachment transport.
-An ignored file is disposable and is not protected by a Git checkpoint.
+session, Telegram delivery, or deployment. Durable delivery of a file should
+identify the accepted owner, relative path and revision, and use the configured
+attachment transport. An ignored file is not protected by a Git checkpoint.
 
-Legacy event checkouts are retained only while current durable ownership says
-they contain unprepared work. Inspect such native records and partial work during downstream cutover.
-See the [migration handoff](upgrading.md).
+Older checkouts are retained only while durable ownership says they hold
+unprepared work. Inspect such records and partial work before an
+[upgrade](upgrading.md).

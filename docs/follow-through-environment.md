@@ -1,8 +1,8 @@
 # The follow-through environment
 
 A green `uv run pytest` says nothing about Telegram follow-through: the suite
-mocks the transport inside the process, on the desk's own Git, as the user
-already running it. The question the environment answers is coarser and
+mocks the transport inside the process, on your machine's Git, as whoever
+happens to be running it. The question the environment answers is coarser and
 harder: **when an operator sends a message, does the whole daemon — poll,
 turn, world landing, episode, reply — actually happen?** And the second half:
 **can one organisation converse, give its steward work on the harness,
@@ -16,8 +16,8 @@ seams in the harness:
 - a **fake Bot API** (`testenv/fake_botapi.py`) — the stdlib HTTP server the
   `botapi_base` config seam points the transport at. It implements exactly
   the surface `telegram.api` calls, long-polls `getUpdates` for real (an
-  instant empty answer would turn the poll loop into the hot-spin shape that
-  burned CPU on the live gg instance), and carries a control plane under
+  instant empty answer would turn the poll loop into a hot spin, which is
+  exactly how a live instance once burned its CPU), and carries a control plane under
   `/__test/` for injecting operator messages, reading a journal of everything
   sent, and arming one-shot faults — a hanging poll, a failing send, a 429 —
   the failures a live Telegram cannot produce on demand.
@@ -53,7 +53,7 @@ only projects created by this invocation. Scenarios:
 | | asserts |
 |---|---|
 | **A** | a plain message follows through: reply sent, edit on the accepted world `main`, one episode narrating the exchange |
-| **B** | a cancelled turn leaves no phantom episode and no edit — the accepted-world doctrine (main's 126bfc2) exercised end-to-end |
+| **B** | a cancelled turn leaves no phantom episode and no edit: world acceptance exercised end-to-end |
 | **C** | the poll loop survives a dead `getUpdates`, follows through after it, and the journal shows both the hang and live polls after |
 | **D** | one organisation: conversation → task → retained `ask` checkpoint → operator inspection and answer → `idle` checkpoint → gate → publication → self-deployment → another conversation |
 
@@ -109,112 +109,42 @@ docker compose -f testenv/compose.yaml -p selfimprove exec harness \
 curl -sS -X POST http://127.0.0.1:8099/__test/journal
 ```
 
-## September 12 verification: one real failure
+## What it has caught
 
-Full A–D run against `8b782ec`: **31 passed, 1 failed**. The failure is
-`operator received the completed task result`. The waiting receipt arrives;
-the answer lands and deploys; the replacement daemon handles the final
-conversation. The final done receipt never arrives. The assertion remained red
-at that checkpoint; the warm continuation below exercises its correction.
+Every one of these passed the unit suite first.
 
-The cause is visible in `StateDatabase.pending_task_result_conversations()`
-and `pending_task_result_for()`: both exclude a task once any turn has source
-key `task_result:<task_id>`. `ConversationService.deliver_task_result()` uses
-that same key for the waiting result and every later result. Delivering the
-question therefore suppresses completion for the lifetime of the task. The
-correction must distinguish successive results of the same task while retaining
-replay safety; the original environment change did not alter that production
-behaviour.
+- **A result key that remembered too much.** Results were keyed by task alone,
+  so delivering a task's *question* suppressed its *completion* for the rest of
+  the task's life. The unit suite was green; scenario D waited for a `done`
+  receipt that never came. Results are now keyed by the outcome-changing
+  accepted revision, so successive outcomes of one task stay distinct and a
+  replay still delivers once.
+- **A held offset multiplied one update into a thousand messages.** The poller
+  re-queued every redelivery of an update still owed a reply, and each copy
+  re-sent the reply. The fake Bot API reproduced it hermetically before the fix.
+- **Trailers silently misparsed on older Git.** `for-each-ref`'s
+  `contents:trailers:key=` filter is ignored by Git 2.39, so no task ever looked
+  `idle` and publication stopped while everything looked alive. A development
+  laptop on a newer Git was green; the pinned Debian image was not. Test under
+  the Git your deployment actually runs.
+- **Services inheriting the wrong environment.** Started via `docker exec`, the
+  service fixture inherited the caller's environment instead of PID 1's. Health
+  was green while every Git fetch failed for lack of the fixture's TLS trust.
+  Green health is not a working service.
+- **Protection the replacement refused.** Self-deployment staged a release with
+  group-writable archive modes, and the replacement daemon correctly refused its
+  insufficiently protected ownership launcher. The boundary check worked; the
+  release was wrong.
 
-### Warm continuation: receipt correction
+That is the environment's whole value: an assertion of *did it happen* against
+the whole daemon, under Linux, under the UID boundary, under the Git the
+deployment actually runs.
 
-Harness correction: `0e93f3b` (`Deliver successive task results to their owning
-conversation`). The isolated acceptance revisions below are based on the
-original scenario's Git history, so they have different commit identities.
+## Handle it with care
 
-Reused `orgself` on port 18099 without resetting its state, Git history or
-journal. The controller now selects the existing task row revision as part of
-the result's source key and carries that selected key into the owning turn.
-An old task-only receipt suppresses its historical outcome, not a later row
-revision. Two questions and repeated identical failures after retry therefore
-remain distinct; changing priority does not stamp a new outcome. An idle slice
-whose branch still owes publication is not delivered as a finished result.
-
-The isolated fake origin advanced from `5d4287e6fa75650d691c5d0865efb7010fc66f20`
-to the receipt correction `9782d289eadc678eed386669ffe11c4914955381`. Existing
-deployment replaced the daemon and health reported that exact revision. The
-previously missing done receipt then arrived for the original task, naming its
-original landed SHA `5d4287e6fa75650d691c5d0865efb7010fc66f20`.
-
-A direct service restart exposed a fixture defect: PID 1's `os.wait()` raised
-`ChildProcessError` during the childless gap before the replacement was adopted.
-`services.py` now tolerates that gap. Restarted the same container with its
-data intact, then repeated the direct service restart successfully. A new
-`ORG-AFTER-DEPLOY RECEIPT-FIX-RESTART` conversation received its reply; the journal
-still contained exactly one done receipt. No real Telegram message or external
-repository push was involved.
-
-That direct restart also revealed that services inherited the `docker exec`
-caller's environment rather than PID 1's declared environment. HTTP health was
-green while Git fetches failed because the fixture's HTTPS trust configuration
-was absent. The service fixture now reads its manager's environment for both
-daemon and detached-worker starts. After that correction, repository observation
-and deployment converged to `a0b33e197d8e69bbb054ba908cd4ba13c7559cff`, including
-the priority regression fix. Health reported that exact revision and the done
-receipt count remained one. The retained fixture used port 18099 at the time of that observation.
-
-Focused receipt/conversation/control tests passed in the warm Linux container
-(24 tests). The local related state, conversation, world, task and deployment
-checks passed (66 tests). These are targeted continuation results, not a claim
-that a fresh full A–D run was repeated. The original 31/1 run remains evidence
-of the failure that led to this fix. That fixture run did not deploy any production instance.
-
-## What it has already caught
-
-- **A held offset multiplied one update into a thousand messages** — main's
-  poller re-queued every redelivery of an update still owed a reply, and each
-  copy re-sent the reply. A downstream instance had found this (2bf4183); the
-  environment reproduced it hermetically before the fix was ported, which is
-  what earned the port.
-- **A task's trailers misparsed under Git 2.39** — `for-each-ref`'s
-  `contents:trailers:key=` filter is silently ignored by Git at least as new
-  as 2.39, so no task could be seen as `idle` and publication stopped while
-  the projection looked alive. The desk runs Git 2.52 (green suite); the
-  pinned image — and any Debian-bookworm host like gg's — runs 2.39. Found
-  here first, not on the desk.
-
-The environment's value is exactly this shape: an assertion of *did happen*
-against the whole daemon, under Linux, under the UID boundary, under the Git
-the deployment actually runs.
-
-
-## September 23, 2026 fixture cleanup incident
-
-An acceptance attempt used the runner's old default project-name cleanup and
-removed the pre-existing `selfimprove` containers and its state, journal and
-Git-remote volumes. The retained test state was not recovered. This was an
-unintended destructive action, not a successful acceptance result. The runner
-now generates unique project names, refuses names with existing resources,
-and limits cleanup to projects created by its own invocation. A stubbed
-Docker check verified that an existing project is refused before any create
-or remove command. Historical verification above remains historical evidence.
-
-The subsequent uniquely named real-systemd run passed all 12 assertions in
-A–C: accepted conversational edits, cancellation without accepted edits or
-phantom episodes, and recovery from a dead poll. D reached actual initial
-self-deployment and exposed group-writable Git archive modes: the replacement
-correctly refused its insufficiently protected ownership launcher. That run
-was stopped and its own fixture resources cleaned; it is not a passing D result.
-
-After correcting archive permissions and updating the scripted CLI to read
-the task document explicitly named by current prompts, the final D rerun
-passed **22 assertions, 0 failed**. It used the final controller-pidfd guardian
-implementation and a fresh current-source snapshot. The proof includes initial
-unowned target delivery, question/answer retention, gated publication,
-exact-revision health, daemon PID replacement, and a conversation accepted by
-the replacement. Alongside A–C's 12 assertions, the distinct scenario coverage
-is **34 passing assertions**; A–C ran before the final guardian refinement,
-while D ran after it. The uniquely named final fixture cleaned up successfully.
-Logs for this session are `/private/tmp/steward-followthrough-heroic.log`
-(A–C and first D diagnosis) and `/private/tmp/steward-followthrough-D3.log`
-(final D). These are local run artifacts, not repository fixtures.
+The runner once shared fixed project names with a long-lived fixture, and a
+cleanup removed that fixture's containers and volumes along with its state. It
+now generates unique project names per run, refuses names that already have
+resources, and only removes projects its own invocation created. If you
+override `ACCEPT_PROJECT` or `SELFTEST_PROJECT`, pick names you would not mind
+losing.

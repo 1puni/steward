@@ -1,5 +1,8 @@
 # Rhythms invoke procedures
 
+A rhythm is a clock with no opinions. It says *when*; a procedure says *what*; a task
+is the one concrete run that actually happened. None of them is a workflow engine.
+
 A procedure is accepted instructions plus model and access settings. A task is a
 concrete execution over captured inputs. A rhythm supplies a recurring trigger.
 A target follows a ref and can require accepted procedure evidence; a gate enforces
@@ -31,7 +34,8 @@ rhythm in each interval bucket, and an incomplete run prevents overlap with late
 buckets. A reopened idle run, a blocked or waiting run, and workspace-write work still
 awaiting publication remain incomplete.
 Cancellation permits a future bucket once its live execution has stopped; it does
-not create a replacement in the cancelled run’s own bucket. A moving input does not create another run within the same bucket. After
+not create a replacement in the cancelled run's own bucket. A moving input does not
+create another run within the same bucket. After
 downtime, only the current interval is considered. `/rhythm run <name>` is an
 explicit additional request, while `/rhythm list` shows configured schedules,
 accepted-run counts (including no recorded run) and admission pause state. Edit
@@ -43,7 +47,8 @@ No new activity means no run. Captured inputs in accepted task Git prevent repea
 admission of a consumed batch, including after restart. The first observation on
 a controller with no accepted batch establishes a baseline. Read the complete
 [quiet-period contract](automatic-deployment.md#git-quiet-periods-and-intervals)
-for native work, self-reflection exclusions and restart semantics. The harness ships a generic
+for native work, self-reflection exclusions and restart semantics. The harness ships
+a generic
 [reflection skill](../src/steward_harness/skills/steward-reflection/SKILL.md);
 the procedure that names when and how an instance reflects belongs to that instance.
 
@@ -54,8 +59,8 @@ there, while its task account and checkpoint remain in a separate retained task
 worktree. The accepted run captures the directory so retries keep the same scope.
 Before cognition the existing credential-free Git transfer refreshes observed
 remote refs in the configured repositories without moving their HEADs or touching
-local changes. Manual `/rhythm run` uses the same working directory. Workspace-write procedures
-cannot select an external working directory.
+local changes. Manual `/rhythm run` uses the same working directory.
+Workspace-write procedures cannot select an external working directory.
 
 Quiet snapshots remain controller-owned admission metadata in accepted Git. They
 are not copied into the task brief or prompt. The procedure discovers relevant
@@ -88,11 +93,9 @@ claim that the evidence commit landed on the product branch. An owner's native
 session is optional and can be reconstructed on a fresh controller. Changing the
 configured owner affects future runs; an already accepted bucket keeps its owner.
 
-There are no default light/sleep/rem types, seeded world files or separate rhythm
-world-turn runner. Existing recurring files are migration material: retain their
-history, move intended reusable instructions to accepted procedure files and choose
-explicit intervals or quiet periods. Calendar and dependency schedules are not
-implemented. It does not contain a hook system or workflow graph.
+There are no built-in light, sleep or REM rhythms and no seeded world files; the
+harness never invents a schedule for you. Calendar and dependency schedules are not
+implemented, and there is no hook system or workflow graph.
 
 Publication requirements check the final integrated candidate before it can be
 pushed. Target requirements review the complete candidate tree before application

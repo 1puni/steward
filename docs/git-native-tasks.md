@@ -1,8 +1,9 @@
-# Git-native tasks and named deployment targets
+# Git-native tasks
 
-Implementation based on e2a7777. No live cutover has been performed. The handoff
-includes local operator journeys and identifies platform checks still requiring
-the destination environment.
+A task is not a row, a worker or a workflow. It is one controller-accepted Git ref
+holding one Markdown document, and every decision about it is a commit. This page
+is the contract for that representation: admission, privacy, integration and
+recurrence. Deployment targets have [their own page](automatic-deployment.md).
 
 ## Task contract
 
@@ -13,9 +14,10 @@ are questions about its retained Git commits and live locks. Native sessions and
 transport receipts stay private and machine-local; neither is needed for discovery.
 
 Use a globally unique task ID, including across managed repositories. Controller
-storage is `<state_db>.tasks.git`, holding `refs/heads/tasks/<id>`. `tasks.remote_url` optionally configures a separate private Git remote whose
-protected `refs/heads/tasks/*` supply tasks to a fresh controller; an agent-writable work branch never supplies
-that authority. Fetch must only accept fast-forward changes, retain local decisions,
+storage is `<state_db>.tasks.git`, holding `refs/heads/tasks/<id>`.
+`tasks.remote_url` optionally configures a separate private Git remote whose
+protected `refs/heads/tasks/*` supply tasks to a fresh controller; an agent-writable
+work branch never supplies that authority. Fetch must only accept fast-forward changes, retain local decisions,
 and refuse divergence rather than guessing whose decision wins. Remote deletion
 is not cancellation. Accepted records and reply routing are private by default;
 public product commits contain only the task ID and deliberately shareable findings.
@@ -23,7 +25,8 @@ Do not grant agents write access to the accepted prefix or controller storage.
 
 The accepted document carries the one canonical task account; its commit history carries
 decisions, answers and notes, and the work branch's commit messages carry findings.
-No product file duplicates either, so no two copies of task prose need reconciling. Every mutation uses Git compare-and-swap. Concurrent work and
+No product file duplicates either, so no two copies of task prose need reconciling.
+Every mutation uses Git compare-and-swap. Concurrent work and
 operator decisions meet when the controller accepts a checkpoint; a new note must
 survive and a cancellation must not be overwritten. A task lock excludes two native
 executions; controller decision writes use a short separate lock, never the long
@@ -33,12 +36,12 @@ The gated candidate is a single commit whose message names the work it lands
 (`Steward-Work: <work sha>`). A task is landed when the observed remote tip contains
 a commit naming its current work, so a push whose response or observation was lost
 is recognized on the next pass without any record written before the push, and
-without retipping the native work branch. A gate attempt is evidence, not an irreversible external effect;
-only the externally observed push establishes landing. Rejected or blocked work
+without retipping the native work branch. A gate attempt is evidence, not an
+irreversible external effect; only the externally observed push establishes landing. Rejected or blocked work
 retains its context and work. Retry and answer authorize another slice explicitly.
 
-SQL may still own conversation transport ingestion, world-turn acceptance and
-incident observations. It must not own task records or task-input consumption.
+SQL owns conversation transport ingestion, world-turn acceptance and incident
+observations. It must not own task records or task-input consumption.
 Acceptance crossing SQL and Git uses deterministic source identity: retrying an
 accepted source finds the same task, including after a crash before SQL commits.
 Result routing is a durable owner plus controller transport policy; an arbitrary
@@ -56,7 +59,7 @@ steward task add --config /absolute/path/to/steward.yaml --repository app --titl
 The command prints the new task ID after accepting it into
 `<state_db>.tasks.git` through the store's normal writer lease. It can run while
 the daemon is running; no provider session or SQLite task row is needed.
-The repository must be configured and permit `core_requested`. The UTF-8 brief
+The repository must be configured. The UTF-8 brief
 must contain 1–8000 characters after trimming; the title allows 1–256, and
 priority is -100–100 (default 0). The reply owner must be a `telegram:` or `desk:`
 conversation, using the same owner key as the existing transport conversation.
@@ -77,25 +80,14 @@ Named targets follow fetched refs and enforce required evidence before applying
 and reporting satisfaction. The kernel has no provider-specific reviewer counts,
 deployment vendor enum, default light/sleep/rem lifecycle, or workflow graph.
 
-## Read-only deployment evidence
+## What counts as deployment evidence
 
-Downstream release paths seen so far bind systemd transient exact-SHA releases,
-including the harness itself. A status-only health endpoint is not exact
-running-identity proof. A vendor-hosted interface deploy, an SSH moving-main
-pull and restart, a downstream command that copies mutable outputs and writes a
-`deployed.json`, and a signed-artifact delivery cannot yet satisfy
-exact-revision observation, or prove running identity or interruption safety.
-Device-install paths are distinct from explicit device engagement.
-These are local source inspections, not observations of live installations.
-
-## Migration boundary
-
-Preserve the old database, lineage, all refs, retained worktrees, accepted-world
-records and result receipts. Export task intent and pending input from the old
-schema explicitly; reconcile duplicate slugs across repositories, missing refs,
-private metadata and already-pushed rebased candidates before importing accepted
-refs. Rehearse fresh discovery and publication on copies. Do not reset a database
-or claim that copying its task rows verbatim is the completed migration.
+A status-only health endpoint is not proof of running identity. Neither is a
+vendor dashboard saying "deployed", an SSH pull-and-restart of a moving `main`, or
+a script that copies files and writes `deployed.json`. None of those can say which
+exact revision is running, or whether an interruption left it half-applied. The
+included systemd driver can; other release paths need a driver that observes the
+exact revision before they satisfy a target.
 
 ## Operational scope and exposure
 
@@ -116,7 +108,7 @@ A checkpoint first commits native work, then fetches its closure into task Git t
 the agent's upload-pack and accepts the decision with the work as a second parent. A crash before
 acceptance leaves the prior accepted context plus the retained local worktree; a fresh
 machine can recover only accepted commits. Uncommitted/local-only work still requires
-copying its machine's worktrees during migration. No claim of distributed atomicity is
+copying its machine's worktrees when moving hosts. No claim of distributed atomicity is
 made. A note arriving during a successful slice remains pending unless explicitly
 acknowledged; an interrupted slice preserves unacknowledged input. A publication push
 holds the decision lease at its final cancellation check: cancellation committed first
@@ -140,17 +132,18 @@ and diagnostics to the owning task. Gates and the publisher never edit code to m
 checks pass. Native cognition can merge or rebase retained exploration to preserve
 both intents; a new single-parent candidate is then constructed and checked again.
 Ordinary native task execution has no routine deadline. Explicit interruption
-and finite procedure deadlines retain unfinished work for continuation. If validation remains red on the
-same base without a change outside the task document, reconciliation reports
+and finite procedure deadlines retain unfinished work for continuation. If
+validation remains red on the same base without a change outside the task document, reconciliation reports
 explicit no-progress and waits. Changes that make progress have no arbitrary
-third-attempt cliff. Changing log timestamps or wording do not count as progress. Missing intent uses ordinary task question/answer behavior.
+third-attempt cliff. Changing log timestamps or wording does not count as progress.
+Missing intent uses ordinary task question/answer behavior.
 
 Concurrent whole-document changes preserve both the accepted and native versions
 and enqueue reconciliation in the owning task. A new operator note survives a
 checkpoint unless consumed; cancellation remains authoritative. Unaccepted local
 work is retained and returned to its owner for reconciliation, never overwritten.
 
-The daemon no longer publishes unowned ambient branches. Every product publication
+The daemon never publishes unowned ambient branches. Every product publication
 has an accepted task and retained provenance, which also prevents duplicate outcome
 commits after a crash. Source Git history remains recoverable even when its native
 merge commits do not appear on the publication branch.
@@ -193,5 +186,5 @@ Driver success is not target satisfaction. The external observation must report
 readiness at the desired exact revision, and current configured procedure evidence
 must pass. Each target has an independent lock and finite invocation. Driver
 errors and descendant cleanup are isolated from other owners. Platform-specific
-release/rollback logic remains in the installed driver and is counted in total
-production code; moving it outside root configuration is not claimed as deletion.
+release/rollback logic lives in the installed driver, and it still counts as
+production code: moving complexity out of the kernel's config is not deleting it.

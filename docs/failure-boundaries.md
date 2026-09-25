@@ -3,9 +3,10 @@
 A failed external operation and a defect in the harness are different events.
 Operational failures retain the work needed for their next authorized step.
 Unexpected exceptions must not become fictitious red gates, accepted receipts
-or permission to repeat side effects.
+or permission to repeat side effects. A harness that files its own bug as your red
+gate is lying twice: once about your code, once about itself.
 
-## Current boundaries
+## Boundaries
 
 | Boundary | Operational handling | What must not be inferred |
 | --- | --- | --- |
@@ -13,7 +14,7 @@ or permission to repeat side effects.
 | Native execution | Preserve known session provenance; stop the owned process on cancellation, shutdown or a non-task deadline | All detached descendants stopped, or a second provider can safely replay the work |
 | Task slice | Autosave where possible; shutdown or a bound-session procedure deadline can continue; declared failures block; live account offers are accepted or refused visibly | A reply without validated closure grants publication |
 | Gate | Launch errors, deadline, nonzero exit and changed input fail validation | A programming fault is an ordinary red command |
-| Repository publication | Validation failures block a task or are logged for ambient work; declared transport/runtime failures are logged at the repository boundary | A lost push response proves nothing landed |
+| Repository publication | Validation failures block the task; declared transport/runtime failures are logged at the repository boundary | A lost push response proves nothing landed |
 | Incident probe | Declared probe failure becomes an unhealthy sample under incident policy | A controller defect authorizes a repair task |
 | World acceptance | Retain prepared candidates through contention, conflict and failed application | Provider completion or an episode proves accepted edits |
 | Rhythm | Log declared Git transport failures in quiet-activity sampling and skip quiet rhythms until the next poll without changing their quiet state; interval rhythms remain eligible. Retain incomplete unprepared work for retry and prepared work for acceptance | Failure creates a new successful due boundary |
@@ -39,8 +40,8 @@ cancellation callback. Immediate gate termination is therefore not promised.
 Shutdown discards queued work, interrupts running task turns through the cancellation
 path (native interrupt, bounded grace, containment) and retains them as continuations,
 then drains running writers while retaining the daemon lease. Task turns have no routine
-deadline, so this interruption is what keeps the drain finite. Worker faults propagate through `Dispatch.reap`; external service
-supervision restarts the process. This is not a bounded shutdown deadline or
+deadline, so this interruption is what keeps the drain finite. Worker faults propagate
+through `Dispatch.reap`; external service supervision restarts the process. This is not a bounded shutdown deadline or
 proof under forced host death. Linux host-UID invocation ownership
 is distinct from native cooperation; see [execution ownership](execution-boundary.md#execution-ownership).
 

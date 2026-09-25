@@ -7,7 +7,7 @@
 #   3. vulture   — dead code (min-confidence 80, see pyproject [tool.vulture])
 #   4. pylint duplicate-code (R0801) — cross-file line clones
 #   5. jscpd     — token-level clones, catches what R0801 misses (via npx)
-#   6. ratio gate — files over 150 lines (operator refactor ceiling)
+#   6. ratio gate — files over 150 lines (a refactor signal, not a rule)
 #
 # Read-only: nothing here mutates the tree or gates CI. Exit codes of the
 # analyzers are suppressed so the whole report always prints.
