@@ -395,12 +395,18 @@ class KernelCommands:
                             else f"after {rhythm.schedule.quiet}s of quiet Git activity")
                 count = sum(bool(run and run.event.startswith(f"rhythm:{name}:")) for run in runs)
                 history = f"{count} accepted runs" if count else "no accepted run recorded"
+                if rhythm.input == "world":
+                    key = f"rhythm:{name}:{int(time.time() // rhythm.schedule)}"
+                    turn = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
+                    history = f"this interval: {turn.state if turn else 'not run yet'}"
                 pause = "; automatic admission paused" if self.state.paused() else ""
                 lines.append(f"{name}: {schedule}, {rhythm.procedure}, {rhythm.input}, "
                              f"owner={rhythm.owner or 'retained only'}; {history}{pause}")
             return "\n".join(lines) or "No rhythms configured."
         if len(parts) == 2 and parts[0] == "run" and parts[1] in self.config.rhythms:
             rhythm = self.config.rhythms[parts[1]]
+            if rhythm.input == "world":
+                return f"{parts[1]} is a world rhythm; it runs once per interval on its schedule."
             repository, candidate, base = resolve_input(rhythm.input, self.transports)
             task = self.procedures.request(rhythm.procedure, repository, candidate, base,
                                           event=f"rhythm:{parts[1]}:manual:{uuid.uuid4().hex}",
@@ -852,8 +858,12 @@ class StewardDaemon:
                     yield ("desk", message.msg_id), lambda m=message: desk.drain(m)
 
         def rhythm() -> Iterator[Owner]:
-            if not paused() and self.config.rhythms:
-                yield ("rhythms",), self._procedures.advance_rhythms
+            if paused() or not self.config.rhythms:
+                return
+            yield ("rhythms",), self._procedures.advance_rhythms
+            for name, key in self._procedures.due_world_rhythms():
+                yield ("rhythm", name), lambda name=name, key=key: (
+                    self._procedures.run_world_rhythm(conversations, name, key))
 
         def targets() -> Iterator[Owner]:
             for name in self.config.targets:

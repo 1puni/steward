@@ -14,7 +14,7 @@ from typing import Literal, cast
 
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
-from steward_harness.provider_types import ProviderFamily, ProviderProfile
+from steward_harness.provider_types import ModelChoice, ProviderFamily, ProviderProfile
 from steward_harness.runtime.contracts import ReadScope, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.world.orientation import repository_orientation, world_orientation
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldTurnWorktree, WorldUpdatePending, WorldContentConflict
@@ -33,7 +33,7 @@ from steward_harness.state import (
 )
 
 
-Transport = Literal["telegram", "desk"]
+Transport = Literal["telegram", "desk", "rhythm"]
 
 
 _TASK_MARKER = "TASK_PROPOSAL:"
@@ -201,6 +201,7 @@ class ConversationService:
         images: tuple[Path, ...] = (),
         ongoing_only: bool = False,
         allow_empty_output: bool = False,
+        model: ModelChoice | None = None,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
 
@@ -299,6 +300,7 @@ class ConversationService:
             images=images,
             live_input=True,
             allow_empty_output=allow_empty_output,
+            model=model,
         )
         assert isinstance(accepted, ConversationTurnResult)
         return accepted
@@ -313,6 +315,7 @@ class ConversationService:
         images: tuple[Path, ...],
         live_input: bool,
         allow_empty_output: bool = False,
+        model: ModelChoice | None = None,
     ) -> ConversationTurnResult | Turn:
         """Run, retain and accept one declared world-session turn.
 
@@ -393,7 +396,10 @@ class ConversationService:
                 cwd=(worktree.path if worktree else self._workspace.world.root
                      if isinstance(self._workspace, WorldTurnCheckpoint) else self._workspace),
                 timeout_seconds=self._timeout_seconds,
-                provider_order=self._order_from(conversation.provider),
+                # A configured model belongs to one provider; it has no fallback.
+                provider_order=((cast(ProviderFamily, conversation.provider),) if model
+                                else self._order_from(conversation.provider)),
+                model=model,
                 provider_session_id=conversation.provider_session_id,
                 session_provider=cast(ProviderFamily, conversation.provider)
                 if conversation.provider_session_id
@@ -604,6 +610,10 @@ class ConversationService:
             action = parsed.action
             if self._read_only_desk(turn.conversation_id) and (spec is not None or action is not None):
                 rejection = "Read-only desk cannot admit or change tasks."
+                spec, action = None, None
+            if turn.conversation_id.kind == "rhythm" and (spec is not None or action is not None):
+                # A task's result returns to its owner, and a rhythm is not one.
+                rejection = "A rhythm cannot admit or change tasks."
                 spec, action = None, None
             configured = self._state.tasks.repositories
             if spec is not None and spec.repository not in (configured or ()):

@@ -100,7 +100,7 @@ class ConversationId:
 
     @classmethod
     def for_transport(cls, transport: str, transport_key: str) -> Self:
-        if transport not in {"telegram", "desk"}:
+        if transport not in {"telegram", "desk", "rhythm"}:
             raise ValueError("conversation transport is invalid")
         if not transport_key.strip():
             raise ValueError("conversation transport key must be nonblank")
@@ -120,7 +120,7 @@ class ConversationId:
 
     @property
     def owner_kind(self) -> str:
-        """Current owners plus retained pre-task rhythm history."""
+        """A world rhythm owns its own conversation; it has no transport."""
         return self.kind if self.kind in {"task", "rhythm"} else "conversation"
 
     @property
@@ -134,8 +134,7 @@ class ConversationId:
     @property
     def workspace(self) -> str:
         """The world checkout this conversation's turns run in, said once."""
-        # Historical rhythm turns retain their original workspace identity;
-        # new rhythms execute as tasks and never create this owner kind.
+        # A world rhythm keeps the workspace identity its pre-task turns had.
         return f"rhythm-{self.reference}" if self.kind == "rhythm" else f"conversation-{self.value}"
 
     def __str__(self) -> str:

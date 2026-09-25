@@ -121,7 +121,8 @@ def build_turn_prompt(
     delivery_roots: tuple[str, ...] = (),
 ) -> str:
     """Current machine interface, observations, and input for every execution."""
-    interface = [TASK_PROPOSAL_DIRECTIVE, TASK_ACTION_DIRECTIVE]
+    # A rhythm owns no transport, so it cannot receive a task's result.
+    interface = [] if transport == "rhythm" else [TASK_PROPOSAL_DIRECTIVE, TASK_ACTION_DIRECTIVE]
     if transport == "telegram":
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
         if delivery_roots:

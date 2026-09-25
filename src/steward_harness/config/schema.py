@@ -586,6 +586,8 @@ class StewardConfig(BaseModel):
                 raise ValueError("procedure provider must be nonblank")
         for binding in (*self.rhythms.values(), *self.targets.values()):
             reference = binding.input if isinstance(binding, ProcedureRhythmConfig) else binding.ref
+            if reference == "world" and isinstance(binding, ProcedureRhythmConfig):
+                continue
             parts = reference.split("/", 2)
             if len(parts) != 3 or parts[0] != "repositories" or parts[1] not in self.repositories:
                 raise ValueError(f"unknown configured input {reference!r}")
@@ -595,6 +597,15 @@ class StewardConfig(BaseModel):
                 raise ValueError("rhythm names an unknown procedure")
             if rhythm.workdir is not None and self.procedures[rhythm.procedure].access != "read-only":
                 raise ValueError("organisation rhythm workdir requires a read-only procedure")
+            if rhythm.input == "world":
+                # A world rhythm is an ordinary world turn: it writes the world
+                # through the same checkpoint, so it needs one and needs to write.
+                if self.world is None:
+                    raise ValueError("world rhythm requires a configured world")
+                if self.procedures[rhythm.procedure].access != "workspace-write":
+                    raise ValueError("world rhythm requires a workspace-write procedure")
+                if not isinstance(rhythm.schedule, int):
+                    raise ValueError("world rhythm requires an interval schedule")
             if rhythm.owner is not None:
                 kind, _, reference = rhythm.owner.partition(":")
                 if kind == "telegram":
