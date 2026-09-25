@@ -471,3 +471,105 @@ def test_a_running_or_waiting_rhythm_run_still_prevents_overlap(tmp_path):
     queued = state.tasks.queued()[0]
     procedures.advance_rhythms(now=200)
     assert [str(t.task_id) for t in state.tasks.all()] == [str(queued)]
+
+
+def guarded_harness(tmp_path, **guard):
+    from steward_harness.config.schema import ChangeGuard
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    del config.rhythms["light"]
+    config.rhythms["guarded"] = ProcedureRhythmConfig(
+        owner=None, schedule=1000, procedure="security-one", input="repositories/app/main",
+        guard=ChangeGuard(**guard))
+    return clone, state, runner, procedures, adapter
+
+
+def run_guarded(state, runner, procedures, now):
+    procedures.advance_rhythms(now=now)
+    queued = list(state.tasks.queued())
+    for task in queued:
+        runner.prepare(task)
+    return queued
+
+
+def test_unchanged_guarded_firing_is_a_noop_receipt_without_a_provider_call(tmp_path):
+    clone, state, runner, procedures, adapter = guarded_harness(tmp_path)
+    assert len(run_guarded(state, runner, procedures, 1000)) == 1
+    assert run_guarded(state, runner, procedures, 2000) == []
+    assert run_guarded(state, runner, procedures, 3000) == []
+    assert len(adapter.requests) == 1 and len(state.tasks.all()) == 1
+    # The interval is settled by a receipt, and the cursor records the check.
+    assert state.result_receipt("rhythm:guarded:2")["noop"]
+    assert procedures._cursor("guarded")["checked_at"] == 3000
+    assert procedures._cursor("guarded")["ran_at"] == 1000
+    # Settled: no further sampling within the interval, and a restart agrees.
+    reopened = Procedures(procedures.config, StateDatabase(state.path), runner.transports)
+    assert run_guarded(state, runner, reopened, 3500) == []
+
+
+def test_changed_input_runs_the_guarded_rhythm_once(tmp_path):
+    clone, state, runner, procedures, adapter = guarded_harness(tmp_path)
+    run_guarded(state, runner, procedures, 1000)
+    sha = commit(clone, "changed.txt")
+    assert len(run_guarded(state, runner, procedures, 2000)) == 1
+    latest = [t for t in state.tasks.all() if t.procedure.event == "rhythm:guarded:2"][0]
+    assert state.tasks.read(latest.task_id)[1].procedure.activity["repositories/app/main"] == sha
+    assert run_guarded(state, runner, procedures, 3000) == []
+    assert len(adapter.requests) == 2
+
+
+def test_light_debounce_waits_for_quiet_then_window(tmp_path):
+    clone, state, runner, procedures, adapter = guarded_harness(tmp_path, debounce=300, window=1800)
+    run_guarded(state, runner, procedures, 1000)
+    commit(clone, "one.txt")
+    # Changed, but not yet quiet for 300s.
+    assert run_guarded(state, runner, procedures, 2100) == []
+    commit(clone, "two.txt")
+    assert run_guarded(state, runner, procedures, 2300) == []  # a new change restarts quiet
+    assert run_guarded(state, runner, procedures, 2599) == []
+    assert run_guarded(state, runner, procedures, 2600) == []  # quiet, inside the 1800s window
+    assert not state.result_receipt("rhythm:guarded:2").get("noop")  # waiting, not settled
+    assert len(run_guarded(state, runner, procedures, 2800)) == 1
+    assert len(adapter.requests) == 2
+
+
+def test_max_staleness_runs_a_long_quiet_rhythm(tmp_path):
+    clone, state, runner, procedures, adapter = guarded_harness(tmp_path, max_stale=3000)
+    run_guarded(state, runner, procedures, 1000)
+    assert run_guarded(state, runner, procedures, 2000) == []
+    assert run_guarded(state, runner, procedures, 3000) == []
+    # Nothing changed for 3000s, yet the guaranteed run happens.
+    assert len(run_guarded(state, runner, procedures, 4000)) == 1
+    assert run_guarded(state, runner, procedures, 5000) == []
+    assert len(adapter.requests) == 2
+
+
+def test_blocked_guarded_run_is_superseded_even_when_nothing_changed(tmp_path):
+    clone, state, runner, procedures, adapter = guarded_harness(tmp_path)
+    procedures.advance_rhythms(now=1000)
+    blocked = state.tasks.queued()[0]
+    state.tasks.hold(blocked, "blocked", "No provider can satisfy this turn")
+    procedures.advance_rhythms(now=1500)
+    assert [t.status.value for t in state.tasks.all()] == ["blocked"]
+    procedures.advance_rhythms(now=2000)
+    assert state.tasks.get(blocked).status.value == "cancelled"
+    fresh = state.tasks.queued()[0]
+    assert state.tasks.read(fresh)[1].procedure.event == "rhythm:guarded:2"
+    runner.prepare(fresh)
+    # The report finally delivered is what an unchanged firing may rely on.
+    assert run_guarded(state, runner, procedures, 3000) == []
+
+
+def test_unguarded_interval_rhythm_still_runs_unchanged(tmp_path):
+    _, state, runner, config, procedures, _ = quiet_harness(tmp_path)
+    del config.rhythms["light"]
+    config.rhythms["plain"] = ProcedureRhythmConfig(
+        owner=None, schedule=1000, procedure="security-one", input="repositories/app/main")
+    assert len(run_guarded(state, runner, procedures, 1000)) == 1
+    assert len(run_guarded(state, runner, procedures, 2000)) == 1
+
+
+def test_guard_requires_an_interval_schedule():
+    from steward_harness.config.schema import ChangeGuard
+    with pytest.raises(ValidationError):
+        ProcedureRhythmConfig(owner=None, schedule={"quiet": 300}, procedure="p", input="i",
+                              guard=ChangeGuard())

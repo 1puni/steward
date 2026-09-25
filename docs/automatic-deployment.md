@@ -102,6 +102,56 @@ commits that only record a conversation exchange. Ref deletion or aliases for al
 observed commits are bookkeeping, not new work. Dirty files without a commit do
 not start the quiet clock.
 
+## Change guard for interval rhythms
+
+An interval rhythm fires on its timer whether or not anything changed. An
+optional `guard` makes an unchanged firing free; without it behaviour is
+exactly as above.
+
+```yaml
+rhythms:
+  light-review:
+    schedule: 10800
+    procedure: reflect
+    input: repositories/app/main
+    owner: telegram:0
+    guard: {debounce: 900, window: 10800, max_stale: 86400}
+  daily-consolidation:
+    schedule: 86400
+    procedure: consolidate
+    input: world
+    owner: telegram:0
+    guard: {max_stale: 86400}   # unchanged days still run once a day
+```
+
+Before admitting a model turn, the rhythm samples the same inputs a quiet
+rhythm does (observed `refs/steward/remote/*` SHAs of every configured
+repository clone, accepted task work, retained native branches and the world
+cursor) and compares them with the cursor of its last completed run. The
+cursor is a controller receipt (`rhythm-cursor:<name>`), not a task or a status
+surface. Commits produced by the rhythm's own run or its result assessment are
+projected back through their base, so a rhythm's report never counts as change.
+
+- **Unchanged**: the firing settles as a no-op receipt. No provider is called,
+  no task or turn is created, nothing is delivered, and the cursor's
+  `checked_at` advances so monitoring sees the rhythm as alive.
+- **Changed**: the rhythm runs unless `debounce` or `window` holds it. `debounce`
+  seconds must pass since the latest observed change; `window` seconds must pass
+  since the last run. While held, the firing stays unsettled and is re-evaluated
+  each poll until the interval ends. A change first observed after an interval
+  settled is seen at the next firing, so keep `debounce` below the schedule.
+- **`max_stale`**: once the last run is this old, the rhythm runs even when
+  nothing changed and regardless of debounce. Set it to 86400 on daily and
+  sleep rhythms to keep their guaranteed daily run.
+- **Blocked or cancelled runs are not completed runs.** A blocked run is still
+  superseded by the next firing and its replacement runs even if nothing
+  changed, because that report was never delivered. Running and waiting runs
+  still prevent overlap. Provider fallback is unaffected.
+- All guarded runs stay read-only (or, for `input: world`, the same accepted
+  world turn as before); the guard only decides whether to admit one.
+- A failed sample of Git activity defers the rhythm to the next poll.
+- `guard` requires an interval schedule; quiet schedules already debounce.
+
 ## Driver protocol
 
 The controller invokes `[driver, "observe"]` or `[driver, "apply"]` with this JSON

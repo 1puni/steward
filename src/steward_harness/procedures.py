@@ -113,22 +113,9 @@ class Procedures:
             snapshot["world"] = self.world.input_cursor()
         consumed = {definitions[task].procedure.event: definitions[task].procedure.activity
                     for task in own if definitions[task].procedure.activity is not None}
-        # Provenance belongs to the commit, not the ref that exposed it: a world
-        # commit that closed this rhythm's own result assessment is not new
-        # input, so each observation is projected back through its base.
-        parents, asked = {}, set()
-        pending = set(snapshot.values()) | {sha for saved in consumed.values() for sha in saved.values()}
-        while self.world is not None and pending - asked:
-            batch, asked = pending - asked, asked | pending
-            for sha, (source, base) in self.world.turn_sources(sorted(batch)).items():
-                if source.startswith("task_result:") and source.split(":")[1] in own:
-                    parents[sha] = base
-                    pending.add(base)
-
-        def input_revision(sha):
-            while sha in parents:
-                sha = parents[sha]
-            return sha
+        input_revision = self._projector(
+            set(snapshot.values()) | {sha for saved in consumed.values() for sha in saved.values()},
+            own, prefix)
 
         inputs = {ref: input_revision(sha) for ref, sha in snapshot.items()}
         digest = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
@@ -153,14 +140,88 @@ class Procedures:
         ready = since is not None and now - since >= schedule.quiet
         return (event if ready else None), snapshot
 
+    def _projector(self, shas, own, prefix):
+        """Project an observed commit back through this rhythm's own world turns.
+
+        Provenance belongs to the commit, not the ref that exposed it: a world
+        commit that closed this rhythm's own result assessment, or its own
+        world turn, is not new input, so each observation is projected back
+        through its base.
+        """
+        parents, asked, pending = {}, set(), set(shas)
+        while self.world is not None and pending - asked:
+            batch, asked = pending - asked, asked | pending
+            for sha, (source, base) in self.world.turn_sources(sorted(batch)).items():
+                if source.startswith(prefix) or (
+                        source.startswith("task_result:") and source.split(":")[1] in own):
+                    parents[sha] = base
+                    pending.add(base)
+
+        def input_revision(sha):
+            while sha in parents:
+                sha = parents[sha]
+            return sha
+
+        return input_revision
+
+    def _observe(self, name, activity, definitions):
+        """(raw snapshot, provenance-projected inputs) of a guarded rhythm."""
+        prefix = f"rhythm:{name}:"
+        own = {task_id for task_id, d in definitions.items()
+               if d.procedure and d.procedure.event.startswith(prefix)}
+        snapshot = dict(activity)
+        if self.world is not None:
+            snapshot["world"] = self.world.input_cursor()
+        project = self._projector(set(snapshot.values()), own, prefix)
+        return snapshot, {ref: project(sha) for ref, sha in snapshot.items()}
+
+    def _cursor(self, name):
+        return self.state.result_receipt(f"rhythm-cursor:{name}")
+
+    def _save_cursor(self, name, cursor):
+        self.state.save_result_receipt(cursor | {"source_key": f"rhythm-cursor:{name}",
+                                                 "owner": None, "task_id": None, "done": True})
+
+    def record_run(self, name, inputs, now, task_id=None):
+        """The cursor a guarded rhythm's next firing is compared with."""
+        self._save_cursor(name, {"inputs": inputs, "seen": inputs, "seen_at": now,
+                                 "ran_at": now, "checked_at": now, "run": task_id})
+
+    def _guard_verdict(self, name, guard, inputs, now, statuses):
+        """`run`, `skip` (unchanged) or `wait` (changed, still debouncing)."""
+        cursor = self._cursor(name)
+        # No completed run to compare with: a first, cancelled or lost run
+        # never delivered a report, so its inputs are not yet covered.
+        if not cursor or (cursor["run"] and statuses.get(cursor["run"]) is not TaskStatus.DONE):
+            return "run"
+        if guard.max_stale is not None and now - cursor["ran_at"] >= guard.max_stale:
+            return "run"
+        changed = any(cursor["inputs"].get(ref) != sha for ref, sha in inputs.items())
+        if not changed:
+            self._save_cursor(name, cursor | {"seen": inputs, "checked_at": now})
+            return "skip"
+        if inputs != cursor["seen"]:
+            cursor |= {"seen": inputs, "seen_at": now}
+            self._save_cursor(name, cursor)
+        quiet = now - cursor["seen_at"] >= guard.debounce
+        return "run" if quiet and now - cursor["ran_at"] >= guard.window else "wait"
+
+    def _skip_unchanged(self, rhythm, event, now):
+        """Complete a firing as a no-op receipt: no provider call, no delivery."""
+        self.state.save_result_receipt({
+            "owner": rhythm.owner, "task_id": None, "source_key": event, "noop": True,
+            "result_text": "", "reply": "", "done": True, "at": now})
+
     def advance_rhythms(self, *, now=None):
         observed_now = time.monotonic() if now is None else now
         now = time.time() if now is None else now
         tasks = self.state.tasks.all()
         definitions = {str(task.task_id): task.definition for task in tasks}
-        quiet = any(not isinstance(r.schedule, int) for r in self.config.rhythms.values())
+        statuses = {str(task.task_id): task.status for task in tasks}
+        sampled = any(not isinstance(r.schedule, int) or (r.guard and r.input != "world")
+                      for r in self.config.rhythms.values())
         activity = None
-        if quiet:
+        if sampled:
             try:
                 activity = self._activity(definitions)
             except GitTransportError as error:
@@ -170,9 +231,13 @@ class Procedures:
             if rhythm.input == "world":
                 continue  # A world turn, not a task: see `due_world_rhythms`.
             prefix = f"rhythm:{name}:"
-            snapshot = None
+            snapshot = inputs = None
             if isinstance(rhythm.schedule, int):
                 event = f"{prefix}{int(now // rhythm.schedule)}"
+                if rhythm.guard:
+                    if activity is None or self.state.result_receipt(event).get("noop"):
+                        continue
+                    snapshot, inputs = self._observe(name, activity, definitions)
             else:
                 if activity is None:
                     continue
@@ -190,9 +255,20 @@ class Procedures:
             if any(task.status is not TaskStatus.BLOCKED or task.procedure.event == event
                    for task in open_runs):
                 continue
+            if rhythm.guard and not open_runs:
+                # A blocked run never delivered, so it is retried whatever
+                # changed; otherwise an unchanged firing spends nothing.
+                if any(t.procedure and t.procedure.event == event for t in tasks):
+                    continue
+                verdict = self._guard_verdict(name, rhythm.guard, inputs, now, statuses)
+                if verdict == "wait":
+                    continue
+                if verdict == "skip":
+                    self._skip_unchanged(rhythm, event, now)
+                    continue
             for task in open_runs:
                 self.state.tasks.cancel(task.task_id, f"superseded by {event}")
-            if snapshot is None:
+            if snapshot is None or inputs is not None:
                 repository, candidate, base = resolve_input(rhythm.input, self.transports)
             else:
                 _, repository, _ = rhythm.input.split("/", 2)
@@ -200,8 +276,10 @@ class Procedures:
                 parents = self.transports[repository]._run("rev-list", "--parents", "-n", "1", candidate).split()
                 base = parents[1] if len(parents) > 1 else candidate
             try:
-                self.request(rhythm.procedure, repository, candidate, base, event=event,
-                             owner=rhythm.owner, activity=snapshot, workdir=rhythm.workdir)
+                task_id = self.request(rhythm.procedure, repository, candidate, base, event=event,
+                                       owner=rhythm.owner, activity=snapshot, workdir=rhythm.workdir)
+                if inputs is not None:
+                    self.record_run(name, inputs, now, str(task_id))
             except (OSError, ValueError) as error:
                 # A refused admission consumes no input; keep other rhythms and
                 # operator ingress alive while the operator repairs its policy.
@@ -224,9 +302,23 @@ class Procedures:
                 continue
             yield name, key
 
-    def run_world_rhythm(self, conversations, name, key):
+    def run_world_rhythm(self, conversations, name, key, *, now=None):
         """Run one interval as a world turn, then hand any reply to its owner."""
         rhythm = self.config.rhythms[name]
+        now = time.time() if now is None else now
+        inputs = None
+        if rhythm.guard:
+            definitions = {str(t.task_id): t.definition for t in self.state.tasks.all()}
+            try:
+                inputs = self._observe(name, self._activity(definitions), definitions)[1]
+            except GitTransportError as error:
+                log.warning("Rhythm %s activity sample failed; deferring: %s", name, error)
+                return
+            verdict = self._guard_verdict(name, rhythm.guard, inputs, now, {})
+            if verdict == "skip":
+                self._skip_unchanged(rhythm, key, now)
+            if verdict != "run":
+                return
         procedure = self.config.procedures[rhythm.procedure]
         owner = ConversationId(f"rhythm:{name}")
         self.state.open_conversation(owner, provider=procedure.provider,
@@ -249,6 +341,8 @@ class Procedures:
             # The interval is consumed: at most one run, never a retry storm.
             log.error("world rhythm %s failed: %s", key, error)
             return
+        if inputs is not None:
+            self.record_run(name, inputs, now)
         reply = result.reply_text.strip()
         # The ordinary result lane delivers a pending receipt to its owner.
         self.state.save_result_receipt({

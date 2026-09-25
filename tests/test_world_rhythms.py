@@ -7,11 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from steward_harness.config.schema import StewardConfig
+from steward_harness.config.schema import ChangeGuard, StewardConfig
 from steward_harness.daemon import StewardDaemon
 from steward_harness.procedures import Procedures
 from steward_harness.runtime.contracts import RuntimeExecutionError
 from steward_harness.state import ConversationId
+from test_world_turn_checkpoint import _commit_all
 from test_world_durability import Crash, EditingCognition, runtime
 
 DAY = 86400
@@ -185,3 +186,30 @@ def test_rhythm_command_reports_the_interval_and_refuses_an_extra_run(tmp_path):
         commands("rhythm", "list", 1, 3, 7))
     assert "world rhythm" in commands("rhythm", "run sleep", 1, 3, 7)
     assert state.tasks.all() == []
+
+
+def _guarded(tmp_path, **guard):
+    config, state, checkpoint, service, cognition, _ = _rhythm(tmp_path)
+    config = config.model_copy(update={"rhythms": {"sleep": config.rhythms["sleep"].model_copy(
+        update={"guard": ChangeGuard(**guard)})}})
+    return config, state, checkpoint, service, cognition, Procedures(config, state, {}, world=checkpoint.world)
+
+
+def test_guarded_world_rhythm_skips_unchanged_world_but_keeps_its_daily_run(tmp_path):
+    config, state, checkpoint, service, cognition, procedures = _guarded(tmp_path, max_stale=DAY)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20", now=NOW)
+    assert cognition.calls == 1
+    # The rhythm's own world turn is not new input: the next firing is a no-op.
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21", now=NOW + DAY - 3600)
+    assert cognition.calls == 1
+    receipt = state.result_receipt("rhythm:sleep:21")
+    assert receipt["noop"] and receipt["done"] and not receipt["reply"]
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
+    # Unchanged for a full day, the guaranteed run still happens.
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:22", now=NOW + DAY * 2)
+    assert cognition.calls == 2
+    # A new world commit runs it without waiting for the staleness cap.
+    (checkpoint.world.root / "operator.md").write_text("New intent.\n")
+    _commit_all(checkpoint.world.root, "operator")
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:23", now=NOW + DAY * 2 + 100)
+    assert cognition.calls == 3

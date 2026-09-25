@@ -533,9 +533,25 @@ class QuietSchedule(BaseModel):
     quiet: int = Field(gt=0, description="Seconds without newly observed Git activity")
 
 
+class ChangeGuard(BaseModel):
+    """Skip an interval firing when its observed inputs have not changed.
+
+    Absent, an interval rhythm fires unconditionally. Present, an unchanged
+    firing completes as a no-op receipt and calls no provider.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    debounce: int = Field(default=0, ge=0,
+        description="Seconds a change must stay quiet before it may run")
+    window: int = Field(default=0, ge=0,
+        description="Minimum seconds between two runs")
+    max_stale: int | None = Field(default=None, gt=0,
+        description="Run even if unchanged once the last run is this old")
+
+
 class ProcedureRhythmConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     schedule: Annotated[int, Field(gt=0)] | QuietSchedule
+    guard: ChangeGuard | None = None
     procedure: str
     input: str
     owner: str | None  # Explicit null retains findings without assessment/delivery.
@@ -545,6 +561,8 @@ class ProcedureRhythmConfig(BaseModel):
     def validates_workdir(self):
         if self.workdir is not None:
             _require_bounded_absolute("rhythm workdir", self.workdir)
+        if self.guard is not None and not isinstance(self.schedule, int):
+            raise ValueError("rhythm guard requires an interval schedule")
         return self
 
 
