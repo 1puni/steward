@@ -930,10 +930,13 @@ class StewardDaemon:
 
         next_retention = 0.0
 
+        native_homes = [Path(path) for path in self.config.provider.native_homes.values()]
+
         def retain_workspaces() -> None:
-            prune_tasks(kernel.tasks)
+            prune_tasks(kernel.tasks, native_homes)
             if checkpoint is not None:
-                prune_world_sessions(checkpoint, self.config.controller.world_session_idle_seconds)
+                prune_world_sessions(checkpoint, self.config.controller.world_session_idle_seconds,
+                                     native_homes)
 
         def step() -> None:
             nonlocal next_retention

@@ -27,6 +27,7 @@ from steward_harness.runtime.contracts import (
 from steward_harness.runtime.native_workspace import native_workspace
 from steward_harness.runtime.process import ProcessController, ProcessInput
 
+NATIVE_RETENTION_DAYS = 365000
 _MAX_RESPONSE_CHARS = 64_000
 _SANDBOX_SETTINGS = json.dumps(
     {
@@ -508,6 +509,14 @@ class ClaudeRuntime:
             request = workspace.remaining_request(request)
             environment = self.environment()
             environment["CLAUDE_CONFIG_DIR"] = str(workspace.home)
+            if self.credential_path is not None:
+                # Explicit router credentials must not fall back to a native
+                # first-party OAuth store, even on anonymous seed-home calls.
+                environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(workspace.home / ".steward-routed-auth")
+            if request.native_owner is not None:
+                # Each retained home already isolates owner/provider/generation.
+                # A fixed valid name avoids accumulating cwd-derived projects.
+                environment["CLAUDE_CODE_PROJECT_DIR_NAME"] = "steward"
             return self._execute(request, session_id, environment, resume=workspace.resume)
 
     def _execute(self, request, session_id, environment, *, resume=None):
@@ -566,9 +575,12 @@ class ClaudeRuntime:
 
     def environment(self, inherited: Mapping[str, str] | None = None) -> dict[str, str]:
         environment = dict(os.environ if inherited is None else inherited)
-        for name in ("OPENAI_API_KEY", "ZAI_AUTH_TOKEN", "CODEX_HOME"):
+        for name in ("OPENAI_API_KEY", "ZAI_AUTH_TOKEN", "CODEX_HOME", "CLAUDE_CODE_PROJECT_DIR_NAME"):
             environment.pop(name, None)
         environment["CLAUDE_CONFIG_DIR"] = str(self.native_home)
+        # Keep credential persistence and the native refresh lock in one private
+        # authority even when runtime state moves into an owner-specific home.
+        environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(self.native_home)
         if self.base_url is not None:
             try:
                 token = self._read_credential(self.credential_path)
@@ -595,6 +607,11 @@ class ClaudeRuntime:
         if unrestricted:
             settings["sandbox"] = {"enabled": False}
         settings.update(
+            # Native transcripts are provenance. Zero is invalid in the installed
+            # CLI. This extends its sweep window, including symlink targets and
+            # other aged home files; managed policy can override it. Inspected
+            # retirement is still pending, so these retained homes can grow.
+            cleanupPeriodDays=NATIVE_RETENTION_DAYS,
             autoMemoryEnabled=request.sandbox_mode == "workspace-write",
             autoMemoryDirectory=str(request.cwd.resolve() / "memories" / self.family),
         )

@@ -548,3 +548,20 @@ def test_git_transport_services_run_as_the_agent_without_credentials(
         f"--reuid={os.getuid()}", f"--regid={os.getgid()}", "--clear-groups", "--"]
     assert command[setpriv + 5] == "git" and command[-1] == "upload-pack"
     assert "core.hooksPath=/dev/null" in command
+
+
+@pytest.mark.parametrize('name', ['CLAUDE_CODE_PROJECT_DIR_NAME', 'CLAUDE_SECURESTORAGE_CONFIG_DIR'])
+def test_native_home_routing_reaches_only_provider_children(tmp_path, name, monkeypatch):
+    broker = UntrustedExecutionBroker(UntrustedExecutionConfig(inherited_environment=(name,)))
+    monkeypatch.setenv(name, 'ambient-unrelated-authority')
+    command = [sys.executable, '-c', 'import os,sys; print(os.getenv(sys.argv[1]))', name]
+    process = broker.popen(command, cwd=tmp_path, env={name: 'selected-native-authority'}, stdout=subprocess.PIPE)
+    stdout, _ = process.communicate(timeout=10)
+    assert process.returncode == 0
+    assert stdout.strip() == b'selected-native-authority'
+    process = broker.popen_command(command, cwd=tmp_path, stdout=subprocess.PIPE)
+    stdout, _ = process.communicate(timeout=10)
+    assert process.returncode == 0
+    assert stdout.strip() == b'None'
+    with pytest.raises(ValueError, match='provider credentials'):
+        broker.popen_command(command, cwd=tmp_path, extra_env={name: 'smuggled-authority'})

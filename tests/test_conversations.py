@@ -430,6 +430,28 @@ def test_an_automated_result_review_cannot_steer_the_task_it_reviews(
     assert service._state.tasks.get(task_id).status is TaskStatus.WAITING
 
 
+def test_native_owner_generation_survives_restart_fallback_and_clear(tmp_path):
+    from steward_harness.cognition import Cognition
+    from test_cognition import FakeAdapter
+
+    codex, claude = FakeAdapter('codex'), FakeAdapter('claude')
+    service = _service(tmp_path, Cognition({'codex': codex, 'claude': claude}))
+    first = _turn(service, 'first')
+    owner = str(first.conversation_id)
+    assert (codex.requests[-1].native_owner, codex.requests[-1].native_generation) == (owner, 1)
+    service = _service(tmp_path, Cognition({'codex': codex, 'claude': claude}))
+    _turn(service, 'after-restart')
+    assert (codex.requests[-1].native_owner, codex.requests[-1].native_generation) == (owner, 1)
+    codex.is_available = False
+    _turn(service, 'fallback')
+    assert (claude.requests[-1].native_owner, claude.requests[-1].native_generation) == (owner, 2)
+    _turn(service, 'resumed-fallback')
+    assert claude.requests[-1].native_generation == 2
+    service._state.bind_conversation_provider(first.conversation_id, 'claude', None)
+    _turn(service, 'after-clear')
+    assert (claude.requests[-1].native_owner, claude.requests[-1].native_generation) == (owner, 3)
+
+
 @pytest.mark.parametrize("selection", [{}, {"desk_provider": "claude", "desk_profile": "fast"}])
 def test_desk_policy_selected_before_first_native_call_and_retains_lineage(tmp_path, selection):
     cognition = FakeCognition([_reply("one", provider=selection.get("desk_provider", "codex")),

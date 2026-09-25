@@ -8,6 +8,7 @@ import os
 import stat
 import threading
 import time
+import weakref
 from pathlib import Path
 
 
@@ -16,7 +17,9 @@ class Busy(RuntimeError):
 
 
 _LOCK_REGISTRY_GUARD = threading.Lock()
-_LOCK_REGISTRY: dict[str, threading.Lock] = {}
+# Every live Lease keeps its mutex alive. The registry must not retain one
+# forever for each historical owner/invocation path.
+_LOCK_REGISTRY: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 
 
 class Lease:

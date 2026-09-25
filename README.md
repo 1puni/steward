@@ -250,11 +250,11 @@ What that does **not** mean:
   one command.
 - Production authority needs the separate execution user. A macOS laptop is a fine
   place to read the code and run the tests, and says nothing about that boundary.
-- Native processes currently restart between turns. Writable turns retain original
-  transcripts in Git, but use disposable launch homes and do not preserve the
-  provider's runtime SQLite databases between launches. This is not durable native
-  queue, goal or background-job continuity. See the
-  [storage boundary](docs/native-provider-runtime.md#native-workflows-and-storage-boundary).
+- Native processes restart between turns. Each conversation or task keeps its
+  provider's databases in its own home until its workspace is retired, but nothing
+  runs between turns, so native queues, goals and background jobs only advance
+  inside a turn. See the
+  [native session host](docs/native-session-host.md).
 - Recurring reflection is yours to define. The harness ships the trigger
   (rhythms), a generic [reflection skill](src/steward_harness/skills/steward-reflection/SKILL.md)
   and the exact-input plumbing. It ships no personal or organisational rhythm

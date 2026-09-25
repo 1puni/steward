@@ -241,6 +241,32 @@ def test_cancellation_during_availability_stops_fallback(tmp_path):
     assert first.requests == fallback.requests == []
 
 
+@pytest.mark.parametrize("during_execute", [False, True])
+def test_cancellation_during_last_provider_refusal_is_not_exhaustion(
+    tmp_path, during_execute,
+):
+    cognition = None
+
+    class Unavailable(FakeAdapter):
+        def available(self):
+            if during_execute:
+                return Availability(True)
+            assert cognition.cancel("turn-1")
+            return Availability(False, "offline")
+
+        def execute(self, request):
+            self.requests.append(request)
+            assert cognition.cancel("turn-1")
+            raise RuntimeUnavailable("custody busy")
+
+    adapter = Unavailable("codex")
+    cognition = Cognition({"codex": adapter})
+    with pytest.raises(RuntimeExecutionError, match="cancelled"):
+        cognition.run(_request(tmp_path, provider_order=("codex",)))
+    assert len(adapter.requests) == int(during_execute)
+    assert not cognition.cancel("turn-1")
+
+
 def test_a_returned_run_is_no_longer_cancellable(tmp_path):
     """The ordering the world-turn holes were deleted in favour of.
 
@@ -574,3 +600,22 @@ def test_wrong_adapter_identity_is_a_contract_fault_not_a_provider_outage(tmp_pa
         )
     assert not isinstance(raised.value, RuntimeExecutionError)
     assert fallback.requests == []
+
+
+def test_missing_session_recomputes_native_generation_before_retry(tmp_path):
+    generation = 7
+
+    def invalidate(_provider):
+        nonlocal generation
+        generation += 1
+
+    adapter = MissingSessionAdapter('codex')
+    Cognition({'codex': adapter}).run(_request(
+        tmp_path, provider_order=('codex',), native_owner='retained-owner',
+        native_generation=lambda _provider: generation,
+        provider_session_id='stale', session_provider='codex',
+        on_session_invalidated=invalidate,
+    ))
+    assert [(r.native_owner, r.native_generation) for r in adapter.requests] == [
+        ('retained-owner', 7), ('retained-owner', 8),
+    ]

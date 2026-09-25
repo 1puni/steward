@@ -2,11 +2,44 @@
 
 from __future__ import annotations
 
+import gc
 import threading
+import weakref
 
 import pytest
 
 from steward_harness.lease import Busy, Lease
+
+
+def test_discarded_leases_do_not_retain_historical_mutexes(tmp_path) -> None:
+    references = []
+    for number in range(200):
+        lease = Lease(tmp_path, lock_name=f"invocation-{number}.lock")
+        with lease:
+            references.append(weakref.ref(lease._mutex))
+        del lease
+    gc.collect()
+
+    assert all(reference() is None for reference in references)
+    # Reclaiming controller memory must not unlink kernel lock identities.
+    assert len(list(tmp_path.glob("invocation-*.lock"))) == 200
+
+
+def test_live_peer_retains_shared_mutex_after_original_is_discarded(tmp_path) -> None:
+    original = Lease(tmp_path, timeout_seconds=0)
+    peer = Lease(tmp_path, timeout_seconds=0)
+    reference = weakref.ref(original._mutex)
+    del original
+    gc.collect()
+
+    with peer:
+        contender = Lease(tmp_path, timeout_seconds=0)
+        assert contender._mutex is reference() is peer._mutex
+        with pytest.raises(Busy, match="thread mutex contention"):
+            contender.acquire()
+
+    with contender:
+        pass
 
 
 def test_one_lease_is_reentrant_only_for_its_owning_thread(tmp_path) -> None:

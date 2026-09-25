@@ -182,6 +182,8 @@ class RuntimeRequest:
     cwd: Path
     # None means no routine deadline; cancellation still applies.
     timeout_seconds: int | None
+    native_owner: str | None = None
+    native_generation: int = 1
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
     writable_roots: tuple[Path, ...] = ()
@@ -195,6 +197,10 @@ class RuntimeRequest:
     allow_empty_output: bool = False
 
     def __post_init__(self) -> None:
+        if self.native_owner is not None and (not self.native_owner.strip() or len(self.native_owner) > 512):
+            raise ValueError("Native owner must be nonblank and bounded")
+        if type(self.native_generation) is not int or self.native_generation < 1:
+            raise ValueError("Native generation must be a positive integer")
         if not self.prompt.strip() or len(self.prompt) > 128_000:
             raise ValueError("Prompt must be non-empty and bounded")
         if not self.cwd.is_absolute():

@@ -32,7 +32,15 @@ world and managed repositories: they can contain private authentication and live
 databases. The host check includes each as an execution-writable path. Provider
 home variables pass through the provider broker only; repository gates and
 product commands do not inherit them. Adapters discard ambient provider-home
-variables and use the explicit mapping.
+variables and use the explicit mapping. First-party Claude login sets
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` to its configured private seed home, preserving
+one native credential store and refresh-lock location while `CLAUDE_CONFIG_DIR`
+selects each owner's runtime state. Explicitly routed Claude/GLM calls instead
+select a separate `.steward-routed-auth` path within the execution home, so router
+authentication does not fall back to seed OAuth credentials. Do not clone or merge rotating OAuth credentials
+between owner homes. The installed credential lookup and retention probes are
+recorded in the [session lifecycle design](native-session-host.md); they do not
+replace authenticated refresh or Linux boundary acceptance.
 
 The runtime factory rejects missing homes for built-in providers in the configured
 order. Provision each selected provider or remove unused fallbacks from that order.
@@ -89,7 +97,8 @@ a successful candidate. The broker retains deadlines, cancellation, environment,
 identity, stream bounds, and process cleanup. The adapter requests native terminal
 cleanup for the parent and reported children, then closes stdin after those
 acknowledgements. Native records are written directly into the candidate; execution
-returns after the process exits and its private launch links are removed. A connection can
+returns after the process and owned descendants exit. Owner homes remain durable;
+anonymous launch links are removed. A connection can
 be recreated while resuming the same native thread.
 
 Embedders may supply `CognitionRequest.on_input_ready(send)` and
@@ -328,25 +337,46 @@ Keep this directory tracked; repository ignore rules still apply to ordinary
 checkpointing. Consolidated scope truth remains in `docs/`; native memory is
 readable working knowledge, not a replacement authority.
 
-Writable native turns use a private launch directory beneath the configured
-native home. Approved settings, credentials, skills and integrations remain
-linked to that private home. Each launch owns its own links into the candidate:
+Native turns with a retained lineage use a private `.steward-owner-<hash>` home
+beneath the configured provider home. The hash covers the actual conversation or
+task session owner, selected provider and lineage generation. Profile changes and
+controller restart preserve it; clear, provider switch and missing-session
+invalidation select a new generation. Selection occurs on each adapter attempt,
+including fallback and recovery. A checkout path or per-turn execution ID is not
+an owner. Anonymous conflict-resolution calls retain temporary launch homes.
 
-- Codex `sessions/` and `archived_sessions/` write native rollouts beneath
-  `artefacts/codex/`; `memories/` maps to `memories/codex/`.
-- Claude/GLM `projects/` writes native project/session files beneath
-  `artefacts/<provider>/projects/`; the memory setting points to `memories/<provider>/`.
+Only native configuration/authentication and integration entries are linked from
+the instance seed; SQLite, caches, queues, goals and jobs remain provider-owned in
+the owner home. A local replacement of a configured Codex `auth.json` link is
+preserved but refuses re-entry until inspected; preparation never copies it back
+to the seed. With no seed credential, an independent native local login is retained.
+Bundled skills remain available without modifying the instance's skill links.
+Writable owners map native originals directly into their retained candidate:
 
-The provider writes original files directly. Codex no longer requests or writes
-another `thread/read` snapshot. Native runtime SQLite remains private to the
-launch and is discarded with it. Every invocation starts a new provider process;
-transcript resume does not preserve native queue, goal or background-job state
-held outside those transcripts. Persistent process and database continuity remain
-unimplemented in this release. Private links are removed after the provider exits;
-candidate records
-and useful partial work remain. Separate launches never retarget a shared link.
-Directory creation and cleanup use the execution broker. Existing symlinks in
-mapped record directories are rejected, and setup shares the execution deadline.
+- Codex `sessions/` and `archived_sessions/` write beneath `artefacts/codex/`;
+  `memories/` maps to `memories/codex/`.
+- Claude/GLM `projects/` writes beneath `artefacts/<provider>/projects/`; the
+  memory setting points to `memories/<provider>/`.
+
+An existing home cannot silently retarget these links to another candidate.
+Preparation uses the execution broker, rejects symlinked record directories and
+shares the execution deadline. Success or failure retains owned native state;
+only anonymous temporary homes are removed after process teardown. No provider
+process is retained between turns. Goals/jobs therefore have no process capable
+of independently admitting or publishing work outside a harness invocation.
+
+Read-only owners keep records inside their private owner home and create nothing
+in the candidate. For an existing saved lineage, preparation can import its exact
+primary original from the instance seed once. The copy uses checked regular-file
+descriptors, fsync and exclusive atomic linking; incomplete copies cannot become
+resumable originals. Other sessions and instance databases are never imported.
+The original seed remains untouched. Child records/sidecars and any older leaked
+launch homes still require explicit inspection during migration.
+
+Removing an owner's workspace also removes all of its owner homes, under the same
+fence (see [retirement](native-session-host.md#design)). A retained workspace
+keeps its homes too. Read-only owners without a world are never retired, because
+their home holds their only records.
 
 Conversation/rhythm checkouts use `session-<owner-hash>` while their owner is
 executing. Native originals and memory are committed into the candidate; once
@@ -387,6 +417,11 @@ that every provider has checkpointed. Cancellation/timeout remains an error even
 when native interruption succeeds. Ordinary task turns have no routine deadline;
 a bound-session procedure deadline, or a controller-shutdown interruption,
 retains its ordinary next-tick continuation.
+
+Cognition also checks cancellation after the final provider declines admission.
+A cancellation observed during the last availability check or runtime refusal
+remains a cancellation error, rather than being reported as provider exhaustion.
+This does not alter fallback when no cancellation was requested.
 
 The cleanup endpoint requires App Server's experimental API capability, which
 this adapter declares. A failed/malformed cleanup acknowledgement cannot produce

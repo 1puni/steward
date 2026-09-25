@@ -16,9 +16,19 @@ from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.kernel import repository_lease
 from steward_harness.retention import prune_tasks, prune_world_sessions
 from steward_harness.runtime.execution import UntrustedExecutionBroker
+from steward_harness.runtime.native_workspace import _owner_prefix
 from steward_harness.state import StateDatabase, TaskSpec
 from steward_harness.task_runner import TaskRunner
 from steward_harness.task_lock import task_lock
+
+
+def _owner_homes(tmp_path, owner):
+    home = tmp_path / "codex-home"
+    ours = home / (_owner_prefix(owner) + "0123456789abcdef")
+    other = home / (_owner_prefix("telegram:someone-else") + "0123456789abcdef")
+    for path in (ours, other):
+        (path / "cache").mkdir(parents=True)
+    return home, ours, other
 
 
 @pytest.mark.parametrize("boundary", [
@@ -62,12 +72,14 @@ def test_task_retention(tmp_path, boundary, caplog):
         _commit_all(path, "local commit outside acceptance")
     elif boundary == "merge":
         _git_path(path, "MERGE_HEAD").write_text(_git("rev-parse", "HEAD", cwd=path))
+    home, ours, other = _owner_homes(tmp_path, str(task.session_id))
     try:
-        prune_tasks(runner)
+        prune_tasks(runner, [home])
     finally:
         if lock:
             lock.release()
     assert path.exists() == (boundary not in {"published", "cancelled", "ignored"})
+    assert ours.exists() == path.exists() and other.exists()
     if not path.exists():
         assert str(path) not in _git("worktree", "list", "--porcelain", cwd=clone)
         assert state.tasks.read(task.task_id)[1].work
@@ -112,8 +124,10 @@ def test_world_retention(tmp_path, boundary, caplog):
         _commit_all(turn.path, "unaccepted world work")
     elif boundary == "merge":
         _git_path(turn.path, "MERGE_HEAD").write_text(turn.base_sha)
-    prune_world_sessions(checkpoint, 7 * 86400)
+    home, ours, other = _owner_homes(tmp_path, str(owner.conversation_id))
+    prune_world_sessions(checkpoint, 7 * 86400, [home])
     assert turn.path.exists() == (boundary not in {"old", "ignored"})
+    assert ours.exists() == turn.path.exists() and other.exists()
     if boundary in {"old", "ignored"}:
         assert str(turn.path) not in _git("worktree", "list", "--porcelain", cwd=checkpoint.world.root)
         prune_world_sessions(checkpoint, 7 * 86400)

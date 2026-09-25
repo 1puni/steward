@@ -42,6 +42,9 @@ class CognitionRequest:
     # None means no routine deadline; cancellation still applies.
     timeout_seconds: int | None
     provider_order: tuple[ProviderFamily, ...]
+    # The accepted lineage owns storage, not a turn id or a checkout path.
+    native_owner: str | None = None
+    native_generation: Callable[[ProviderFamily], int] = lambda _provider: 1
     model: ModelChoice | None = None
     provider_session_id: str | None = None
     session_provider: ProviderFamily | None = None
@@ -186,6 +189,8 @@ class Cognition:
                     runtime_request = RuntimeRequest(
                         execution_id=request.execution_id,
                         resolved=resolved,
+                        native_owner=request.native_owner,
+                        native_generation=request.native_generation(provider),
                         provider_session_id=provider_session_id,
                         prompt=request.prompt,
                         cwd=request.cwd,
@@ -249,6 +254,13 @@ class Cognition:
                     )
                 return result
 
+            # The last availability check or runtime refusal can race cancel,
+            # just like an earlier provider can. There is no next iteration to
+            # observe it once every configured provider has declined.
+            if cancelled():
+                raise RuntimeExecutionError(
+                    f"Execution ID {request.execution_id!r} was cancelled"
+                )
             detail = "; ".join(unavailable)
             raise RuntimeUnavailable(f"No provider can satisfy this turn: {detail}")
         finally:

@@ -323,9 +323,10 @@ class ConversationService:
         """
         event_id = str(turn.turn_id)
         lineage_generation = conversation.generation
+        lineage_provider = conversation.provider
 
         def session_started(provider: str, session: str) -> None:
-            nonlocal lineage_generation
+            nonlocal lineage_generation, lineage_provider
             lineage = self._state.bind_conversation_provider(
                 conversation.conversation_id,
                 provider,
@@ -333,11 +334,12 @@ class ConversationService:
                 expected_generation=lineage_generation,
             )
             lineage_generation = lineage.generation
+            lineage_provider = lineage.provider
 
         def session_invalidated(provider: str) -> None:
             # A provider that has lost its saved session leaves this lineage
             # with nothing to resume, which is the same bind with no session.
-            nonlocal lineage_generation
+            nonlocal lineage_generation, lineage_provider
             lineage = self._state.bind_conversation_provider(
                 conversation.conversation_id,
                 provider,
@@ -345,6 +347,7 @@ class ConversationService:
                 expected_generation=lineage_generation,
             )
             lineage_generation = lineage.generation
+            lineage_provider = lineage.provider
 
         def input_ready(send: Callable[[RuntimeInput], None]) -> None:
             with self._input_lock:
@@ -383,6 +386,8 @@ class ConversationService:
             )
             return CognitionRequest(
                 execution_id=event_id,
+                native_owner=str(conversation.conversation_id),
+                native_generation=lambda provider: lineage_generation + (provider != lineage_provider),
                 profile=cast(ProviderProfile, conversation.profile),
                 prompt=prompt,
                 cwd=(worktree.path if worktree else self._workspace.world.root

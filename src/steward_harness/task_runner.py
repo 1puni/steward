@@ -27,7 +27,7 @@ from steward_harness.provider_types import ProviderFamily
 from steward_harness.runtime.contracts import (
     RuntimeExecutionError, RuntimeInput, RuntimeInputResult, RuntimeUnavailable,
 )
-from steward_harness.runtime.execution import UntrustedExecutionBroker
+from steward_harness.runtime.execution import ExecutionBoundaryUnavailable, UntrustedExecutionBroker
 from steward_harness.runtime.process import ProcessTimeout
 from steward_harness.state import (
     CheckpointDisposition,
@@ -42,6 +42,23 @@ from steward_harness.task_store import Task
 from steward_harness.task_store import PREFIX, OfferRejected
 
 log = logging.getLogger(__name__)
+
+
+def _boundary_failed(error: BaseException) -> bool:
+    """Adapters may wrap containment failures to retain native session IDs."""
+    seen: set[int] = set()
+    pending = [error]
+    while pending:
+        error = pending.pop()
+        if id(error) in seen:
+            continue
+        seen.add(id(error))
+        if isinstance(error, ExecutionBoundaryUnavailable):
+            return True
+        if isinstance(error, BaseExceptionGroup):
+            pending.extend(error.exceptions)
+        pending.extend(link for link in (error.__cause__, error.__context__) if link is not None)
+    return False
 
 #: The one task-local ref a native parent points at its current account offer.
 OFFER_REF = "refs/steward/understanding/{task_id}"
@@ -170,7 +187,8 @@ class TaskRunner:
 
         Task turns have no routine deadline, so shutdown must ask them to end.
         Each is interrupted natively, then contained after the bounded grace,
-        and its work is retained as a continuation rather than a blocked task.
+        and its work is retained as a continuation. Unverified containment
+        instead blocks the task without capturing its worktree.
         """
         self._stopping.set()
         with self._input_lock:
@@ -364,6 +382,29 @@ class TaskRunner:
                 log.warning("repository workspace unavailable: %s", error)
 
     def _run_owned(self, task_id: TaskId, opened_at: str) -> TaskId:
+        """Keep containment failure handling outside ordinary error recovery."""
+        try:
+            return self._run_owned_turn(task_id, opened_at)
+        except Exception as error:
+            if not _boundary_failed(error):
+                raise
+            # Includes failures inside autosave/error handlers, not only the
+            # initial provider call. Never capture a new head after this point.
+            try:
+                self.state.tasks.finish_slice(
+                    task_id, disposition=CheckpointDisposition.BLOCKED,
+                    opened_at=opened_at,
+                    detail="Execution boundary unverified; worktree capture refused. "
+                           "Inspect and recover invocation ownership before resuming.",
+                    consumed_input_ids=frozenset(),
+                )
+            except Exception:
+                log.exception("task %s containment failed and its blocked hold could not be recorded",
+                              task_id)
+                raise
+            return task_id
+
+    def _run_owned_turn(self, task_id: TaskId, opened_at: str) -> TaskId:
         """Execute cognition for this slice; close it with its disposition."""
         task = self.state.tasks.get(task_id)
         repository = self.repositories[task.repository]
@@ -401,7 +442,9 @@ class TaskRunner:
             )
             self._answer_query(task_id)
 
-        except (RuntimeExecutionError, RuntimeUnavailable) as error:
+        except (RuntimeExecutionError, RuntimeUnavailable, ExecutionBoundaryUnavailable) as error:
+            if _boundary_failed(error):
+                raise
             # The adapter binds the native session mid-execution, so read the
             # lineage the execution ended on.
             session = self.state.get_conversation(task.session_id).provider_session_id
@@ -435,6 +478,8 @@ class TaskRunner:
                     task, opened_at, str(error) or type(error).__name__
                 )
         except (WorktreeError, WorktreeCheckpointError, GitTransportError, OSError) as error:
+            if _boundary_failed(error):
+                raise
             self._autosave_and_interrupt(task, opened_at, str(error))
 
         return task_id
@@ -454,8 +499,10 @@ class TaskRunner:
                 disposition=CheckpointDisposition.BLOCKED.value,
                 reason=reason,
             )
-        except Exception:
-            pass
+        except Exception as error:
+            if _boundary_failed(error):
+                raise
+            log.exception("task %s autosave failed; partial files remain uncheckpointed", task.task_id)
 
     def _autosave_and_interrupt(
         self, task: Task, opened_at: str, reason: str
@@ -525,7 +572,7 @@ class TaskRunner:
         def session_invalidated(provider: str) -> None:
             # Nothing left to resume under this provider: the same bind with
             # no session, which is what makes the generation move.
-            nonlocal execution_generation
+            nonlocal execution_generation, execution_provider
             try:
                 lineage = self.state.bind_conversation_provider(
                     task.session_id, provider, None,
@@ -535,6 +582,7 @@ class TaskRunner:
                 return
             else:
                 execution_generation = lineage.generation
+                execution_provider = lineage.provider
 
         # The slice has no identity of its own until it commits, and needs
         # none: this names the task, and the lock already refuses a second
@@ -572,6 +620,8 @@ class TaskRunner:
             )
         request = CognitionRequest(
             execution_id=execution_id,
+            native_owner=str(task.session_id),
+            native_generation=lambda provider: execution_generation + (provider != execution_provider),
             profile=lineage.profile,  # type: ignore[arg-type]
             prompt=build_task_prompt(
                 task.title,
@@ -708,7 +758,9 @@ class TaskRunner:
         try:
             result = run_agent_git(self.broker, "rev-parse", "--verify", f"refs/heads/{task.branch}",
                                    cwd=repository.path, timeout=60)
-        except OSError:
+        except OSError as error:
+            if _boundary_failed(error):
+                raise
             return task.work_sha
         if result.returncode:
             return task.work_sha
