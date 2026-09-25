@@ -396,9 +396,8 @@ class ConversationService:
                 cwd=(worktree.path if worktree else self._workspace.world.root
                      if isinstance(self._workspace, WorldTurnCheckpoint) else self._workspace),
                 timeout_seconds=self._timeout_seconds,
-                # A configured model belongs to one provider; it has no fallback.
-                provider_order=((cast(ProviderFamily, conversation.provider),) if model
-                                else self._order_from(conversation.provider)),
+                # A configured model pins only this provider; fallbacks run their own.
+                provider_order=self._order_from(conversation.provider),
                 model=model,
                 provider_session_id=conversation.provider_session_id,
                 session_provider=cast(ProviderFamily, conversation.provider)

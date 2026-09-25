@@ -422,6 +422,10 @@ class ProviderConfig(BaseModel):
         """Ordered automatic provider policy, primary first."""
         return (self.default_family, *self.fallback_families)
 
+    def led_by(self, primary: str) -> tuple[ProviderFamily, ...]:
+        """The same policy with one preferred provider moved to the front."""
+        return (primary, *(family for family in self.family_order if family != primary))  # type: ignore[return-value]
+
 
 class WorldConfig(BaseModel):
     """Configured Git-world cognitive storage."""

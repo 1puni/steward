@@ -77,6 +77,11 @@ captures the complete source-to-revision map alongside that checkout's candidate
 and base. Its event identity derives from those inputs, so unchanged ticks do
 not create more tasks. A completed failure verdict is still consumed evidence.
 Manual requests remain explicit new work, and unfinished runs prevent overlap.
+A blocked run is not unfinished in that sense: nothing retries it, so the
+rhythm's next firing cancels it as superseded and starts a fresh run. A
+procedure's `provider` and `model` name a preference, not a pin: its run leads
+with that provider and falls back through `provider.family_order`, each
+fallback using its own configured model for the profile.
 
 The controller measures elapsed quiet using its monotonic observation clock,
 not author or committer dates. Its first observation establishes a baseline and

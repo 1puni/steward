@@ -45,6 +45,7 @@ class CognitionRequest:
     # The accepted lineage owns storage, not a turn id or a checkout path.
     native_owner: str | None = None
     native_generation: Callable[[ProviderFamily], int] = lambda _provider: 1
+    # Pins the model of the first provider in `provider_order` only.
     model: ModelChoice | None = None
     provider_session_id: str | None = None
     session_provider: ProviderFamily | None = None
@@ -176,8 +177,11 @@ class Cognition:
                     if request.session_provider == provider
                     else None
                 )
+                # A pinned model names one provider's model; a fallback runs
+                # its own configured model for the profile.
+                pinned = request.model is not None and provider == request.provider_order[0]
                 resolved = resolve_model(provider, request.profile,
-                    {provider: {request.profile: request.model}} if request.model else self._custom_models)
+                    {provider: {request.profile: request.model}} if pinned else self._custom_models)
                 def execute(provider_session_id: str | None) -> tuple[RuntimeRequest, RuntimeResult]:
                     started_session: str | None = None
 

@@ -182,9 +182,16 @@ class Procedures:
                     continue
             # Cancellation ends recurrence's obligation once native execution
             # has stopped. Holds and reopened idle slices still prevent overlap.
-            if any(task.procedure and task.procedure.event.startswith(prefix)
-                   and task.status not in {TaskStatus.DONE, TaskStatus.CANCELLED} for task in tasks):
+            # A blocked run is not running, and nothing retries it: the
+            # rhythm's next firing supersedes it rather than waiting forever.
+            open_runs = [task for task in tasks if task.procedure
+                         and task.procedure.event.startswith(prefix)
+                         and task.status not in {TaskStatus.DONE, TaskStatus.CANCELLED}]
+            if any(task.status is not TaskStatus.BLOCKED or task.procedure.event == event
+                   for task in open_runs):
                 continue
+            for task in open_runs:
+                self.state.tasks.cancel(task.task_id, f"superseded by {event}")
             if snapshot is None:
                 repository, candidate, base = resolve_input(rhythm.input, self.transports)
             else:

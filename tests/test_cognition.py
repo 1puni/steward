@@ -619,3 +619,16 @@ def test_missing_session_recomputes_native_generation_before_retry(tmp_path):
     assert [(r.native_owner, r.native_generation) for r in adapter.requests] == [
         ('retained-owner', 7), ('retained-owner', 8),
     ]
+
+
+def test_pinned_model_stays_with_its_provider_and_fallback_runs_its_own(tmp_path):
+    codex = FakeAdapter("codex", available=False)
+    claude = FakeAdapter("claude")
+    result = Cognition(
+        {"codex": codex, "claude": claude},
+        custom_models={"claude": {"balanced": "claude-configured"}},
+    ).run(_request(tmp_path, provider_order=("codex", "claude"),
+                   model=ModelChoice(model="codex-pinned")))
+
+    assert result.resolved.provider == "claude"
+    assert claude.requests[0].resolved.model == "claude-configured"

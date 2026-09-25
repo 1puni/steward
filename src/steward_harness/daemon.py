@@ -591,7 +591,8 @@ class StewardDaemon:
                 profile=self.config.provider.default_profile,
                 prompt=prompt, cwd=turn.worktree,
                 timeout_seconds=self.config.provider.timeout_seconds,
-                provider_order=(procedure.provider,) if procedure else self.config.provider.family_order,
+                provider_order=self.config.provider.led_by(procedure.provider) if procedure
+                    else self.config.provider.family_order,
                 model=procedure.model if procedure else None,
                 sandbox_mode="workspace-write"))
 

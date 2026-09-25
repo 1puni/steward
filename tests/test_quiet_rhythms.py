@@ -426,3 +426,48 @@ def test_failed_quiet_sample_does_not_skip_healthy_interval_rhythm(tmp_path):
     assert state.tasks.read(task)[1].procedure.event == "rhythm:interval:1"
     assert len(state.tasks.all()) == 1
     assert procedures._quiet == {}
+
+
+def test_procedure_run_falls_back_through_the_canonical_provider_order(tmp_path):
+    _, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    # The procedure prefers a provider that cannot run; the canonical
+    # fallback order still reaches one that can, with that provider's model.
+    config.procedures["security-one"] = config.procedures["security-one"].model_copy(
+        update={"provider": "codex"})
+    runner.provider_fallbacks = ("claude",)
+    config.rhythms["interval"] = ProcedureRhythmConfig(
+        owner=None, schedule=100, procedure="security-one", input="repositories/app/main")
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    assert state.tasks.get(task).status.value == "done"
+    assert adapter.requests[-1].resolved.provider == "claude"
+    assert adapter.requests[-1].resolved.model != "model-one"
+
+
+def test_blocked_rhythm_run_is_superseded_by_the_next_interval(tmp_path):
+    _, state, runner, config, procedures, _ = quiet_harness(tmp_path)
+    config.rhythms["interval"] = ProcedureRhythmConfig(
+        owner=None, schedule=100, procedure="security-one", input="repositories/app/main")
+    procedures.advance_rhythms(now=100)
+    blocked = state.tasks.queued()[0]
+    state.tasks.hold(blocked, "blocked", "No provider can satisfy this turn")
+    # The same interval does not re-fire or clear the evidence of its block.
+    procedures.advance_rhythms(now=150)
+    assert [t.status.value for t in state.tasks.all()] == ["blocked"]
+    procedures.advance_rhythms(now=200)
+    assert state.tasks.get(blocked).status.value == "cancelled"
+    assert state.tasks.get(blocked).reason == "superseded by rhythm:interval:2"
+    fresh = state.tasks.queued()[0]
+    assert fresh != blocked
+    assert state.tasks.read(fresh)[1].procedure.event == "rhythm:interval:2"
+
+
+def test_a_running_or_waiting_rhythm_run_still_prevents_overlap(tmp_path):
+    _, state, runner, config, procedures, _ = quiet_harness(tmp_path)
+    config.rhythms["interval"] = ProcedureRhythmConfig(
+        owner=None, schedule=100, procedure="security-one", input="repositories/app/main")
+    procedures.advance_rhythms(now=100)
+    queued = state.tasks.queued()[0]
+    procedures.advance_rhythms(now=200)
+    assert [str(t.task_id) for t in state.tasks.all()] == [str(queued)]
