@@ -29,24 +29,24 @@ def test_anthropic_router_endpoints_are_validated() -> None:
     assert ProviderConfig().glm_anthropic_base_url == "https://api.z.ai/api/anthropic"
 
     routed = ProviderConfig(
-        glm_anthropic_base_url="https://api.cheaperinference.com",
-        claude_anthropic_base_url="https://api.cheaperinference.com",
-        claude_credential_path="/etc/steward/cheaperinference-token",
+        glm_anthropic_base_url="https://gateway.example.com",
+        claude_anthropic_base_url="https://gateway.example.com",
+        claude_credential_path="/etc/steward/gateway-token",
     )
-    assert routed.glm_anthropic_base_url == "https://api.cheaperinference.com"
+    assert routed.glm_anthropic_base_url == "https://gateway.example.com"
 
     with pytest.raises(ValidationError, match="https"):
-        ProviderConfig(glm_anthropic_base_url="http://api.cheaperinference.com")
+        ProviderConfig(glm_anthropic_base_url="http://gateway.example.com")
     with pytest.raises(ValidationError, match="https"):
         ProviderConfig(
-            claude_anthropic_base_url="http://api.cheaperinference.com",
-            claude_credential_path="/etc/steward/cheaperinference-token",
+            claude_anthropic_base_url="http://gateway.example.com",
+            claude_credential_path="/etc/steward/gateway-token",
         )
     with pytest.raises(ValidationError, match="together"):
-        ProviderConfig(claude_anthropic_base_url="https://api.cheaperinference.com")
+        ProviderConfig(claude_anthropic_base_url="https://gateway.example.com")
     with pytest.raises(ValidationError, match="bounded absolute"):
         ProviderConfig(
-            claude_anthropic_base_url="https://api.cheaperinference.com",
+            claude_anthropic_base_url="https://gateway.example.com",
             claude_credential_path="relative-token",
         )
 
