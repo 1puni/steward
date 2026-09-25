@@ -1,116 +1,150 @@
 # Durable understanding during native work
 
-Agreed direction, 2026-09-23. This is the initial implementation brief and
-acceptance baseline, not a claim that the behavior is already implemented.
+A native task may work for days, with its own subagents and tools. Its
+understanding should become durable *while* it works, not only when it stops.
+Nobody should have to kill a perfectly healthy agent just to find out what it
+has figured out.
 
-## Objective
+So three things stay separate: accepting what the agent understands, ending its
+native execution, and authorising publication. The controller does not invent
+a stopping point to get the first one, and getting the first one grants neither
+of the others.
 
-A native task may work for days with its own subagents and tools. Steward needs
-its understanding and decisions to become durable throughout that work. It does
-not need the agent to stop merely to produce a tick or a decision log.
+## One offer, one acceptance path
 
-Separate three boundaries: accepting understanding, ending native execution,
-and authorizing publication. Controller polling observes and derives work; it
-does not manufacture a semantic stopping point. A clock can motivate observation
-or a request for an update. Routine task continuity must not depend on timed
-interruption, process teardown, autosave and resume.
+The prompt carries the canonical accepted account from task Git. When the
+running native parent has something worth keeping, it consolidates a revised
+account and **offers** it:
 
-## The account and its owner
+```text
+blob = git hash-object -w --stdin   # "Steward-Base: <accepted revision>\n\n<account body>"
+git update-ref refs/steward/understanding/<task-id> <blob>
+```
 
-The existing Git task document remains the canonical account. Useful updates
-explain current understanding, decisions and rationale, supporting evidence,
-unresolved questions, delegated investigations still running, and what should
-happen next if execution is lost. Do not require a new rigid taxonomy for prose
-the existing document can already express.
+- **Representation.** The offer is an immutable Git blob in the task's own
+  repository, holding exactly two things: the accepted revision it builds on, and
+  the Markdown body. Its object ID is its identity. Frontmatter is rejected, so
+  task authority cannot be offered. The ref is only routing: re-pointing it makes
+  a new offer, and it confers nothing.
+- **Observation.** Each running non-procedure turn has one offer watcher, a thread
+  that lives exactly as long as the turn. Every `controller.poll_seconds` it
+  resolves the ref through the untrusted execution broker. On a new value it
+  reads the object with one bounded read (at most 256 KiB), proves the bytes hash
+  to the object ID it was given (Git does not re-hash on read, and the object
+  database is agent-writable), and parses the header and a nonblank body. Nothing
+  in an offer selects a path, helper or command.
+- **Acceptance.** Under the existing store lease, with the same compare-and-swap
+  as every task decision: an offer already accepted on the decision line replays
+  its original revision and writes nothing; a task that is `proposed`, `blocked`
+  or `cancelled` refuses; a base that is not the current accepted tip refuses;
+  otherwise the body is committed with the task Definition copied unchanged. The
+  commit's subject is `accept understanding` and its only trailer is
+  `Steward-Offer`.
+- **Acknowledgement.** Every evaluated offer is answered over the turn's existing
+  live-input channel: *accepted* (with the revision to build on next), *refused*
+  (with the reason, and for a stale offer the accepted text the parent has not
+  seen yet), or *not evaluable* (sent once; the offer is retried each poll). A
+  reply counts as delivered only when the provider reports the input accepted.
 
-The native parent owns consolidation. Child findings are evidence for it, not
-independent authority for the controller to rewrite the task. Steward accepts
-explicit proposals; it does not infer decisions from tool chatter or heartbeats.
-Silence means the last accepted account is old, not that the task has failed.
+Writing the ref proves nothing. Delivering a message proves nothing. The accepted
+revision in task Git is the only acknowledgement recovery relies on.
 
-## Required live handoff
+The cost is honest polling: one broker `rev-parse` per running task per poll.
+Under Linux host ownership each is a transient unit, roughly 17,000 per task per
+day at the default five seconds. Raise `controller.poll_seconds` if you would
+rather trade acknowledgement latency for fewer launches.
 
-The parent offers an explicit immutable version of its task account while its
-native turn remains active. Steward validates and retains that version in the
-existing accepted Git history, then acknowledges acceptance with an identity
-that recovery can rely on. Reuse existing task authorship and concurrency rules.
+### Stale offers
 
-Accepting this account must not stage arbitrary product files, move the native
-worktree's HEAD or index, terminate children, consume unrelated operator input,
-change protected task authority, or make a publication eligible. The account
-update does not certify that a concurrently edited product tree is coherent.
-It must not overwrite a concurrent operator edit, withdrawal, or newer accepted
-understanding. Failed or conflicting acceptance must be visible; a request or a
-local file write is not an acknowledgement.
+Anything accepted since the offer's base makes it stale: an operator note, answer,
+cancellation, body edit, or another accepted offer. The refusal carries the current
+account, the operator input the parent has not seen, and the new revision. The
+parent reconciles and offers again. An offer can never overwrite something it has
+not read.
 
-Native commits and artifacts remain deliberate work retention. Native session
-records remain recovery context. Neither an accepted account nor a saved session
-ID promises that killed processes or unwritten child state can be reconstructed.
+## What acceptance does not do
 
-## Execution and closure
+- It does not stage, commit or read product files, or move the native `HEAD` or
+  index. The offer comes from the object database, not the worktree.
+- It does not stop, signal or wait for the parent or its children.
+- It does not consume or reorder operator input.
+- It does not change any Definition field (`hold`, `work`, `repository`, `owner`
+  and friends).
+- It does not make publication eligible, and it does not certify that a
+  concurrently edited product tree is coherent.
 
-Allow ongoing task cognition to outlive the ordinary provider turn deadline.
-Do not replace it with a larger arbitrary timer or an automatic restart loop.
-Keep finite limits on genuinely finite external operations, and keep explicit
-operator cancellation and emergency containment distinct from continuity.
-State precisely which execution kinds retain deadlines; do not silently change
-gates, deployments, probes or interactive conversation policy.
+Natural closure still produces `continue`, `ask` or `idle`, and publication still
+needs settled work, exact-input gates and the ordinary authority checks.
 
-Natural native completion can still produce the existing continue/ask/idle
-closure. Publication still requires the existing settled-work, exact-input gate
-and authority checks. Live acceptance supplies no substitute for those checks.
-The parent need not recall working children just to record understanding.
-Existing Linux process ownership must still contain work after controller death.
+## Who owns the account
 
-## Smallest sufficient implementation
+The native parent owns consolidation, by protocol: the prompt tells it to fold in
+its subagents' findings before offering. That is not an OS distinction. Parent and
+children share the execution identity and any of them can write the ref, so every
+offer is untrusted input. There is no child registry.
 
-Use Git, the task document, existing acceptance operations and native input/output
-boundaries. Select one explicit proposal representation and one acceptance path.
-Avoid a progress database, event-bus framework, general scheduler, independent
-child registry, hidden periodic commits, or parallel task state machine. An
-ephemeral routing mechanism may transport a proposal; it must not become a
-second durable authority. Document any new primitive and why existing ones
-cannot provide its invariant.
+Worktrees of the same repository share the ref namespace, so another task's agent
+could in principle offer into this task. Acceptance still grants no authority and
+the body stays in history, reviewable and revisable. It is the same exposure as
+that agent writing this task's branch today, and nothing here pretends otherwise.
 
-## Acceptance evidence
+## Recovery
 
-The primary journey is a running native parent with a child actively working.
-The parent offers a meaningful understanding update; Steward accepts it and
-acknowledges it while both processes remain alive. Product files can still be
-mid-edit and are not swept into the account update. An operator can inspect the
-accepted account while the task still runs. A fresh controller/store recovers
-that account after the original execution is lost, without claiming the child
-survived. Later natural closure still follows ordinary gates and publication.
+- **Crash after acceptance, before the acknowledgement.** The body and its
+  `Steward-Offer` trailer are in task Git. A fresh controller reads the account
+  from Git alone, and if the ref still points at the same blob the first pass
+  replays it with the original revision.
+- **Execution loss.** Killed processes and unwritten child state are not
+  reconstructed. The accepted account is what the parent had consolidated;
+  native commits and session records keep their ordinary roles.
 
-Also establish:
+## Deadlines, cancellation and shutdown
 
-- Duplicate offers do not produce duplicate accepted decisions.
-- A stale or conflicting offer cannot erase operator changes or cancellation.
-- Malformed offers and attempted authority changes fail without killing healthy
-  native work or granting publication.
-- Healthy task work continues past the former routine deadline with its child
-  alive; explicit cancellation still works and containment still holds.
-- Both built-in native adapter paths can perform the handoff, or any unsupported
-  path is stated explicitly rather than silently claiming provider neutrality.
-- Acceptance is visible through existing task inspection, including the operator
-  surface when configured; no new reporting subsystem is necessary.
+Ordinary task cognition has **no routine deadline**. It ends at natural closure,
+operator cancellation, controller shutdown or containment. There is no bigger
+timer and no restart loop. Everything else keeps its bound: procedure runs and
+conversation turns use `provider.timeout_seconds`; gates, probes, deployments and
+target drivers use their own; workspace preparation has a finite setup bound.
 
-Use real process/adapter fixtures and native Linux ownership checks where they
-establish the boundary. Test totals alone do not prove this journey.
+`/task cancel` commits the withdrawal and sends a native interrupt, allows a
+ten-second cooperative grace, then applies process-group or Linux ownership
+containment. Controller shutdown asks every running task to end through the same
+path, and an interrupted slice is checkpointed as a continuation. The drain is
+bounded by grace plus containment, not by the task.
 
-## Independent review and server execution
+Two consequences, stated plainly:
 
-An independent reviewer checks the implementation against this initial brief and
-the [engineering doctrine](engineering-doctrine.md), especially authority,
-representation, failure boundaries and unnecessary mechanisms. Keep the initial
-requirements distinguishable from subsequent implementation and evidence notes;
-do not rewrite the requirements merely to fit the result.
+- A days-long task holds one `controller.workers` slot the whole time. Eight long
+  tasks occupy eight slots. That is the budget working. The answer is operator
+  policy, not preemption.
+- A controller restart interrupts every running task turn. Continuity across an
+  upgrade comes from the accepted account, retained work and the native session,
+  not from processes surviving.
 
-The user authorized moving this work to a separate server workspace so it can
-continue without the laptop connection, optionally with operator Telegram
-check-ins. Use a uniquely named, isolated workspace and durable server-side logs.
-Do not replace or restart the live steward as part of setting up development.
-Never reuse or remove existing test projects, state stores, containers or volumes.
-Record the host, workspace, supervisor/session identity, check-in route, and
-actual start/verification status. A copied brief or a running shell is not proof
-that an autonomous worker is making progress.
+## Provider support
+
+Both built-in adapters acknowledge over their existing live-input channel: Claude
+Code's stream-json input via `command_lifecycle`, Codex App Server via
+`turn/steer`. GLM uses the Claude path. The offer itself is plain Git, so it works
+wherever the agent can write its repository's objects and refs.
+
+- A provider without live input gets no acknowledgement; it records understanding
+  at closure only.
+- On Claude, input queued after a result starts another native turn, so an
+  acknowledgement can cost one extra turn.
+- Without a dropped execution identity, Codex sandboxing may protect `.git` inside
+  writable roots, which would stop offers and native commits alike. Unverified.
+
+## Evidence
+
+[`test_live_understanding.py`](../tests/test_live_understanding.py) drives real Git,
+a real child process and the per-turn watcher: acceptance and replay, stale offers
+against notes, body rewrites and cancellation, malformed and tampered offers, and a
+lost acknowledgement recovered by a fresh controller, all while the child's
+heartbeat keeps advancing and `HEAD`, index and dirty files stay put.
+[`test_live_understanding_adapters.py`](../tests/test_live_understanding_adapters.py)
+runs the same handoff through the real Claude and Codex adapter classes against fake
+native executables. [`test_unbounded_task_turns.py`](../tests/test_unbounded_task_turns.py)
+covers work past the former deadline, cancellation and shutdown. Linux host
+ownership (`tests/test_host_ownership.py`) needs root on a provisioned host and
+skips everywhere else.

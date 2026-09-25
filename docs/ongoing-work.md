@@ -428,7 +428,7 @@ Be clear about these before you design a body of work around the harness.
 
 - [Execution lifecycle](execution-lifecycle.md) — closure syntax, status
   precedence, continuation and cancellation in detail.
-- [Rhythms invoke procedures](rhythms-direction.md) — the procedure/rhythm/target
+- [Rhythms invoke procedures](rhythms.md) — the procedure/rhythm/target
   roles and their evidence boundaries.
 - [Kernel contract](kernel-contract.md) — who owns what authority, and what is
   deliberately absent.

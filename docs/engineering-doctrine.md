@@ -1,604 +1,335 @@
-# Steward Engineering Doctrine
+# Engineering doctrine
 
-This repository should be approached as if its primary engineer values structural understanding over implementation volume, explicit invariants over defensive branching, and minimal semantic surface area over architectural cleverness.
+This is how the harness is built, and how anything working on it, human or
+model, is expected to think. It is opinionated on purpose. Parts of it
+contradict conventional "best practice", and they mean to. Do not quietly
+swap the common habit back in because it feels safer. It isn't. It is just
+more familiar.
 
-The steward is expected to reason accordingly.
+> The smallest system that correctly represents reality is usually the most
+> robust one.
 
-## Core Principle
+Complexity is not robustness. Generality is not robustness. Defensive code is
+not automatically robustness, and an abstraction is not automatically
+architecture. Every concept you add has a cost, so it carries the burden of
+proof.
 
-Do not model the mess.
+## Do not model the mess
 
 Model the structure that generated the mess.
 
-The objective is not to faithfully reproduce accidental complexity. The objective is to understand the underlying system well enough that unnecessary complexity disappears.
+The goal is not to reproduce accidental complexity faithfully. The goal is to
+understand the underlying system well enough that the unnecessary complexity
+disappears. A good solution feels more inevitable the better you understand
+the problem. If it feels more *clever*, be suspicious.
 
-A good solution should feel increasingly inevitable as understanding improves.
+Here is the test we like best. Write the whole machine as pseudocode, without
+borrowing a single class, module or table name from the implementation. For
+this harness it comes out at roughly a hundred lines: observe, derive the
+desired state, execute, verify, commit. Now compare that with what is
+actually implemented. Fifteen thousand lines implementing fifteen thousand
+lines' worth of irreducible behaviour is fine. Fifteen thousand lines
+implementing a hundred lines of idea is entropy.
 
-The operator's September 8 direction is roughly **1,000 lines of harness code
-in total**. Treat this as a constraint on responsibilities and supported uses.
-Remove mechanisms by narrowing the problem and giving native providers clear
-boundaries and guidance. Moving code between modules, compressing syntax, or
-outsourcing the same complexity to another harness does not meet that direction.
-The current implementation remains far above the target; incremental cleanup is
-not evidence that the architectural reduction is complete.
+And the uncomfortable corollary: **if 90% of a system is translating the same
+underlying data into different shapes, the ratio itself tells you the system is
+broken.** Nobody wrote that on purpose. It is what overzealous writing without
+understanding looks like once it has had a few months to compound.
 
----
+## Twelve principles
 
-## 1. Find the Natural Taxonomy First
+### 1. Find the natural taxonomy first
 
-Before implementing a solution, identify what kinds of things actually exist in the problem.
+Before you implement anything, find out what kinds of things actually exist in
+the problem. What are the fundamental entities? Which distinctions between them
+are real, and which were invented by the current code? What belongs at the same
+level, and what does not?
 
-Ask:
+Existing code is evidence, not truth. If the problem has five meaningful ideas
+and the implementation exposes fifty equally important concepts, assume the
+abstraction is wrong until proven otherwise.
 
-- What are the fundamental entities?
-- What are the meaningful distinctions between them?
-- Which distinctions are real, and which are artifacts of the current implementation?
-- What relationships exist between the entities?
-- What hierarchy naturally emerges?
-- What belongs at the same conceptual level, and what does not?
+### 2. Reduce the state space before handling edge cases
 
-Do not begin by copying the structure of existing code.
+For every branch and edge-case handler, ask: *can this situation physically or
+logically occur, given the system's invariants?* If it cannot, delete the state
+instead of handling it.
 
-Existing code is evidence, not truth.
+Prefer impossible states made unrepresentable, invalid transitions structurally
+prevented, narrower types, narrower interfaces and smaller authority surfaces
+over ever more sophisticated defensive logic. Robustness comes mostly from
+reducing what the system is *capable* of doing wrong.
 
-The implementation hierarchy should eventually reflect the information hierarchy of the actual problem.
+### 3. Complexity must justify itself
 
-If the conceptual model contains five meaningful ideas and the implementation exposes fifty equally important concepts, assume the abstraction is wrong until proven otherwise.
-
----
-
-## 2. Reduce the State Space Before Handling Edge Cases
-
-Do not immediately write code for every imaginable combination of states.
-
-First establish which states are actually possible.
-
-For every proposed branch or edge-case handler, ask:
-
-> Can this situation physically or logically occur given the system's invariants?
-
-If not, remove the state rather than handling it.
-
-Prefer:
-
-- impossible states made unrepresentable,
-- invalid transitions structurally prevented,
-- invariants enforced at boundaries,
-- narrower types,
-- narrower interfaces,
-- smaller authority surfaces,
-
-over increasingly sophisticated defensive logic.
-
-Robustness should primarily come from reducing what the system is capable of doing incorrectly.
-
----
-
-## 3. Complexity Must Justify Itself
-
-Complexity is not proof of sophistication.
-
-Complexity is a cost.
-
-Large implementations, extensive branching, deeply layered abstractions, numerous configuration paths, and broad interfaces should therefore be treated with suspicion.
-
-When code becomes large or difficult to reason about, do not first ask how to organize the complexity.
-
-Ask whether the complexity should exist.
-
-The default investigation is:
-
-1. Is the problem incorrectly modeled?
-2. Are impossible cases being represented?
-3. Are two concepts actually one?
-4. Is one concept incorrectly serving several unrelated roles?
-5. Is historical baggage being mistaken for a requirement?
-6. Is the implementation reproducing the shape of an earlier implementation rather than the shape of the problem?
-7. Can an invariant replace a branch?
-8. Can a constraint replace an instruction?
-9. Can an entire subsystem be deleted?
+When code becomes hard to reason about, do not first ask how to organise the
+complexity. Ask whether it should exist. Is the problem modelled wrongly? Are
+impossible cases being represented? Are two concepts actually one? Is one
+concept doing several unrelated jobs? Is historical baggage posing as a
+requirement? Is the code reproducing the shape of an earlier implementation
+rather than the shape of the problem? Can an invariant replace a branch, a
+constraint replace an instruction, a deletion replace a subsystem?
 
 Do not refactor bloat into more aesthetically pleasing bloat.
 
----
+### 4. Keep essential complexity, attack the accidental kind
 
-## 4. Distinguish Essential Complexity From Accidental Complexity
+Some complexity belongs to reality: real concurrency, external failure modes,
+protocol semantics, distributed state, security boundaries. Keep it. Pretending
+it away is not simplification, it is a bug with good manners.
 
-Some complexity belongs to reality.
+Everything else, attack: duplicated representations, adapters between things
+that should already speak the same language, speculative abstractions,
+defensive handling of impossible states, configuration that configures
+configuration, and wrappers with no semantic responsibility. The goal is not
+minimal code at any cost. It is minimal *accidental* complexity.
 
-Preserve it.
+### 5. Prefer invariants over instructions
 
-Examples include:
+If something must never happen, do not rely on documentation, convention,
+prompts or discipline to prevent it. Make it structurally impossible.
+Permissions over warnings. Schemas over prose. Types over comments. Separate
+processes over behavioural instructions. A rule that has to be remembered is
+weaker than a system that cannot break it.
 
-- genuine concurrency,
-- external failure modes,
-- protocol semantics,
-- physical constraints,
-- regulatory distinctions,
-- distributed state,
-- real security boundaries.
-
-Do not "simplify" these away by pretending they do not exist.
-
-Other complexity exists only because of implementation choices.
-
-Attack it aggressively.
-
-Examples include:
-
-- duplicated representations,
-- unnecessary adapters,
-- speculative abstractions,
-- defensive handling of impossible states,
-- configuration that configures configuration,
-- wrapper layers without semantic responsibility,
-- indirection introduced only because an earlier architecture required it.
-
-The goal is not minimal code at any cost.
-
-The goal is minimal accidental complexity.
-
----
-
-## 5. Prefer Invariants Over Instructions
-
-If something must never happen, do not rely primarily on documentation, convention, prompts, or developer discipline to prevent it.
-
-Encode the prohibition structurally.
-
-Prefer:
-
-- permissions over warnings,
-- schemas over prose,
-- validation over expectation,
-- types over comments,
-- isolated processes over behavioral instructions,
-- explicit transitions over arbitrary mutation,
-- narrow APIs over "please only use these methods correctly."
-
-A rule that must repeatedly be remembered is weaker than a system that makes violating the rule impossible.
-
----
-
-## 6. Separate Intelligence From Authority
-
-Reasoning capability and execution authority are different things.
-
-Keep them separate.
-
-The steward may reason broadly.
-
-Its authority should remain narrow, explicit, and externally enforced.
-
-The governing principle is:
+### 6. Separate intelligence from authority
 
 > The model proposes. The harness disposes.
 
-The steward should not weaken deterministic controls merely because the model is capable of reasoning about them.
-
-Security boundaries, validation, permissions, test gates, repository protections, deployment controls, and similar mechanisms belong outside the model's discretionary authority.
-
-Intelligence should operate inside strong boundaries, not replace them.
-
----
-
-## 7. Decompose by Semantic Responsibility
-
-Do not split systems merely by file size, syntax, framework conventions, or arbitrary layering.
-
-A component deserves to exist when it owns a coherent concept, responsibility, invariant, or transition.
-
-Good decomposition lets a human understand one piece without loading the entire repository into working memory.
-
-Bad decomposition creates many files while leaving the conceptual coupling untouched.
-
-Prefer components that can be described in one precise sentence.
-
-If a component requires a paragraph of unrelated conjunctions to explain what it does, investigate whether it contains multiple responsibilities.
-
----
-
-## 8. Search Upstream for Shared Causes
-
-When several symptoms appear, do not assume several independent bugs.
-
-Search the dependency graph upward.
-
-Ask:
-
-> What is the smallest upstream cause capable of explaining the largest number of downstream observations?
-
-Prefer root-cause explanations over symptom-specific patches.
-
-This applies to:
-
-- bugs,
-- architecture,
-- data models,
-- configuration,
-- test failures,
-- operational failures,
-- security issues,
-- performance problems.
-
-Several awkward implementations often indicate one incorrect abstraction.
-
-Several failures often indicate one broken invariant.
-
----
-
-## 9. Derive Architecture From Constraints
-
-Do not begin with architecture patterns.
-
-Begin with facts.
-
-Identify:
-
-- external constraints,
-- physical constraints,
-- trust boundaries,
-- ownership,
-- lifecycle,
-- information flow,
-- irreversible actions,
-- failure domains,
-- latency requirements,
-- persistence requirements,
-- concurrency guarantees,
-- protocol guarantees.
-
-Then derive the architecture.
-
-Patterns may be useful after the constraints are understood.
-
-They are not substitutes for understanding.
-
----
-
-## 10. Make the Representation Do the Work
-
-Choose data structures, types, state machines, schemas, and interfaces that make correct behavior natural.
-
-A good representation should eliminate code.
-
-If large amounts of logic are required merely to interpret or repair the representation, reconsider the representation.
-
-Prefer canonical internal forms.
-
-Avoid maintaining several partially overlapping representations of the same underlying fact unless there is a strong boundary reason.
-
-Derived information should remain derived whenever practical.
-
-Do not persist complexity that can be reconstructed cheaply and deterministically.
-
----
-
-## 11. Implementation Comes After Understanding
-
-Do not equate activity with progress.
-
-Writing code before the problem has been reduced often creates work that later has to be undone.
-
-Before substantial implementation, the steward should be able to explain:
-
-- what the problem fundamentally is,
-- what the important entities are,
-- what the invariants are,
-- what states are possible,
-- what states are impossible,
-- where authority lives,
-- where trust changes,
-- what failure modes genuinely exist,
-- why the proposed abstraction matches the problem.
-
-Once those are clear, implementation should become comparatively unsurprising.
-
-Prefer boring implementations built on strong models.
-
----
-
-## 12. Delete Aggressively, But With Proof
-
-Deletion is a first-class engineering operation.
-
-When changing a system, explicitly look for things that can disappear:
-
-- branches,
-- abstractions,
-- types,
-- configuration,
-- services,
-- states,
-- dependencies,
-- wrappers,
-- background workers,
-- retry paths,
-- compatibility layers,
-- duplicated data.
-
-But deletion must follow understanding.
-
-Do not remove complexity merely because it looks ugly.
-
-Establish why it is unnecessary.
-
-The standard is not fewer lines.
-
-The standard is fewer concepts without loss of required behavior.
-
----
-
-## 13. Do Not Add Generality Without Evidence
-
-Do not design for hypothetical futures at the expense of present understanding.
-
-Avoid:
-
-- speculative plugin systems,
-- generic abstraction layers before multiple real implementations exist,
-- configuration for cases with no demonstrated requirement,
-- interfaces designed around imagined future consumers,
-- catch-all types,
-- extensibility mechanisms with no concrete second use case.
-
-Solve the actual class of problem currently established.
-
-Generalize only when multiple real instances reveal the shared structure.
-
----
-
-## 14. Treat Existing Code Adversarially
-
-Existing behavior may be required.
-
-Existing structure is not automatically required.
-
-When modifying legacy code, distinguish carefully between:
-
-- externally observable behavior,
-- genuine invariants,
-- accidental implementation details,
-- historical workarounds,
-- obsolete assumptions.
-
-Preserve what must remain true.
-
-Do not preserve complexity merely because it already exists.
-
-Every existing abstraction must earn its continued existence.
-
----
-
-## 15. Optimize for Global Reasonability
-
-Local elegance is insufficient.
-
-A helper can be elegant while the system is incoherent.
-
-A perfectly abstracted subsystem can still be unnecessary.
-
-Evaluate decisions at repository scale.
-
-Ask:
-
-- Does this reduce or increase the number of concepts in the whole system?
-- Does this make global behavior easier to understand?
-- Does this introduce another source of truth?
-- Does this create another lifecycle?
-- Does this widen authority?
-- Does this create another place state can diverge?
-- Does this simplify the repository, or merely move complexity elsewhere?
-
-Prefer global simplification over local neatness.
-
----
-
-## 16. Tests Should Protect Invariants, Not Fossilize Implementations
-
-Tests should primarily establish externally meaningful behavior and important invariants.
-
-Avoid tests whose only purpose is to preserve incidental implementation structure.
-
-Good tests make refactoring safer.
-
-Bad tests make improvement harder by encoding accidental details as requirements.
-
-A passing suite must state what it establishes. Local Git/SQLite fixtures do
-not prove that the deployed steward can prepare its actual native workspace,
-authenticate, and complete a rhythm under its service identity. The primary
-operator journey needs evidence at those real boundaries. Fixture convenience
-must not keep unused production admission or completion APIs alive. Test totals
-are not a substitute for that evidence.
-
-Work from the operator journey downward. First establish the few durable facts
-and authority boundaries it needs, then identify entire responsibilities that
-can disappear. Verify one coherent change through that journey, with focused
-checks only for its remaining failure and authority boundaries. Do not make
-repeated test selection, isolated exports, hash ledgers, parallel reviews or
-per-slice documentation the default work product. Use isolation when concurrent
-edits would actually invalidate the evidence, not as a ritual for every edit.
-Already verified independent changes need not run the same checks again merely
-to attach another commit hash. A full suite is an integration check, not the
-primary definition of a working steward.
-
-When deleting or radically simplifying code, inspect failing tests critically.
-
-A failing test may indicate a regression.
-
-It may also reveal that the test was protecting something that should no longer exist.
-
-Determine which before restoring behavior.
-
----
-
-## 17. Prefer Explicitness at Boundaries, Simplicity Within Them
-
-Critical boundaries should be obvious.
-
-Be explicit about:
-
-- authority,
-- ownership,
-- data entry,
-- validation,
-- persistence,
-- external effects,
-- irreversible operations,
-- process boundaries,
-- trust transitions.
-
-Inside a well-defined boundary, prefer simplicity.
-
-Do not spread boundary concerns throughout the entire codebase.
-
-Centralize them where they can be understood and enforced.
-
----
-
-## 18. The Steward Must Challenge the Premise
+Reasoning capability and execution authority are different things. The model
+may reason as broadly as it likes; its authority stays narrow, explicit and
+enforced from outside. Gates, permissions, repository protection and deployment
+controls live outside the model's discretion, and the model does not get to
+weaken them because it can argue convincingly about them. Intelligence works
+inside strong boundaries. It does not replace them.
+
+### 7. Decompose by meaning, not by file size
+
+A component deserves to exist when it owns one coherent concept, invariant or
+transition. You should be able to describe it in one precise sentence. If the
+description needs a paragraph of unrelated "and also"s, it is several
+components wearing one coat. Many small files that leave the conceptual
+coupling untouched are not decomposition. They are confetti.
+
+### 8. Search upstream for the shared cause
+
+When several symptoms appear, do not assume several bugs. Ask: *what is the
+smallest upstream cause that explains the largest number of downstream
+observations?* Several awkward implementations usually mean one wrong
+abstraction. Several failures usually mean one broken invariant. If component B
+is awkward because component A exposes the wrong concept, fix A and delete the
+compensation in B.
+
+### 9. Make the representation do the work
+
+Choose data structures, schemas and state machines that make correct behaviour
+the natural behaviour. A good representation *removes* code. If a lot of logic
+exists only to interpret or repair the representation, the representation is
+wrong. Keep one canonical form. Keep derived information derived. If two pieces
+of state must be kept in sync, first ask why there are two, because the best
+synchronisation mechanism is usually deleting one of them.
+
+### 10. Do not add generality without evidence
+
+No plugin systems for plugins nobody has written. No interface for its one
+implementation. No configuration for a case nobody has. Generalise when two
+real instances reveal their shared structure, not when one imagined future
+consumer might appreciate it.
+
+### 11. Treat existing code adversarially
+
+Existing *behaviour* may be required. Existing *structure* is not. Separate
+externally observable behaviour and genuine invariants from historical
+workarounds and obsolete assumptions. Every existing abstraction has to keep
+earning its place. Sunk effort is not an argument. Neither is a passing test,
+because a test verifies the implementation we happened to build. It does not
+prove that implementation should exist.
+
+### 12. Global simplicity beats local elegance
+
+A helper can be beautiful while the system is incoherent. The recurring failure
+in software is making every component locally tidy, defensive, reusable and
+complete while the whole becomes incomprehensible. Judge each decision at
+repository scale. Does it add a concept, a source of truth, a lifecycle, an
+authority holder, another place state can diverge? Or does it just move the
+complexity somewhere you are not looking?
+
+## The operating system already solved this
+
+A mature operating system, filesystem, language runtime and version-control
+system embody decades of work on composition, isolation, persistence,
+concurrency and observability. Use them before building weaker copies inside
+the codebase.
+
+**The filesystem is a state primitive.** A file can be human-readable
+configuration, machine-readable configuration, durable state, an audit
+surface, a diff, a trigger and a synchronisation boundary, all at once, and
+every ordinary tool already knows how to handle it. Do not hide a direct
+filesystem transition behind three layers of repository classes because it
+feels "low level". Read the file, transform the data, write the file, and
+respect atomicity where it actually matters.
+
+**Git is part of the state machine.** It is not a developer tool that sits
+outside the application. A branch holds proposed state. A commit is an
+immutable description of a transition. The diff says exactly what changed.
+Integration is acceptance. The default branch is accepted desired state, and
+deployment realises it. That gives you provenance, rollback, inspection,
+ordering and synchronisation from machinery that already exists and already
+works. Do not rebuild it in an application database because someone once said
+"Git is not a database". Understand the guarantees and use them deliberately.
+
+**Change the source of truth, not every consumer of it.** If changing the model
+for a rhythm is conceptually a configuration change, it is a configuration
+change: edit the YAML, commit it, let the normal path apply it. Not a runtime
+override table, a model registry or a parallel control plane.
+
+**Prefer the language.** In Python that means `functools`, `itertools`,
+`collections`, `pathlib`, generators, context managers and the sort you
+already have, before any home-made infrastructure. Think in transformations
+where you can (input, filter, map, reduce, output) and keep explicit state for
+the parts of reality that are actually stateful.
+
+The [representation example](engineering-doctrine-example.md) walks through the
+classic case: a task that wanted to be a database row, an ORM model, a status
+column and a sync job, and turned out to be a file in Git.
+
+## Before you delete anything, ask two questions
+
+"If I delete this, what concrete required behaviour becomes impossible?" is the
+right question. It comes too late if you skip these two.
+
+**Is it an invariant at all?** Much of what a codebase enforces is a performance
+wish, a tidiness habit or a fear, written in the grammar of a rule so nobody
+argues with it. "A withdrawn task must stop its running gate" reads like
+correctness. It isn't. The requirement is that withdrawn work must not *land*.
+Whether the gate finishes first is a question about wasted CPU, and wasted CPU
+is not an invariant.
+
+**Does the representation already hold it?** An invariant can be held by
+design or by code, and only one of those needs maintenance. If withdrawal is
+checked by the one writer that can push, nothing else has to check it. The
+same invariant held by a status column needs a predicate at every stage that
+might act, plus a recovery pass for rows whose process died. That code is the
+price of choosing a representation that does not hold the invariant.
+
+An invariant that survives both questions gets code. One that fails the first
+was never real. One that fails the second is telling you the fact lives in the
+wrong place, so move the fact instead of writing the check.
+
+## Demolish, then fill
+
+We call this *stormbeslå*. It is the one method here we will defend against
+anyone.
+
+Do not refactor by editing small pieces. The failure is structural, not a lack
+of discipline: a small edit has no constraint on its own size, so each one is
+locally defensible while the total grows. That is exactly how a well-behaved
+session leaves every commit green, every decision reasonable, and the source
+seven hundred lines *larger* than it started.
+
+So invert it. Pick a whole concept, not a convenient file. Delete it
+everywhere: the store, the module, its callers, its synchronisation, its
+recovery path and the tests that only protect that machinery. Leave a hole with
+the replacement primitive written on the rim. Do that everywhere in the concept
+before you fill anything. Now the holes are visible, the line count has already
+fallen, and no fill can quietly cost more than what it replaced, because what
+it replaced is a number you can read.
+
+- A hole is filled by a primitive, or it is not filled. If the fill turns out to
+  be another module, name the primitive it embodies or revert it. If it
+  recreates the subsystem you just removed, the representation is still wrong.
+- Never leave half a workflow on the old representation and half on the new,
+  joined by a synchroniser. That synchroniser is the bug.
+- Do not polish code that is about to be deleted.
+- Do not take a line budget. A budget is an instruction, and instructions get
+  satisfied by compressing syntax, which is not the same as removing a concept.
+
+The measure is semantic compression: fewer ideas needed to explain the same
+correct system. Count concepts, independent facts, state transitions, authority
+holders and execution paths. Report source size as a symptom, never as the goal.
+A fact moved from SQLite into a pile of JSON files has not disappeared, it has
+just lost its transactions. A move into Git pays only when Git's own
+representation removes a second truth and the code that maintained it.
+
+### The convergence check
+
+During a structural refactor, every few commits hand the diff to a separate,
+read-only reviewer (a model is fine) along with this page. It must not edit or
+run the suite. It answers from the diff, not from the implementer's summary:
+which concept disappeared, which primitive now owns the behaviour, and how the
+number of independent representations changed. `scripts/converging.sh` prints
+the arithmetic.
+
+Call it **drifting** when source rises, a new module names no primitive, a
+responsibility merely moved, one subsystem replaced another, or a green suite is
+the only evidence offered. Two of those at once means **stop**, and name the
+first change to reconsider.
+
+## Tests protect invariants, not implementations
+
+Tests should establish externally meaningful behaviour. A test whose only job is
+to preserve incidental structure makes improvement harder, and when you delete
+something and a test fails, first decide which kind it was.
+
+A passing suite must say what it establishes. Local Git and SQLite fixtures do
+not prove that a deployed steward can authenticate, prepare its native
+workspace and complete a rhythm under its real service identity. A green macOS
+run says nothing whatsoever about a Linux UID boundary. A failure test must
+reach the boundary it names and fail for *that* reason; an unrelated
+`TypeError` under an expected-failure marker proves nothing. Test totals are not
+evidence. Carrying an old total forward to a new revision is worse than
+reporting none.
+
+Work from the operator journey downward: message in, work retained, candidate
+accepted, exact revision gated and published, release healthy, result
+delivered. Assert those facts at their real boundaries, with focused checks for
+the failure and authority edges that remain.
+
+## Challenge the premise
 
 A task description is not necessarily a correct decomposition of the problem.
+When asked to add another handler, state, service, option or edge-case patch,
+first find out whether the mechanism should exist. It is allowed, and expected,
+to answer:
 
-When asked to:
+> This should not be built as requested, because a simpler upstream change
+> removes the need for it.
 
-- add another handler,
-- add another abstraction,
-- support another state,
-- create another service,
-- introduce another configuration option,
-- patch another edge case,
+Then explain the structural reason and build the simpler thing, if it preserves
+what was actually wanted.
 
-the steward should first determine whether the requested mechanism is necessary.
+## Warning signs
 
-The steward is allowed and expected to conclude:
+Treat these as signs the model is wrong, not as the cost of doing business:
 
-> This should not be implemented as requested because a simpler upstream change removes the need for it.
+- several modules translate between near-identical shapes of the same data;
+- comments explain why apparently impossible things can happen;
+- abstractions exist mainly to coordinate other abstractions;
+- configuration options interact combinatorially;
+- tests need extensive mocking of internal machinery;
+- several components can mutate the same state;
+- correctness depends on an execution order nothing enforces;
+- security depends on model obedience;
+- a simple feature touches many unrelated places;
+- deleting one component requires understanding all of them.
 
-When doing so, explain the structural reason and implement the simpler solution if it preserves the actual intent.
+## When unsure, prefer
 
----
+Fewer concepts, states, sources of truth, authority holders, lifecycles and
+irreversible transitions. Stronger invariants, narrower interfaces, clearer
+ownership. Not necessarily fewer lines: a ten-line abstraction that introduces
+three new concepts can be worse than twenty explicit lines using concepts the
+system already has.
 
-# Operating Method
+## The final question
 
-For non-trivial work, follow this reasoning sequence:
+> What can I understand more deeply so that I no longer need to build this?
 
-1. **Observe**
-   - Establish the actual behavior and constraints.
-   - Do not infer architecture solely from names or existing abstractions.
+The system is finished when it is easier to explain than the pile of details it
+is made from. If understanding it means memorising exceptions, it is not
+finished. If a newcomer must first learn hundreds of incidental facts, the model
+is probably wrong. And if improving the model makes a lot of code disappear,
+improve the model.
 
-2. **Identify invariants**
-   - Determine what must always be true.
-
-3. **Discover the taxonomy**
-   - Identify the smallest useful set of concepts.
-
-4. **Map the state space**
-   - Determine which states and transitions genuinely exist.
-
-5. **Eliminate impossible states**
-   - Remove branches and representations that cannot occur.
-
-6. **Establish boundaries**
-   - Locate ownership, trust, authority, persistence, and external effects.
-
-7. **Find the smallest sufficient representation**
-   - Prefer one canonical model.
-
-8. **Implement narrowly**
-   - Introduce the minimum mechanism required.
-
-9. **Validate globally**
-   - Confirm behavior, invariants, security, and repository-wide coherence.
-
-10. **Delete again**
-   - Revisit every piece introduced or touched and ask whether it is still necessary.
-
-The preferred lifecycle is therefore:
-
-> observe → invariants → taxonomy → state reduction → boundaries → representation → implementation → validation → deletion
-
----
-
-# Decision Heuristics
-
-When uncertain between two designs, prefer the one with:
-
-- fewer concepts,
-- fewer states,
-- fewer sources of truth,
-- fewer authority holders,
-- fewer independent lifecycles,
-- fewer irreversible transitions,
-- fewer implicit assumptions,
-- stronger invariants,
-- narrower interfaces,
-- clearer ownership,
-- more deterministic behavior,
-- easier global reasoning.
-
-Do not automatically prefer the one with fewer lines.
-
-A ten-line abstraction that introduces three new concepts may be worse than twenty explicit lines using concepts the system already has.
-
----
-
-# Warning Signs
-
-Treat the following as signals that the model may be wrong:
-
-- a single component requires thousands of lines,
-- many branches exist for unusual combinations of state,
-- multiple modules repeatedly translate between near-identical data forms,
-- comments frequently explain why apparently impossible things can happen,
-- several abstractions exist only to coordinate other abstractions,
-- configuration options interact combinatorially,
-- tests require extensive mocking of internal machinery,
-- ownership is unclear,
-- several components can mutate the same state,
-- correctness depends on execution order that is not structurally enforced,
-- security depends on model obedience,
-- adding a simple feature requires touching many unrelated areas,
-- deleting one component requires understanding the entire repository.
-
-Do not normalize these conditions.
-
-Investigate their structural cause.
-
----
-
-# Definition of Good Engineering
-
-A good system should have:
-
-- a small number of meaningful concepts,
-- a taxonomy that reflects the real domain,
-- strong and visible invariants,
-- explicit ownership,
-- explicit authority boundaries,
-- a small representable state space,
-- very few invalid states,
-- one canonical representation where possible,
-- deterministic enforcement at critical boundaries,
-- components aligned with semantic responsibilities,
-- code that can be deleted without fear because behavior is protected at the correct level.
-
-The architecture should make the system easier to explain than the collection of implementation details from which it is built.
-
-If understanding the system requires memorizing exceptions, the architecture is not finished.
-
-If a new engineer must first learn hundreds of incidental facts, the model is probably wrong.
-
-If improving the model allows large amounts of code to disappear, prefer improving the model.
-
----
-
-# Final Rule
-
-The steward should repeatedly ask:
-
-> What can I understand more deeply so that I no longer need to build this complexity?
-
-The goal is not clever code.
-
-The goal is a system whose structure is so well understood that the implementation becomes small, constrained, robust, and obvious.
+The ideas above have ancestors, and we are happy to name them:
+[a nod to the ancestors](doctrine-ancestry.md).

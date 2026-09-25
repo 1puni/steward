@@ -1,30 +1,29 @@
 # A Nod to the Ancestors
 
-The doctrine and the refactor mandate were written without citations. This
-page records where the ideas come from, so the lineage is neither mistaken
-for novelty nor defended as arbitrary taste.
-
-Two things in the stack are ours alone and are recorded as such below:
-*stormbeslå* and the pseudocode ratio.
+The [doctrine](engineering-doctrine.md) was written without citations. This
+page says where the ideas come from, so nobody mistakes the lineage for novelty
+or defends it as arbitrary taste. We stand on a lot of shoulders. Two things in
+the stack are ours alone, and they are marked as such below: *stormbeslå* and
+the pseudocode ratio.
 
 ## The doctrine's ancestors
 
 - **Fred Brooks** — the essential/accidental complexity split (*No Silver
   Bullet*) and conceptual integrity as the first concern of design (*The
   Mythical Man-Month*). "Fewer concepts" is his program, and "show me your
-  tables and I won't need your flowcharts" is §10's grandfather.
+  tables and I won't need your flowcharts" is the representation principle's grandfather.
 - **C. A. R. Hoare** — robustness by reduction: make it so simple there are
   obviously no deficiencies, not so complicated there are no obvious ones
   (Turing lecture, 1980). The doctrine's core stance.
 - **The Unix tradition** (Kernighan, Pike, McIlroy, Plan 9), codified by
   Eric Raymond — compose the primitives the OS already solved: files,
-  processes, pipes, exit codes, signals. The mandate's
-  filesystem-as-state and git-as-state-machine is this applied literally.
+  processes, pipes, exit codes, signals. The doctrine's
+  filesystem-as-state and Git-as-state-machine is this applied literally.
 - **Richard Gabriel** — "worse is better": simplicity of design over
-  completeness of function. The mandate's stated departure from
+  completeness of function. The doctrine's stated departure from
   conventional best practice.
 - **Niklaus Wirth** — *Algorithms + Data Structures = Programs*: choose the
-  representation and the code follows. §10 in one title.
+  representation and the code follows. The representation principle in one title.
 - **Linus Torvalds** (as quoted by Raymond) — "bad programmers worry about
   the code; good programmers worry about data structures and their
   relationships."
@@ -35,7 +34,7 @@ Two things in the stack are ours alone and are recorded as such below:
 - **Yaron Minsky and Alexis King** — "make illegal states unrepresentable"
   (*Effective ML*) and "parse, don't validate": types over comments,
   schemas over prose.
-- **Casey Muratori** — "semantic compression," used by name in the mandate:
+- **Casey Muratori** — "semantic compression," used by name in the doctrine:
   fewer ideas to explain the same correct system, not fewer characters.
 - **David Parnas** — decomposition by semantic responsibility; information
   hiding; generality earned only from a second real case.
@@ -44,8 +43,7 @@ Two things in the stack are ours alone and are recorded as such below:
 
 ## The calibration canon
 
-These systems provide reference points for the
-[structural review](demolition.md):
+The systems we hold our own work up against:
 
 - **Git's early core** — blobs, trees, commits, refs: the idea-to-code
   ratio benchmark, and the sharpest judge, because this harness sits on
@@ -83,10 +81,10 @@ scratch is not available:
 The property it fixes is structural, not disciplinary: a small edit has no
 constraint on its own size, so each is locally defensible while the total
 grows; a green suite of defensible commits can still leave the source
-larger than it started (2026-09-09: +702 lines). A hole cannot lie about
-its size.
+larger than it started. We watched one careful session do exactly that:
+every commit reasonable, +702 lines. A hole cannot lie about its size.
 
-Corollaries, as practiced in `demolition.md`:
+Corollaries, as [practised](engineering-doctrine.md#demolish-then-fill):
 
 - A hole is filled by a *primitive*, or it is not filled.
 - Never take a line budget; budgets are satisfied by compressing syntax.
@@ -100,8 +98,7 @@ Corollaries, as practiced in `demolition.md`:
 The metric is not LOC but **implementation volume ÷ the conceptual
 machine**: write the harness as pseudocode without referring to any
 existing class or module — if the complete machine fits in 100–300 lines
-against 15,000 implemented, the ratio tells you something (operator,
-2026-09-10). Performed blind, the machine is 96 lines, ~75 of them
+against 15,000 implemented, the ratio tells you something. Performed blind, the machine is 96 lines, ~75 of them
 executable statements; the operating target is ratio < 150. Fifteen
 thousand lines implementing fifteen thousand lines' worth of irreducible
 behaviour is fine; fifteen thousand implementing

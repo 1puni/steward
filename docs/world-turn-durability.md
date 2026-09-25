@@ -116,8 +116,7 @@ historical receipt or cause admission to run again.
 The world commit records the attributed exchange; SQL records the controller's
 decision. Read-only conversations use the same completion and effect transaction
 without a Git application. Transport sending follows acceptance and has its own
-failure semantics. See [task-result limits](usage-regressions.md#result-return-can-stop-after-assessment-starts)
-and Telegram receipt handling.
+failure semantics; see [task results](kernel-contract.md#task-results).
 
 ## Recovery and workspace retention
 
@@ -173,5 +172,5 @@ or live Telegram delivery.
 
 An upgrade must preserve owner checkouts, world refs, native originals,
 unfinished checkouts, SQL and adjacent receipts together. See the
-[upgrade procedure](../migration-handoff.md); schema conversion cannot restore
+[upgrade procedure](upgrading.md); schema conversion cannot restore
 content that an older release already discarded.

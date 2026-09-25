@@ -271,7 +271,7 @@ and translate their intended intervals explicitly.
 
 Do not treat this branch as a live rollout. Historical instance configurations in
 `instances/` describe their recorded deployments and need a deliberate migration.
-The [rewrite contract](git-native-rewrite.md) covers Git task migration and privacy.
+The [rewrite contract](git-native-tasks.md) covers Git task migration and privacy.
 The Linux acceptance test exercises real split identities, build import, HTTP
 identity and rollback in a disposable environment; it requires Linux/root and must
 be rerun on the intended host before adopting the systemd driver. Other platform

@@ -78,4 +78,4 @@ An ignored file is disposable and is not protected by a Git checkpoint.
 
 Legacy event checkouts are retained only while current durable ownership says
 they contain unprepared work. Inspect such native records and partial work during downstream cutover.
-See the [migration handoff](../migration-handoff.md).
+See the [migration handoff](upgrading.md).

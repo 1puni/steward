@@ -140,7 +140,7 @@ understanding while native work continues. Procedure runs and interactive
 conversations retain finite provider deadlines. Explicit cancellation and controller
 shutdown request native interruption before bounded containment; shutdown retains
 unfinished task work for continuation. See the
-[live-understanding implementation](live-task-understanding-implementation.md).
+[live-understanding implementation](live-task-understanding.md).
 
 The ten-second native grace is policy, not a measurement of every provider's
 checkpoint time. Acknowledgement does not prove that children saved all work.
@@ -198,7 +198,7 @@ ever see it, because it is not a package.
 
 Both upstream harnesses also ship capabilities worth lifting and making
 provider-agnostic. Tracking that is recurring, bounded work over a named set —
-which is a [rhythm](rhythms-direction.md) with a procedure, the harness's own
+which is a [rhythm](rhythms.md) with a procedure, the harness's own
 spelling for exactly this.
 
 ## Execution ownership before the repair

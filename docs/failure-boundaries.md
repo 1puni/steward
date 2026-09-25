@@ -22,8 +22,8 @@ or permission to repeat side effects.
 | Telegram update reply | Persist confirmed delivery pieces and retry unfinished pieces | Exactly-once network delivery |
 | Task-result assessment | Retain the selected outcome before assessment; replay accepted assessment and retry transport until acknowledged | Exactly-once network delivery, or permission to repeat uncertain model side effects |
 
-Result receipts repair the earlier reselection gap; see
-[usage regressions](usage-regressions.md#result-return-can-stop-after-assessment-starts).
+Result receipts are selected before assessment starts and stay pending until the
+transport confirms, so a crash mid-assessment cannot silently drop an outcome.
 Invalid routes retain a diagnostic and do not enter the worker queue until the
 configured route is usable. Unowned target transitions use a configured operator
 route and deterministic text without invoking task cognition.

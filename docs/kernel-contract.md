@@ -5,10 +5,10 @@ published repository revisions and configured releases.
 
 > The model proposes; the harness disposes.
 
-This is the current architecture contract. The [documentation map](README.md) separates
-operating references from proposals and historical evidence. The
-[execution boundary](execution-boundary.md) owns the supported native Linux
-identity and invocation ownership contract.
+This is the architecture contract: who owns which fact, who may do what, and what
+must stay true when a process dies at the worst possible moment. The
+[execution boundary](execution-boundary.md) owns the Linux identity and invocation
+ownership details.
 
 ## Purpose
 
@@ -114,13 +114,13 @@ Git store is enumerated directly, and a missing native lineage permits a fresh r
 Decisions need durable representation when they cannot be derived; that does not
 require SQL. Git can record a withheld grant, cancellation, failed gate, answer or
 retry. Controller permissions and accepted refs establish authority independently
-of authored work. The [rewrite contract](git-native-rewrite.md) specifies discovery,
+of authored work. The [rewrite contract](git-native-tasks.md) specifies discovery,
 concurrency, private metadata, editable understanding and publication crash boundaries.
 
 An incompatible database is preserved and startup refuses it. There is no automatic
 migration or reset, because a harness that rewrites the operator's state on startup is a
 harness that can destroy it on startup. An upgrade includes the adjacent files and Git
-stores, not just SQLite. Follow the [upgrade procedure](../migration-handoff.md).
+stores, not just SQLite. Follow the [upgrade procedure](upgrading.md).
 
 ## Provider neutrality
 
@@ -169,7 +169,7 @@ builds on. The controller accepts it by exact-base compare-and-swap into the tas
 document only, and acknowledges the accepted revision over live input. Acceptance
 changes no Definition field, consumes no input, touches no product files and grants no
 publication; closure reconciles against the last accepted offer. See
-[live task understanding](live-task-understanding-implementation.md).
+[live task understanding](live-task-understanding.md).
 
 Notes are pending context. A checkpoint records only inputs actually consumed;
 unacknowledged and later inputs remain in accepted Git for a later slice. Answers
@@ -213,8 +213,9 @@ saved reply, including silence, without repeating assessment. Checkpoints are lo
 Git/log evidence; they have no separate broadcast channel. Accepted world work is replayed without another model turn;
 failed assessment still delivers the retained task findings with its interruption.
 Telegram reuses per-piece receipts across retry and restart. Preserve both adjacent
-receipt directories during upgrades. Historical delivery without receipts remains
-unknown; see [usage regressions](usage-regressions.md#result-return-can-stop-after-assessment-starts).
+receipt directories during upgrades. A crash between the transport accepting a send
+and the local receipt write can still duplicate that piece: this is at-least-once
+delivery with receipts, not exactly-once.
 
 ## Publication
 
@@ -349,16 +350,41 @@ whether bounded waiting is acceptable, and keep the pre-push withdrawal check ei
 
 ## Verification
 
-The [validation map](demolition.md#validation-map) links the implementation to
-behavioral checks. Local regression, Linux identity tests, native-provider probes and
-deployed acceptance establish different things. None substitutes for the others, and an
-old green suite does not validate a changed checkout. A green macOS run says nothing
-whatsoever about the UID boundary; only the Linux acceptance script does. Test totals
-are not evidence. A suite has to state what it establishes.
+Local regression, Linux identity tests, native-provider probes and deployed
+acceptance establish different things. None substitutes for the others, and an old
+green suite does not validate a changed checkout. A green macOS run says nothing
+whatsoever about the UID boundary; only `scripts/linux-boundary-acceptance.sh` does.
+Test totals are not evidence. A suite has to state what it establishes.
 
 Required outcomes include isolated native work, retained interruption evidence, world
 acceptance before dependent admission, clean exact-revision gates, remote-safe
 publication, truthful withdrawal, artifact verification, rollback to a prior release or
-absence, and an observable result at the owning transport. The [usage
-review](usage-regressions.md) distinguishes established behavior from post-refactor
-gaps; the handoff records instance readiness.
+absence, and an observable result at the owning transport. The open edges are listed
+honestly in the [README](../README.md#where-it-actually-is).
+
+### Validation map
+
+Each link names an executable check, not a claim that any particular revision or
+deployed instance has passed it. Implementation paths are relative to
+`src/steward_harness/`.
+
+| Behavior | Implementation | Validation |
+| --- | --- | --- |
+| Admission creates the accepted task ref and document | `task_store.py` | [admission](../tests/test_task_admission.py), [task files](../tests/test_task_charter.py) |
+| Status derives from accepted decisions, trailers, ancestry and locks | `task_query.py`, `task_lock.py` | [task status](../tests/test_task_status.py), [operator transitions](../tests/test_state_control.py) |
+| Publication holds the repository lock through integration, gates and exact-base push | `repository_reconciler.py`, `landing/` | [reconciliation](../tests/test_reconcile.py), [landing](../tests/test_landing.py), [rewrite journeys](../tests/test_rewrite_convergence.py) |
+| Deployment converges on an exact revision, verifies health and rolls back | `deploy/` | [automatic deployment](../tests/test_automatic_deployment.py), [rollback truth](../tests/test_rollback_truth.py) |
+| World acceptance applies the retained candidate under the world lease | `world/turn_checkpoint.py`, `state.py` | [world durability](../tests/test_world_durability.py), [checkpoint acceptance](../tests/test_world_turn_checkpoint.py) |
+| Native sessions use private homes and candidate-owned records | `runtime/native_workspace.py`, `runtime/providers/` | [workspace](../tests/test_native_workspace.py), [Claude transport](../tests/test_claude_stream.py), [Codex transport](../tests/test_codex_app_server.py) |
+| Provider errors separate "declined" from "failed" | `runtime/providers/` | [provider errors](../tests/test_provider_errors.py) |
+| Task results survive restart and are not re-assessed | `conversations.py`, `receipts.py`, `telegram/` | [result delivery](../tests/test_task_result_delivery.py), [Telegram](../tests/test_telegram.py) |
+| Live conversations stay responsive with a full worker budget | `daemon.py` | [responsiveness](../tests/test_scheduler_responsiveness.py) |
+| The broker enforces a separate service identity | `runtime/execution.py` | [Linux boundary acceptance](../tests/test_boundary_acceptance.py) |
+| An invocation cannot leave escaped writers or kill a peer | `runtime/ownership.py`, `runtime/process.py` | [host ownership](../tests/test_host_ownership.py), [process input and stop](../tests/test_process_input.py) |
+| Configuration rejects unknown fields and colliding resources | `config/` | [configuration](../tests/test_config.py) |
+
+The [follow-through environment](follow-through-environment.md) runs the whole
+message-to-result journey against a fake Bot API and a scripted provider. The
+[native probes](../experiments/native_sessions/README.md) drive real installed
+providers. Scripted cognition cannot establish provider behaviour, and a successful
+isolated probe cannot establish the health of a deployed steward.

@@ -15,9 +15,9 @@ remaining setup needs, not a directory of speculative adapters.
 Resolve the user's harness checkout and read its README, documentation map,
 configuration schema and deployment guide. These files move with the fork:
 `docs/getting-started.md`, `docs/automatic-deployment.md`,
-`src/steward_harness/config/schema.py`, and `docs/usage-regressions.md`.
-Inspect local changes before editing. For an existing instance read its upgrade
-procedure and actual protected config; a new database is not an upgrade.
+`src/steward_harness/config/schema.py`, and the README's "Where it actually is"
+section. Inspect local changes before editing. For an existing instance read
+`docs/upgrading.md` and its actual protected config; a new database is not an upgrade.
 
 Use the user's existing organisation/repository grant. Enumerate only its scope
 through available authenticated tools. Ask for missing host, identity or target

@@ -6,7 +6,7 @@ gates decide what can land. Your chosen release system decides how that commit r
 users.
 
 This guide takes a fork to its first useful task. For an existing instance, use [the
-upgrade procedure](../migration-handoff.md) instead — do not read this page as a
+upgrade procedure](upgrading.md) instead — do not read this page as a
 migration.
 
 ## Try the complete loop
@@ -196,9 +196,8 @@ unhealthy-release rollback — a rollback path you have never run is a rollback 
 do not have. Record the revision, service identity, command or message, and observed
 outcome, because a memory of a working journey is not evidence of one.
 
-Then read [usage after the refactor](usage-regressions.md). It lists the current limits
-a new installation must not mistake for guarantees, including a reproduced gap in result
-return.
+Then read [where it actually is](../README.md#where-it-actually-is). It lists the current
+limits a new installation must not mistake for guarantees.
 
 ## Use the onboarding skill
 

@@ -34,10 +34,7 @@ and task controls identify one task.
 and map their readable artifacts into the Git world for cross-agent inspection. The
 [native runtime](native-provider-runtime.md) maps native memory and original provider
 session records into the current worktree. Private authentication and runtime databases
-remain outside Git. See
-[D12](design-discussion.md#d12--reuse-native-agent-loops-and-share-their-records-through-git)
-and the [native storage
-review](native-session-alignment.md#steward-configuration-and-native-storage-in-the-git-world).
+remain outside Git. See [native record provenance](native-record-provenance.md).
 
 Every Git boundary uses `docs/` for consolidated, human-readable truth at that scope.
 Models orient themselves from the files and Git history in that world. The kernel does
@@ -114,13 +111,12 @@ A rhythm may maintain the steward world directly and may propose harness work; p
 policy retains self-healing authority. Merely placing executable files in `world.root`
 does not grant a rhythm permission to publish or restart the service. The harness
 repository must be configured under `repositories`, and an operator-triggered rollout
-uses `/git deploy <repository> [sha]`. The observed default branch drives automatic
+uses `/git target <name>`. The observed default branch drives automatic
 deployment when that repository has a deployment policy.
 
 This pattern cannot resurrect a completely stopped controller by itself. systemd or
 another external supervisor must first restart the process; retained task/world work and
-observed release state then supply the evidence for continuation. Crash limits remain in
-the [usage review](usage-regressions.md).
+observed release state then supply the evidence for continuation.
 
 ## Kernel boundary
 

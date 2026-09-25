@@ -151,7 +151,7 @@ protocols, so answering ordinary questions must not silently grant extra authori
 Implement and prove the native response correlation, cancellation and unresolved-question
 behavior before claiming that this works for either adapter.
 
-See the [inspected upgrade handoff](../migration-handoff.md) for the current schema and the
+See the [inspected upgrade handoff](upgrading.md) for the current schema and the
 [live source journey](../experiments/native_sessions/README.md).
 
 ## Claude and GLM native input
@@ -238,8 +238,8 @@ queue, including task and read-only executions without an ongoing-input hook.
 The optional hook exposes further source delivery; it does not choose another
 CLI or completion protocol. Session binding occurs once, and every known native
 command requires its terminal result and completion before input closes.
-The September 8 [installed-CLI check](../experiments/native_sessions/README.md#installed-claudeglm-queue-check-2026-09-08)
-verified fresh/resumed task and read-only calls plus a real writer deadline.
+The [native probes](../experiments/native_sessions/README.md) exercise this against
+installed CLIs, including fresh and resumed task calls and a real writer deadline.
 
 Conversation prompts carry a concise current task/action and transport marker
 interface on every execution. Interface changes do not clear native history.
@@ -415,4 +415,4 @@ installed-provider journeys, versions and limits: correction during execution,
 resume, child artifacts and memory recall from Git. Those are dated observations,
 not a current suite total or proof that a deployed rhythm completed.
 Use runtime readiness for instance-level acceptance and the
-[upgrade procedure](../migration-handoff.md) before moving real native histories.
+[upgrade procedure](upgrading.md) before moving real native histories.

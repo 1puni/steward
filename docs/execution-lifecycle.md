@@ -22,7 +22,7 @@ publish with the product work as commit messages; request bodies and routing do 
 Every slice receives every accepted input, because a saved session may prove missing or
 cognition may fall back to another provider; only the pending ones are consumed.
 
-The [rewrite contract](git-native-rewrite.md) specifies replication, conflicts,
+The [rewrite contract](git-native-tasks.md) specifies replication, conflicts,
 private metadata and migration. [Git journeys](../tests/test_git_tasks.py) exercise
 fresh intake, authorship, answers, cancellation and publication recovery.
 
@@ -93,7 +93,7 @@ deadline. A procedure deadline with the durably bound native session, or a contr
 shutdown, autosaves partial work where possible and permits continuation on a later
 tick. Authentication, protocol and workspace failures require their own handling; an
 error does not prove that no tools ran. While a turn runs, its parent can offer its
-account for [live acceptance](live-task-understanding-implementation.md). See [task
+account for [live acceptance](live-task-understanding.md). See [task
 execution](../src/steward_harness/task_runner.py) and [task-runner
 tests](../tests/test_task_runner_kernel.py).
 
@@ -160,7 +160,7 @@ and cannot override an observed staged identity. [Health tests](../tests/test_he
 cover this distinction. A staged source tree alone does not establish a runnable
 artifact; validate its configured build and actual runtime identity.
 
-The [operator reference](../README.md#operator-commands) defines the supported controls,
+The [operator reference](../README.md#talking-to-it) defines the supported controls,
 including `/git retarget` for never-started work.
 
 ### Task context and live steering
