@@ -34,7 +34,7 @@ fact, one of them is wrong and worth fixing.
 | [Execution lifecycle](execution-lifecycle.md) | Task files, status precedence, closure syntax, continuation and cancellation |
 | [Durable world turns](world-turn-durability.md) | Candidate custody, world application, dependent effects and replay |
 | [Live task understanding](live-task-understanding.md) and its [implementation](live-task-understanding-implementation.md) | Accepted task-account updates without ending a native turn |
-| [Native rhythms](rhythms-direction.md) | Recurring files, target refs, due calculation and operator controls |
+| [Native rhythms](rhythms-direction.md) | Procedures on intervals or quiet periods, world rhythms, result owners and operator controls |
 | [Failure boundaries](failure-boundaries.md) | Operational errors, controller faults and shutdown — and which is which |
 | [Native provider substrate](native-provider-substrate.md) | Which provider-native surfaces the harness interfaces with directly, why a signal is the wrong shutdown layer, and what is still unbuilt |
 | [Working environments](working-environments.md) | Where a checkout comes from and when the controller may discard it |

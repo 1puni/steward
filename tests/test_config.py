@@ -632,6 +632,25 @@ def test_rhythm_output_owner_is_explicit_and_uses_configured_transport():
     assert StewardConfig.model_validate(configured)
 
 
+def test_world_rhythm_requires_a_world_and_a_writing_procedure():
+    procedure = dict(instructions="/etc/sleep.md", provider="codex", model=dict(model="night"))
+    rhythm = dict(schedule=86400, procedure="sleep", input="world", owner=None)
+    base = dict(identity=dict(name="test", slug="test"), world=dict(root="/srv/world"),
+                procedures={"sleep": procedure | {"access": "workspace-write"}},
+                rhythms={"sleep": rhythm})
+    assert StewardConfig.model_validate(base).rhythms["sleep"].input == "world"
+    with pytest.raises(ValidationError, match="requires a configured world"):
+        StewardConfig.model_validate(base | {"world": None})
+    with pytest.raises(ValidationError, match="workspace-write procedure"):
+        StewardConfig.model_validate(base | {"procedures": {"sleep": procedure}})
+    with pytest.raises(ValidationError, match="interval schedule"):
+        StewardConfig.model_validate(base | {"rhythms": {"sleep": rhythm | {"schedule": {"quiet": 300}}}})
+    with pytest.raises(ValidationError, match="workdir requires a read-only"):
+        StewardConfig.model_validate(base | {"rhythms": {"sleep": rhythm | {"workdir": "/srv/org"}}})
+    with pytest.raises(ValidationError, match="unknown configured input"):
+        StewardConfig.model_validate(base | {"rhythms": {"sleep": rhythm | {"input": "worlds"}}})
+
+
 def test_desk_model_and_authority_configuration():
     from steward_harness.config.schema import DeskConfig
 

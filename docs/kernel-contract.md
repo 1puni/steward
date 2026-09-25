@@ -198,9 +198,11 @@ destinations; it is not an allow-list for ordinary conversations or their result
 Assessment uses the ordinary world-turn path and current authority. A typed
 `TASK_ACTION` can answer, retry or note an existing task; prose alone cannot resume it.
 A turn proposes at most one action or one new task. A rhythm explicitly names its
-configured result owner, or null for retained evidence only. Owned rhythm findings
+configured result owner, or null for retained evidence only. Owned rhythm task findings
 use this same assessment path, including world knowledge and authorized follow-up
-admission. An assessment cannot steer tasks owned by another conversation.
+admission. An assessment cannot steer tasks owned by another conversation. A world
+rhythm is itself a world turn: it admits no task, and its reply is a receipt for
+its owner ([world rhythms](rhythms-direction.md#world-rhythms)).
 
 Accepted assessment and external delivery are separate facts. A private task-result
 receipt retains the selected outcome before assessment and remains pending until

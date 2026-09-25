@@ -114,7 +114,7 @@ something you did not anticipate.
 
 | Route | Origin | How it arrives |
 | --- | --- | --- |
-| Rhythm | `rhythm` | A configured `rhythms:` entry fires and creates a procedure task over an exact input commit |
+| Rhythm | `rhythm` | A configured `rhythms:` entry fires and creates a procedure task over an exact input commit; an `input: world` rhythm runs a world turn instead and creates no task |
 | Publication or target requirement | `rhythm` | A `requires:` procedure is run against a prepared candidate; its verdict gates the push or the deployment |
 | Incident repair | `incident_repair` | A configured pipeline probe stays unhealthy and `incident_policy` still allows a repair |
 | Incident escalation | `incident_escalation` | Repeated repair failure; arrives `proposed`, so it waits for `/task confirm` or `/task reject` |

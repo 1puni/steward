@@ -92,11 +92,53 @@ claim that the evidence commit landed on the product branch. An owner's native
 session is optional and can be reconstructed on a fresh controller. Changing the
 configured owner affects future runs; an already accepted bucket keeps its owner.
 
-There are no default light/sleep/rem types, seeded world files or separate rhythm
-world-turn runner. Existing recurring files are migration material: retain their
-history, move intended reusable instructions to accepted procedure files and choose
-explicit intervals or quiet periods. Calendar and dependency schedules are not
-implemented. It does not contain a hook system or workflow graph.
+## World rhythms
+
+A rhythm over `input: world` consolidates the world itself, such as a nightly
+sleep over accumulated episodes. It is not a task. Each interval is one ordinary
+world turn in the rhythm's own conversation, `rhythm:<name>`, taking the same
+lease, checkpoint and acceptance as an operator's message. Its text is the
+procedure's instructions, and it runs on the procedure's provider and model
+without fallback. Each interval starts a fresh native session; the world, not
+the previous session, carries what earlier runs consolidated.
+
+```yaml
+procedures:
+  sleep:
+    instructions: /etc/steward/procedures/sleep.md
+    provider: codex
+    model: {model: configured-sleep-model}
+    access: workspace-write
+rhythms:
+  sleep:
+    schedule: 86400
+    procedure: sleep
+    input: world
+    owner: telegram:3
+```
+
+A world rhythm requires a configured `world`, a `workspace-write` procedure and
+an integer interval; configuration refuses anything else, including a `workdir`.
+The source key `rhythm:<name>:<interval index>` is the whole idempotency. After a
+restart, the key replays an accepted turn rather than repeating cognition. A
+provider failure or crash consumes its interval. At most one run happens in each
+interval, and a missed interval is not made up. `86400` fires once per UTC day
+on the first poll after midnight UTC.
+
+The turn cannot propose or steer tasks, because a rhythm has no transport to
+receive their results. It records suggested work in world files instead. A
+non-empty reply becomes a result receipt for `owner` and is delivered by the
+ordinary result lane. An empty reply, or `owner: null`, settles the interval
+silently. `/rhythm list` shows whether the current interval ran. `/rhythm run`
+refuses a world rhythm: a second run in the same interval is the thing the key
+exists to prevent.
+
+There are no default light/sleep/rem types or seeded world files. A world rhythm
+is configured like any other: the instance supplies its procedure file. Existing
+recurring files are migration material: retain their history, move intended
+reusable instructions to accepted procedure files and choose explicit intervals
+or quiet periods. Calendar and dependency schedules are not implemented. It does
+not contain a hook system or workflow graph.
 
 Publication requirements check the final integrated candidate before it can be
 pushed. Target requirements review the complete candidate tree before application

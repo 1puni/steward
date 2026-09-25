@@ -1,4 +1,8 @@
-"""Configured procedures create ordinary accepted tasks over exact Git inputs."""
+"""Configured procedures create ordinary accepted tasks over exact Git inputs.
+
+A rhythm over `input: world` is the one exception: it is an ordinary world turn
+in its own conversation, accepted like an operator's, not a task.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -8,8 +12,11 @@ import time
 from pathlib import Path
 
 from steward_harness.git_transport import GitTransportError
-from steward_harness.state import TaskId, TaskSpec, TaskStatus
+from steward_harness.lease import Busy
+from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
+from steward_harness.state import ConversationBusy, ConversationId, TaskId, TaskSpec, TaskStatus
 from steward_harness.task_store import ProcedureRun
+from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +167,8 @@ class Procedures:
                 logging.getLogger(__name__).warning(
                     "Rhythm activity sample failed; skipping quiet rhythms this poll: %s", error)
         for name, rhythm in self.config.rhythms.items():
+            if rhythm.input == "world":
+                continue  # A world turn, not a task: see `due_world_rhythms`.
             prefix = f"rhythm:{name}:"
             snapshot = None
             if isinstance(rhythm.schedule, int):
@@ -190,3 +199,52 @@ class Procedures:
                 # A refused admission consumes no input; keep other rhythms and
                 # operator ingress alive while the operator repairs its policy.
                 log.error("Rhythm %s admission failed: %s", name, error)
+
+    def due_world_rhythms(self, *, now=None):
+        """Each world rhythm whose current interval has no settled run.
+
+        The source key is the whole idempotency: one turn per rhythm and
+        interval, replayed rather than repeated after a restart. A recorded
+        receipt settles the interval; an interrupted turn consumes it.
+        """
+        now = time.time() if now is None else now
+        for name, rhythm in self.config.rhythms.items():
+            if rhythm.input != "world":
+                continue
+            key = f"rhythm:{name}:{int(now // rhythm.schedule)}"
+            prior = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
+            if self.state.result_receipt(key) or (prior is not None and prior.state == "interrupted"):
+                continue
+            yield name, key
+
+    def run_world_rhythm(self, conversations, name, key):
+        """Run one interval as a world turn, then hand any reply to its owner."""
+        rhythm = self.config.rhythms[name]
+        procedure = self.config.procedures[rhythm.procedure]
+        owner = ConversationId(f"rhythm:{name}")
+        self.state.open_conversation(owner, provider=procedure.provider,
+                                     profile=self.state.tasks.default_profile)
+        if self.state.turn_for_source(owner, key) is None:
+            # Each interval starts a fresh session on the procedure's provider:
+            # the world, not yesterday's session, carries what was consolidated.
+            self.state.bind_conversation_provider(owner, procedure.provider, None)
+        try:
+            result = conversations.run_turn(
+                transport="rhythm", transport_key=name, source_event_key=key,
+                operator_id="harness:rhythm", text=Path(procedure.instructions).read_text(),
+                episode_input=f"Scheduled {name} rhythm ({key}).",
+                allow_empty_output=True, model=procedure.model,
+            )
+        except (Busy, ConversationBusy, WorldContentConflict, WorldUpdatePending) as error:
+            log.info("world rhythm %s deferred: %s", key, error)
+            return
+        except (RuntimeExecutionError, RuntimeUnavailable, OSError, ValueError) as error:
+            # The interval is consumed: at most one run, never a retry storm.
+            log.error("world rhythm %s failed: %s", key, error)
+            return
+        reply = result.reply_text.strip()
+        # The ordinary result lane delivers a pending receipt to its owner.
+        self.state.save_result_receipt({
+            "owner": rhythm.owner, "task_id": None, "source_key": key,
+            "result_text": reply, "reply": reply, "done": not (reply and rhythm.owner),
+        })
