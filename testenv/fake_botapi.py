@@ -10,7 +10,7 @@ Two properties matter more than fidelity:
 - Long polls hold. `getUpdates` blocks until an update at or after `offset`
   is available or the client's own `timeout` elapses. Answering instantly
   with an empty list would turn the harness's poll loop into a hot spin —
-  the exact CPU-burn shape that bit the live gg deployment.
+  the exact CPU-burn shape that once bit a live deployment.
 - Faults are one-shot and named after real failures: a hanging poll, a
   failing send, a 429 with a retry hint. These are the cases a live Telegram
   cannot produce on demand and the reason this server exists.

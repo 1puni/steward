@@ -47,9 +47,9 @@ def main():
     parser.add_argument("--runtime-only", action="store_true")
     parser.add_argument("--memory-only", action="store_true")
     parser.add_argument(
-        "--zaude-login-shell",
+        "--login-shell",
         action="store_true",
-        help="Load ZAI_AUTH_TOKEN using Zaude's clean zsh login-shell procedure",
+        help="Read ZAI_AUTH_TOKEN from a clean zsh login shell without printing it",
     )
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="steward-claude-live-") as temp:
@@ -103,7 +103,7 @@ def main():
         }
         env["CLAUDE_CONFIG_DIR"] = str(runtime)
         credential = os.environ.get("ZAI_AUTH_TOKEN", "").strip()
-        if args.zaude_login_shell:
+        if args.login_shell:
             credential = subprocess.run(
                 [
                     "/bin/sh",
@@ -120,7 +120,7 @@ def main():
             or not credential.isascii()
             or any(ch.isspace() for ch in credential)
         ):
-            raise RuntimeError("Zaude GLM credential unavailable")
+            raise RuntimeError("GLM credential unavailable")
         env["ANTHROPIC_AUTH_TOKEN"] = credential
         env["ANTHROPIC_BASE_URL"] = "https://api.z.ai/api/anthropic"
         env["ANTHROPIC_MODEL"] = "glm-5.3"

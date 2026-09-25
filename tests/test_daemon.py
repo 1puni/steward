@@ -539,8 +539,8 @@ def test_daemon_requeues_desk_ingress_when_owner_is_busy(tmp_path, busy_error) -
 
 
 # 42 is configured, 582 and 4568 are not, and 0 is General — the topic every
-# message sent outside a thread lands in, and the one gg's stranded results
-# were owed to.
+# message sent outside a thread lands in, and the one a live instance's stranded
+# results were owed to.
 @pytest.mark.parametrize("topic_id", [42, 582, 4568, 0])
 @pytest.mark.parametrize("restart_after_failure", [False, True])
 def test_daemon_delivers_task_truth_to_the_telegram_topic_that_admitted_it(
@@ -741,10 +741,10 @@ def test_status_reports_the_steward_its_repositories_and_its_running_owners(
         WorldUpdatePending("retained workspace no longer belongs to its world"),
         # Any agent-git command in this lane raises CalledProcessError, which is
         # a SubprocessError and so was caught by neither OSError nor
-        # TimeoutExpired. Three controller crashes on 2026-09-13 came through
-        # here: `git commit --allow-empty` exit 1 at 15:08 and 17:38, and
-        # `git add --all` exit 128 at 18:01, each killing the process from
-        # `git_world.finish` under `deliver_task_result`.
+        # TimeoutExpired. Three live controller crashes in one day came through
+        # here (`git commit --allow-empty` exit 1 twice, `git add --all` exit
+        # 128 once), each killing the process from `git_world.finish` under
+        # `deliver_task_result`.
         subprocess.CalledProcessError(1, ["git", "commit", "--allow-empty"]),
         subprocess.CalledProcessError(128, ["git", "add", "--all"]),
     ],
@@ -757,7 +757,7 @@ def test_result_delivery_defers_instead_of_killing_the_pass(
     Every other lane reads contention as "someone else has it, ask again next
     pass". The result lane did not, so an ordinary lease collision inside
     `deliver_task_result` propagated out of the worker and exited the process
-    — observed live on gg at 2026-09-11T15:34:58Z, ending a 5h18m run.
+    — observed on a live instance, ending a five-hour run.
 
     A transport failure is the same shape. `deliver_task_result` reaches a
     pack transfer on its way to `checkpoint.retain`, and an unreachable remote
