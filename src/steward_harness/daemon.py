@@ -35,7 +35,7 @@ from steward_harness.kernel import Dispatch, Owner, StewardKernel, repository_le
 from steward_harness.git_reconcile import ResolveTurn, ResolverTurn
 from steward_harness.prompts import build_conflict_prompt
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
-from steward_harness.runtime.contracts import CognitionAdapter
+from steward_harness.runtime.contracts import CognitionAdapter, RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.providers import build_runtimes
 from steward_harness.procedures import Procedures, resolve_input
@@ -1046,9 +1046,15 @@ class StewardDaemon:
                     if reply:
                         events.append("reply", reply, message.msg_id)
                 inbox.done(message)
-            except (Busy, ConversationBusy) as error:
+            except (Busy, ConversationBusy, WorldUpdatePending, WorldContentConflict) as error:
                 log.info("desk message %s deferred: %s", message.msg_id, deferral_cause(error))
                 inbox.requeue(message)
+                return
+            except (RuntimeExecutionError, RuntimeUnavailable) as error:
+                # A provider refusing one turn (a usage limit, a failed run) ends
+                # that turn, not the controller. Telegram treats it the same way.
+                log.warning("desk message %s failed: %s", message.msg_id, error)
+                inbox.park_failed(message)
                 return
             except Exception:
                 inbox.park_failed(message)

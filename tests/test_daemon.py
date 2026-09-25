@@ -14,6 +14,7 @@ import pytest
 from test_world_turn_checkpoint import _git_world as make_world
 from steward_harness.lease import Lease
 from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
+from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from state_fixtures import (
     accept_conversation_turn,
     admit_task,
@@ -498,7 +499,7 @@ def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monke
     assert "Task cancelled" in events.read_text()
 
 
-@pytest.mark.parametrize("busy_error", [Busy, ConversationBusy])
+@pytest.mark.parametrize("busy_error", [Busy, ConversationBusy, WorldUpdatePending, WorldContentConflict])
 def test_daemon_requeues_desk_ingress_when_owner_is_busy(tmp_path, busy_error) -> None:
     config = StewardConfig.model_validate(
         {
@@ -536,6 +537,28 @@ def test_daemon_requeues_desk_ingress_when_owner_is_busy(tmp_path, busy_error) -
     assert attempts == ["busy", "busy"]
     assert not queued.exists()
     assert "Accepted after deferral" in Path(config.desk.events_file).read_text()
+
+
+@pytest.mark.parametrize("refusal", [RuntimeExecutionError, RuntimeUnavailable])
+def test_a_provider_refusing_a_desk_turn_fails_the_message_not_the_controller(tmp_path, refusal) -> None:
+    # 2026-09-25: a Claude session limit on one desk turn exited gg's controller.
+    config = StewardConfig.model_validate({
+        "identity": {"name": "Steward", "slug": "test"},
+        "desk": {"inbox_dir": str(tmp_path / "inbox"), "events_file": str(tmp_path / "events.jsonl")},
+    })
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    (inbox_dir / "1.000000-limit.json").write_text('{"kind":"message","text":"hi","origin":"web","id":"limit"}')
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml", adapters={})
+
+    def refuse(**kwargs):
+        raise refusal("Claude: You've hit your session limit")
+
+    desk = daemon._desk(cast(ConversationService, SimpleNamespace(run_turn=refuse)))
+    assert desk is not None
+    desk.drain()
+    assert list(inbox_dir.glob("*.failed"))
+    assert not list(inbox_dir.glob("*.json"))
 
 
 # 42 is configured, 582 and 4568 are not, and 0 is General — the topic every
