@@ -19,7 +19,11 @@ log = logging.getLogger(__name__)
 
 
 def _head_if_clean(broker, repository: Path, path: Path) -> str:
-    """Validate custody, including ignored files and interrupted Git operations."""
+    """Validate custody: no local changes, untracked files or interrupted Git operations.
+
+    Ignored files do not block. The repository declares them regenerable, and
+    without this rule every venv or dependency cache retains its checkout forever.
+    """
     def git(*args, cwd=path):
         return agent_git(broker, *args, cwd=cwd, timeout=60)
 
@@ -30,8 +34,8 @@ def _head_if_clean(broker, repository: Path, path: Path) -> str:
     common_args = ("rev-parse", "--path-format=absolute", "--git-common-dir")
     if git(*common_args) != git(*common_args, cwd=repository):
         raise ValueError("checkout belongs to another repository")
-    if git("status", "--porcelain", "--untracked-files=all", "--ignored"):
-        raise ValueError("dirty, untracked or ignored files")
+    if git("status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("dirty or untracked files")
     for marker, marker_path in git_operation_paths(git).items():
         if broker.path_exists(marker_path):
             raise ValueError(f"unfinished Git operation: {marker}")
@@ -39,7 +43,8 @@ def _head_if_clean(broker, repository: Path, path: Path) -> str:
 
 
 def _remove(broker, repository: Path, path: Path) -> None:
-    # No force and no filesystem fallback: Git gets the final refusal.
+    # No force and no filesystem fallback: Git gets the final refusal. It
+    # deletes ignored files and refuses modified or untracked ones.
     agent_git(broker, "worktree", "remove", str(path), cwd=repository, timeout=60)
     agent_git(broker, "worktree", "prune", cwd=repository, timeout=60)
     log.info("pruned accepted workspace %s", path)

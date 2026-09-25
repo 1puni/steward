@@ -478,7 +478,7 @@ class ControllerConfig(BaseModel):
     # keeps the capacity that split gave and drops the reservation.
     workers: int = Field(default=8, ge=1, le=32)
     health_bind: str | None = None  # host:port loopback healthz for self-deploy
-    world_session_idle_seconds: int = Field(default=604800, ge=1)
+    world_session_idle_seconds: int = Field(default=86400, ge=1)
 
 
 class DeskConfig(BaseModel):

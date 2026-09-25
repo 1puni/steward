@@ -67,12 +67,12 @@ def test_task_retention(tmp_path, boundary, caplog):
     finally:
         if lock:
             lock.release()
-    assert path.exists() == (boundary not in {"published", "cancelled"})
+    assert path.exists() == (boundary not in {"published", "cancelled", "ignored"})
     if not path.exists():
         assert str(path) not in _git("worktree", "list", "--porcelain", cwd=clone)
         assert state.tasks.read(task.task_id)[1].work
         prune_tasks(runner)  # Restart/idempotence does not delete task history.
-    if boundary in {"dirty", "ignored", "unaccepted", "merge"}:
+    if boundary in {"dirty", "unaccepted", "merge"}:
         assert "retained task workspace" in caplog.text
 
 
@@ -113,12 +113,12 @@ def test_world_retention(tmp_path, boundary, caplog):
     elif boundary == "merge":
         _git_path(turn.path, "MERGE_HEAD").write_text(turn.base_sha)
     prune_world_sessions(checkpoint, 7 * 86400)
-    assert turn.path.exists() == (boundary != "old")
-    if boundary == "old":
+    assert turn.path.exists() == (boundary not in {"old", "ignored"})
+    if boundary in {"old", "ignored"}:
         assert str(turn.path) not in _git("worktree", "list", "--porcelain", cwd=checkpoint.world.root)
         prune_world_sessions(checkpoint, 7 * 86400)
         assert checkpoint.checkout(workspace_id=owner.conversation_id.workspace).path.exists()
-    if boundary in {"dirty", "ignored", "unaccepted", "merge", "completion"}:
+    if boundary in {"dirty", "unaccepted", "merge", "completion"}:
         assert "retained world workspace" in caplog.text
 
 
