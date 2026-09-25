@@ -21,7 +21,7 @@ from steward_harness.lease import Lease, Busy
 # is a process spawn by contract, and the included driver then imports pydantic
 # and httpx, re-reads and cross-validates the whole controller configuration,
 # and re-hashes the release tree against its staging receipt: ~2.2s of CPU per
-# call, measured on a live instance. At a five-second poll that is most of a core spent
+# call, measured on nsnodes. At a five-second poll that is most of a core spent
 # learning a revision that has not moved. A target already observed satisfied
 # at the revision its ref still names is therefore left alone for this long.
 # Every other state — a moved ref, busy, blocked, pending, failed — observes on

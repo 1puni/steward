@@ -201,7 +201,7 @@ powerful and secure: possibility is cheap; authority is narrow.
 
 ## Live systems write the next roadmap
 
-Downstream stewards are heavy live users of this harness. They exercise it
+GuruGee and nsnodes are heavy live users of this harness. They exercise it
 under real organisational load, including using the harness to maintain the
 harness itself.
 
@@ -215,7 +215,8 @@ the gaps; Git carries the lessons home.
 
 ## Real-world examples will live here
 
-We will expand this document with concrete stories from live stewards: failures recovered, knowledge consolidated, surprising REM
+We will expand this document with concrete stories from GuruGee, nsnodes, and
+future stewards: failures recovered, knowledge consolidated, surprising REM
 connections, self-healing pull requests, and cases where one small abstraction
 removed an unreasonable amount of machinery.
 

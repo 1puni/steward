@@ -42,7 +42,7 @@ def _config(
             "topics": {"steward": 0, "qa": 7},
             "adapter_commands": {
                 "build": {
-                    "description": "Build a signed app artifact",
+                    "description": "Build a signed boating artifact",
                     "argument_mode": "optional_remainder",
                     "allowed_topics": allowed_topics or [],
                     "command": {

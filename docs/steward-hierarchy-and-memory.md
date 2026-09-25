@@ -10,12 +10,12 @@ running controller at every level or a personal steward above every organisation
 
 ## One kernel, different scopes
 
-Personal stewards, organisational stewards, and repository stewards use the same steward kernel.
+GuruGee, organisational stewards, and repository stewards use the same steward kernel.
 Their roles differ by scope, authority, and the children to which they may delegate—not
 by runtime or memory technology.
 
 ```text
-personal steward (meta-meta)
+GuruGee (meta-meta)
 └── organisational steward (meta)
     └── repository steward
 ```
@@ -44,7 +44,7 @@ Models orient themselves from the files and Git history in that world. The kerne
 not provide a semantic retrieval or memory synchronisation layer.
 
 ```text
-personal world/docs/      personal and cross-organisation truth
+GuruGee world/docs/       personal and cross-organisation truth
 organisation world/docs/ organisation policy and cross-repository truth
 repository/docs/         project truth
 ```
@@ -64,7 +64,7 @@ Its canonical home is the lowest common ancestor of its subjects:
   repository;
 - relationships or decisions spanning repositories in one organisation belong
   to that organisation's world;
-- personal intent and decisions spanning organisations belong to the personal
+- personal intent and decisions spanning organisations belong to GuruGee's
   world.
 
 Where a fact was discovered does not determine where it belongs. Parents store their own
@@ -80,7 +80,7 @@ than editable authorities.
 
 Consequently:
 
-- A personal steward delegates to organisational stewards instead of editing their
+- GuruGee delegates to organisational stewards instead of editing their
   repositories or acquiring their credentials.
 - Organisational stewards delegate repository work into the owning repository
   context.

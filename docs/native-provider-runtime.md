@@ -165,26 +165,6 @@ The adapter requires every offered command to complete and every fresh native
 turn to supply a successful result before closing the writer. It does not count
 result messages or treat a user-message echo as completion.
 
-Claude's `system/dev_intent` and `system/task_notification` notices are
-informational and may arrive before initialization or during a turn without a
-session identity. They neither establish a session nor complete a command.
-The adapter still requires `system/init` with a valid session UUID and effective
-model, the expected identity on resume, and a successful correlated terminal
-result. The `dev_intent` exception was verified against the installed Claude Code
-2.1.281 project-scanner envelope using synthetic Android project input. An actual
-read-only `ClaudeRuntime.execute` request completed with `dev_intent` before
-`init`; only event types were retained. Synthetic lifecycle and stream regressions
-live in `tests/test_runtime_lifecycle.py` and `tests/test_claude_stream.py`.
-
-For the GuruGee consumer pinned to
-`f90adf804c653383581930775e44ca94b0b2aeb5`, the coordinator should select a gated,
-published harness revision containing this parser correction and compatible
-native-session work, then update the dependency through GuruGee's normal upgrade
-procedure. This correction changes no configuration or state schema. Repeat the
-synthetic read-only adapter probe on the selected release before relying on
-reflection runs. The parser probe does not validate a consumer dependency
-upgrade, live workers, or Sleep scheduling; those remain separate rollout checks.
-
 The result's `user_message_uuid` is optional. If absent, the serial native
 command lifecycle identifies its root; a conflicting explicit identity fails.
 Cancellation, discarded commands, missing results, malformed protocol fields,
@@ -300,12 +280,6 @@ See [Codex skills](https://learn.chatgpt.com/docs/build-skills) and
 [Claude skills](https://code.claude.com/docs/en/skills).
 
 ## Native workflows and storage boundary
-
-For discovering available tools and distinguishing missing integration from
-missing host grants, follow the [onboarding discovery procedure](../skills/org-onboarding/SKILL.md#discover-capabilities-before-requesting-new-authority).
-Native tools, repository/world instructions and installed target contracts are
-the discovery surfaces; there is no separate harness capability registry.
-
 
 The Codex App Server uses the configured native home without blanket suppression
 of native goals, skills, plugins, or agents. Configure that steward's integrations

@@ -4,16 +4,9 @@
 
 # Steward Harness
 
-An organisation pipeline that moves work forward: a request comes in, a model does
-the thinking in a checkout, and nothing lands until the harness has checked the exact
-revision. Declarative, provider-neutral, and built on Git.
+A declarative, provider-neutral harness for autonomous repository stewardship.
 
 > The model proposes; the harness disposes.
-
-If a design needs a translation layer between two things that should already speak
-the same language, the model is broken, and the layer is where it shows. This
-harness has one representation for each fact (usually a Git commit) and deletes the
-adapters that would have hidden the disagreement.
 
 Native agents reason in retained task checkouts. Accepted Git refs and their
 committed task documents own requests, decisions, findings and work; a fresh
@@ -42,7 +35,7 @@ For an organisation, use the [onboarding skill](skills/org-onboarding/SKILL.md).
 For repository, organisation and personal setups, read
 [ways to use and connect stewards](docs/stewardship-arrangements.md).
 
-- [Documentation map](docs/README.md): current contracts and the operator journey.
+- [Documentation map](docs/README.md): current contracts and instance operations.
 - [Kernel contract](docs/kernel-contract.md): authority, state owners and concurrency.
 - [Engineering doctrine](docs/engineering-doctrine.md): understand the structure, then remove unnecessary machinery.
 
@@ -87,8 +80,7 @@ uv run steward run --config /absolute/path/to/steward.yaml
 The [example configuration](config/steward.example.yaml) is a provisioning
 template, not a starting point that happens to need editing: its accounts,
 directories, provider logins and remote URLs must already exist on the target
-host. Run `check` under the controller's service identity; on an unprovisioned machine it
-refuses, correctly, with "untrusted execution: unavailable". It checks the
+host. Run `check` under the controller's service identity. It checks the
 configured identity, filesystem grants and provider executable access. Linux
 invocation ownership additionally requires an actual launch on the provisioned
 host. The check does not prove provider
@@ -237,26 +229,9 @@ replace.
 
 ## Where it actually is
 
-Pre-1.0. It has run real organisational work for downstream instances, and those
-instances found real defects, which is the point: real worlds find the gaps, and Git
-carries the lessons home.
-
-What that does **not** mean:
-
-- The suite runs against fixtures and a scripted provider. `check` proves paths,
-  identities and executables, not a working provider login and not a deployed journey.
-- Nothing here is a hosted service. You provision a Linux host, an execution account,
-  provider logins and a Telegram bot yourself; the guide walks it, and none of it is
-  one command.
-- Production authority needs the separate execution user. A macOS laptop is a fine
-  place to read the code and run the tests, and says nothing about that boundary.
-- Recurring reflection is yours to define. The harness ships the trigger
-  (rhythms), a generic [reflection skill](src/steward_harness/skills/steward-reflection/SKILL.md)
-  and the exact-input plumbing. It ships no personal or organisational rhythm
-  policies, and a reflection policy you have used elsewhere does not arrive with a fork.
-- One controller serves one instance's state. There is no delegation transport between
-  stewards and no multi-world routing today; see
-  [ways to use and connect stewards](docs/stewardship-arrangements.md).
+Pre-1.0, and used in anger by downstream stewards including GuruGee and
+nsnodes. Those instances find the defects, which is the point: real worlds find
+the gaps, and Git carries the lessons home.
 
 Read [usage after the refactor](docs/usage-regressions.md) before you trust a
 guarantee. It separates what is reproduced from what is only code-inspected

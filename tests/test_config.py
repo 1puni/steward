@@ -231,9 +231,9 @@ def test_world_presence_is_the_only_configuration_state() -> None:
 
 def test_load_config_reads_example_yaml(repo_root: Path) -> None:
     config = load_config(repo_root / "config" / "steward.example.yaml")
-    assert config.identity.slug == "example"
-    assert "app" in config.repositories
-    assert config.pipelines["app-build"].probe.type == "command"
+    assert config.identity.slug == "boating"
+    assert "openhelm" in config.repositories
+    assert config.pipelines["openhelm-build"].probe.type == "command"
 
 
 @pytest.fixture()

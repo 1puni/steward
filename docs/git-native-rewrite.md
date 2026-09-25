@@ -79,13 +79,14 @@ deployment vendor enum, default light/sleep/rem lifecycle, or workflow graph.
 
 ## Read-only deployment evidence
 
-Downstream release paths seen so far bind systemd transient exact-SHA releases,
-including the harness itself. A status-only health endpoint is not exact
-running-identity proof. A vendor-hosted interface deploy, an SSH moving-main
-pull and restart, a downstream command that copies mutable outputs and writes a
-`deployed.json`, and a signed-artifact delivery cannot yet satisfy
-exact-revision observation, or prove running identity or interruption safety.
-Device-install paths are distinct from explicit device engagement.
+The 1puni example binds systemd transient exact-SHA releases, including the harness
+itself. Bathy's status-only health is not exact running-identity proof. Its comments
+coupling task landing to deployment disagree with the current separate convergence.
+NSNodes interface names Vercel; dumpbot's SSH moving-main pull and restart cannot
+satisfy exact-revision observation yet. Crosstrees' downstream command builds several
+outputs and restarts a library, but mutable copying and deployed.json alone do not
+prove running identity or interruption safety. OpenHelm's signed APK delivery and
+TinyPilot's runit/TinyCore install are distinct from explicit device engagement.
 These are local source inspections, not observations of live installations.
 
 ## Migration boundary

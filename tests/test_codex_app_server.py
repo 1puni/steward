@@ -473,7 +473,7 @@ def test_optional_output_still_rejects_malformed_final_message(tmp_path, text):
 def test_a_dead_sign_in_is_a_refusal_not_a_failed_turn(tmp_path):
     """An expired login says nothing about the work, so the next provider gets it.
 
-    A downstream instance lost every turn to this on 2026-09-20: `_refuses_for_capacity`
+    Crosstrees lost every turn to this on 2026-09-20: `_refuses_for_capacity`
     matched the literal string "usage limit" and nothing else, so a revoked
     refresh token ended the turn with two working providers configured behind
     it and never asked. The operator's own request died that way, three times.
@@ -494,7 +494,7 @@ def test_a_dead_sign_in_is_a_refusal_not_a_failed_turn(tmp_path):
 
 
 def test_a_reused_refresh_token_is_also_a_refusal(tmp_path):
-    """The other wording a downstream instance saw, for the same fact."""
+    """The other wording nsnodes saw, for the same fact."""
     turn, wire, _ = start(tmp_path)
     message = (
         "Your access token could not be refreshed because your refresh token "

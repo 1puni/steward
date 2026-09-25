@@ -16,7 +16,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib
 import inspect
 import json
-import os
 from pathlib import Path
 import subprocess
 from urllib.parse import urlsplit
@@ -108,14 +107,9 @@ def render_prompt(stage: str) -> dict:
         if stage == "ownership-answer":
             read_text += "\n\nThe task previously closed with QUESTION: TASK_QUERY. The controller retained an answer on that same task; TaskRunner supplies it as Incoming task context on continuation. The answer is dated evidence, not authority to steer other work."
         if procedure:
-            policy = "config/procedures/security-review.md"
-            if stage == "reflection":
-                policy = os.environ.get("STEWARD_REFLECTION_POLICY", "")
-            if policy and (ROOT / policy).is_file():
-                read_text += f"\n\nCurrent policy file: {policy}\n(This is the source file now; an admitted run uses its frozen accepted copy.)\n\n" + (ROOT / policy).read_text()
-                source_files.add(ROOT / policy)
-            else:
-                read_text += "\n\nNo reflection policy ships with the harness: it belongs to the instance that configures the procedure. Set STEWARD_REFLECTION_POLICY to a repository-relative path to preview one."
+            policy = "instances/1puni/procedures/light-review.md" if stage=="reflection" else "config/procedures/security-review.md"
+            read_text += f"\n\nCurrent policy file: {policy}\n(This is the source file now; an admitted run uses its frozen accepted copy.)\n\n" + (ROOT / policy).read_text()
+            source_files.add(ROOT / policy)
         output = "Findings, COMMIT, DISPOSITION and QUESTION; read-only procedures also return VERDICT. See the exact closure instructions above."
     else:
         request = "<operator message>"

@@ -43,9 +43,9 @@ No new activity means no run. Captured inputs in accepted task Git prevent repea
 admission of a consumed batch, including after restart. The first observation on
 a controller with no accepted batch establishes a baseline. Read the complete
 [quiet-period contract](automatic-deployment.md#git-quiet-periods-and-intervals)
-for native work, self-reflection exclusions and restart semantics. The harness ships a generic
-[reflection skill](../src/steward_harness/skills/steward-reflection/SKILL.md);
-the procedure that names when and how an instance reflects belongs to that instance.
+for native work, self-reflection exclusions and restart semantics. The instance's
+[Light procedure](../instances/1puni/procedures/light-review.md) describes how to
+reuse evidence and reflect on changed work.
 
 Organisation-wide read-only rhythms can set `workdir: /srv/organisation` on the
 rhythm. Provision that directory with the managed repositories as siblings and

@@ -182,7 +182,7 @@ def test_send_document_streams_generic_file_with_topic(tmp_path, monkeypatch: py
         api_module.httpx, "Client",
         lambda **kwargs: client_type(transport=httpx.MockTransport(respond), **kwargs),
     )
-    artifact = tmp_path / "app.apk"
+    artifact = tmp_path / "openhelm.apk"
     artifact.write_bytes(b"apk")
 
     message_id = TelegramAPI("tok", base_url="http://bot-api:8081").send_document(
@@ -198,7 +198,7 @@ def test_send_document_streams_generic_file_with_topic(tmp_path, monkeypatch: py
     assert b'name="chat_id"\r\n\r\n-100123' in request.content
     assert b'name="message_thread_id"\r\n\r\n8' in request.content
     assert b'name="caption"\r\n\r\nsigned' in request.content
-    assert b'name="document"; filename="app.apk"' in request.content
+    assert b'name="document"; filename="openhelm.apk"' in request.content
     assert b'Content-Type: application/vnd.android.package-archive\r\n\r\napk' in request.content
 
 
@@ -626,7 +626,7 @@ def test_the_bots_own_administrator_entry_is_not_an_operator(
 ) -> None:
     """Telegram drops other bots from this listing but returns the caller's own.
 
-    Shape taken from a live chat, which answers with the steward's own
+    Shape taken from the live nsnodes chat, which answers with the steward's own
     bot account as an administrator beside the two humans.
     """
     service = _service(tmp_path, allowed_users=(2,), allow_group_administrators=True)
@@ -1618,7 +1618,7 @@ def test_failed_document_is_quarantined_and_alerted_outside_topic(
     monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0.0)
     quarantine = tmp_path / "quarantine"
     service = _service(tmp_path, delivery_quarantine_dir=str(quarantine))
-    artifact = tmp_path / "app.apk"
+    artifact = tmp_path / "openhelm.apk"
     artifact.write_bytes(b"apk")
     sent_topics: list[int | None] = []
     monkeypatch.setattr(
@@ -1681,7 +1681,7 @@ def test_delivery_outbox_sends_declared_root_document_and_removes_job(
     artifacts = tmp_path / "artifacts"
     outbox.mkdir()
     artifacts.mkdir()
-    document = artifacts / "app.apk"
+    document = artifacts / "openhelm.apk"
     document.write_bytes(b"apk")
     job = outbox / "001.json"
     job.write_text(

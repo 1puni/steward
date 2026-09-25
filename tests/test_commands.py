@@ -54,10 +54,10 @@ def test_optional_token_command_with_no_arg() -> None:
 
 
 def test_git_is_a_remainder_command() -> None:
-    parsed = parse_inbound_text("/git reconcile app :: watch the auth refactor")
+    parsed = parse_inbound_text("/git reconcile crosstrees :: watch the auth refactor")
     assert parsed.command is not None
     assert parsed.command.name == "git"
-    assert parsed.command.arg == "reconcile app :: watch the auth refactor"
+    assert parsed.command.arg == "reconcile crosstrees :: watch the auth refactor"
 
 
 def test_rhythm_is_a_remainder_command() -> None:
@@ -69,8 +69,8 @@ def test_rhythm_is_a_remainder_command() -> None:
 
 def test_unknown_verbs_are_commands_with_an_honest_error() -> None:
     """A typo or retired command must never silently become a model prompt."""
-    for text in ("/reconcile app", "/land app", "/deploy app",
-                 "/retarget task_1 app", "/goal ship it", "/stop"):
+    for text in ("/reconcile crosstrees", "/land crosstrees", "/deploy crosstrees",
+                 "/retarget task_1 crosstrees", "/goal ship it", "/stop"):
         parsed = parse_inbound_text(text)
         assert parsed.command is not None
         assert parsed.error is not None

@@ -22,7 +22,7 @@ def test_conflict_prompt_includes_operator_note() -> None:
 
 def test_task_prompt_inspects_retained_work_with_current_operator_context() -> None:
     prompt = prompts.build_task_prompt(
-        repository="app",
+        repository="crosstrees",
         title="Repair traversal",
         procedure_scope="",
         event_id="task_task_123",
@@ -34,7 +34,7 @@ def test_task_prompt_inspects_retained_work_with_current_operator_context() -> N
     assert "existing provider-session context" in prompt
     assert "preserve completed work" in prompt
     assert "finish only what remains of the accepted task" in prompt
-    assert "app" in prompt
+    assert "crosstrees" in prompt
     assert "Repair traversal" in prompt
     assert "## Incoming task context" in prompt
     assert "answer: Use production-eu." in prompt

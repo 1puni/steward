@@ -45,7 +45,7 @@ constant.
 ## Substrate members
 
 Seven surfaces, initially reviewed on 2026-09-21. The original audit used checkout
-`1d6ff07e07eb8ce657680413136a3b49b8e8f334` on a downstream migration branch,
+`1d6ff07e07eb8ce657680413136a3b49b8e8f334` on `nsnodes/migration-prep`,
 not local `main`. The implementation described here includes the subsequent
 working-tree repair reviewed on 2026-09-23; deployment is a separate acceptance
 boundary.
@@ -73,7 +73,7 @@ provider family. File credentials avoid rotating-refresh-token reuse, but file
 storage alone does not prove that a credential never expires or is revoked.
 
 The original investigation reported a repeated Codex refresh-token failure on
-a downstream instance on September 16 and 21, with raw vendor prose in `status_reason`.
+nsnodes on September 16 and 21, with raw vendor prose in `status_reason`.
 Those live records were not independently reverified in this code audit. A typed
 authentication failure and a precise repair remain useful future work; no new
 login workflow is claimed here.
@@ -109,7 +109,7 @@ unconditionally. Rhythms run as ordinary procedure tasks and inherit it. The
 disposition is durable — `turns.input_disposition` (`state.py`) constrains to
 exactly the three `RuntimeInputResult` values.
 
-The original investigation reported three folded inputs on a downstream instance, two
+The original investigation reported three folded inputs on nsnodes, two
 accepted and one rejected. The database disposition establishes delivery state,
 not a model's judgement: adapters can reject input because their channel closed,
 a write failed, or the provider protocol rejected it. The dated live rows were
@@ -167,7 +167,7 @@ requirements and the distinction between identity checks and Linux acceptance.
 The *law* exists and is not in question: the
 [hierarchy and memory](steward-hierarchy-and-memory.md) contract places durable
 truth at the lowest scope that owns it, and instance procedures enforce it in
-prose — one downstream instance's reflection procedure states that organisation
+prose — `instances/nsnodes/procedures/light-review.md` states that organisation
 facts belong in the org-world and repository implementation in its own
 repository.
 
@@ -217,7 +217,7 @@ it leads its own process group, and stopping is `os.killpg`
 - **Cancellation** — `stop()` (`runtime/process.py:166-175`) sends `SIGTERM` to
   the group and nothing else. It starts no grace timer and does not shorten the
   invocation deadline. A provider that ignores `SIGTERM` therefore holds its
-  execution slot until the *original* deadline, which was 900s on one downstream instance, and the
+  execution slot until the *original* deadline, which is 900s on nsnodes, and the
   error that finally surfaces is `ProcessTimeout` rather than a cancellation.
 - **Teardown** — `_stop_process_group` (`runtime/process.py:272-279`) sends
   `SIGTERM`, waits up to `_TERMINATION_GRACE_SECONDS` (2.0,
@@ -281,13 +281,14 @@ Two qualifications, both load-bearing for the lift:
   The unit's own `TimeoutStopSec=2s` governs the unit's cgroup, which holds the
   `runc exec` leader — not the workload. So the requested graceful phase lands
   inside this one function.
-- **The sampled instance configs use host execution.** One records that a
-  container *"was tried and withdrawn"*; another declares none. These configurations do not establish the execution
+- **The sampled instance configs use host execution.** `instances/1puni/steward.yaml:12-15`
+  records that a container *"was tried and withdrawn"*; nsnodes declares no
+  container. These checked-in configurations do not establish the execution
   backend of every live instance.
 
 ### Unit policy is a third kill path
 
-One downstream provisioning script explains why the controller unit uses
+`instances/1puni/provision.sh:88-106` explains why the controller unit uses
 `KillMode=mixed`: `control-group` killed provider children instantly, defeated
 the controller's own drain, and turned every deploy into a blocked task — *"forty
 deploys in one day"*. The same comment states the consequence plainly: *"systemd
@@ -298,12 +299,12 @@ the main process exits. The controller observes a clean drain while its
 sub-agents are killed by systemd — an outcome no harness code path produces and
 none can see. This is deploy-correlated by construction.
 
-The original investigation recorded these properties of one downstream instance on 2026-09-21;
+The original investigation recorded these nsnodes properties on 2026-09-21;
 this audit did not independently reread them: `KillMode=mixed`, `KillSignal=15`,
 `TimeoutStopUSec=21min 40s`, `OOMPolicy=stop`, `MemoryMax=infinity`,
 **`Delegate=no`**. Two consequences. The unit has no local memory
 cap, but ancestor limits must also be inspected before excluding cgroup-OOM.
-Another instance configures `MemoryMax=6G`. The
+1puni configures `MemoryMax=6G`. The
 `Delegate=no` setting prevents supported direct management of a controller
 subtree; it does not prevent asking systemd to own separate transient services.
 
@@ -318,7 +319,7 @@ different traces: a journal restart, a `dmesg` OOM record, or neither. Until one
 incident is attributed, it is unknown whether a grace window would have changed
 any observed outcome, or whether the repair belongs entirely in unit policy.
 Prior operational records on this harness have overstated what shutdown
-observations proved; see the failure-boundaries contract for what a shutdown observation can establish.
+observations proved; see the [September 12 GG handoff](gg-handoff-2026-09-12-2210.md).
 
 **The native grace has not been established as a checkpoint-time guarantee.**
 The ten-second policy bounds interruption before containment; real providers

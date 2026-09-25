@@ -143,12 +143,19 @@ unrelated operator work is not permission to reset the world.
 ## Idle session retention
 
 An hourly controller pass retires owner checkouts after
-`controller.world_session_idle_seconds` (default 604800, seven days) since the
-latest completed turn. Owners without a completed latest turn stay materialized.
+`controller.world_session_idle_seconds` (default 86400, one day) since the
+latest completed turn. Each checkout is a full copy of the world's files and
+recreating one takes seconds (8 s for gg's 1.1 GB world), so one day keeps a
+conversation in use warm without holding a week of copies. Owners without a
+completed latest turn stay materialized.
 Under the world lease, a SQL write transaction prevents new turn admission while
 eligibility and removal are checked. Pending prepared turns or completion receipts
-prevent removal. The checkout must contain no dirty, untracked or ignored files,
+prevent removal. The checkout must contain no dirty or untracked files,
 no unfinished Git operation, and no commits outside the accepted world's ancestry.
+Ignored files do not block: the repository declares them regenerable, and Git's
+`worktree remove` deletes them while still refusing modified or untracked files.
+Finished task worktrees follow the same rule, which keeps a venv or
+`node_modules` from retaining a done task's checkout indefinitely.
 Refusals due to local work or pending recovery are logged. Removal uses Git
 `worktree remove` without force and `worktree prune`, keeping accepted history and
 native session records. The next turn recreates the checkout from the world.

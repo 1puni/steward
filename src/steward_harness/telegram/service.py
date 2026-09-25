@@ -455,7 +455,7 @@ class TelegramService:
             log.warning("Could not read Telegram chat administrators: %s", exc)
             return None
         # `is_bot` is excluded deliberately. Telegram drops *other* bots from
-        # this listing but returns the caller's own account, which for some bots
+        # this listing but returns the caller's own account, which for nsnodes
         # is an administrator — so without this the steward's bot id lands in
         # the admitted set. Nothing can reach admission under that id today,
         # because Telegram does not deliver a bot's own messages back through

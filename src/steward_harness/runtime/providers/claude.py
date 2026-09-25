@@ -102,7 +102,7 @@ def _declines_turn(message: str) -> bool:
         marker in text
         for marker in (
             # "Failed to authenticate: OAuth session expired and could not be
-            # refreshed" — the text a downstream instance lost every turn to.
+            # refreshed" — the text crosstrees lost every turn to.
             "failed to authenticate",
             "oauth session expired",
             "invalid_refresh_token",
@@ -160,10 +160,12 @@ class _ClaudeLifecycle:
 
     def consume_event(self, event: dict[str, Any]) -> str | None:
         event_type = event["type"]
-        if event_type == "system" and event.get("subtype") in ("task_notification", "dev_intent"):
-            # Background-agent and development-intent notices are informational,
-            # not session initialization or turn completion. Claude can emit
-            # them before init or during a turn without a session identity.
+        if event_type == "system" and event.get("subtype") == "task_notification":
+            # Background-agent notices are not conversation events: they carry
+            # no session identity. A resumed session reports its orphaned
+            # agents BEFORE init (the strict init gate rejected them), and an
+            # agent finishing mid-turn reports AFTER init (the identity gate
+            # rejected the missing session_id). Both are informational.
             return None
         if self.session_id is None:
             return self._accept_init(event)

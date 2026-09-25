@@ -1,8 +1,8 @@
 # Example Steward Configuration
 
 identity:
-  name: "example-steward"
-  slug: "example"
+  name: "boating-steward"
+  slug: "boating"
 
 # The controller may run as root because it owns landing and deployment. Every
 # model-controlled process is dropped to this ordinary account first. Keep it
@@ -100,21 +100,21 @@ telegram:
   agent_actions:
     - "pin_reply"
     - "pin_message"
-  delivery_outbox_dir: "/home/steward/app-state/outbox"
+  delivery_outbox_dir: "/home/steward/openhelm-state/outbox"
   delivery_quarantine_dir: "/var/lib/steward/outbox-quarantine"
   delivery_roots:
-    - "/home/steward/app-state/artifacts"
-    - "/home/steward/app-state/shots"
+    - "/home/steward/openhelm-state/artifacts"
+    - "/home/steward/openhelm-state/shots"
   # Product commands remain product-owned executables. The harness owns their
   # Telegram syntax, menu entry, authorization, topic scope, and honest result.
   adapter_commands:
     build:
-      description: "[app] Build and deliver a signed APK."
+      description: "[boating] Build and deliver a signed OpenHelm APK."
       argument_mode: "none"
       allowed_topics: ["steward"]
       command:
-        argv: ["/opt/app-steward/build-apk.sh"]
-        cwd: "/home/steward/app"
+        argv: ["/opt/openhelm-steward/build-apk.sh"]
+        cwd: "/home/steward/openhelm"
         timeout_seconds: 30
 
 # Presence of this block configures the steward's Git world; omit it for a
@@ -141,12 +141,12 @@ rhythms:
   weekly-security:
     schedule: 604800
     procedure: security-glm
-    input: repositories/app/main
+    input: repositories/openhelm/main
     owner: telegram:0  # Assess findings in the owning world and return useful results.
 targets:
-  app:
-    ref: repositories/app/main
-    driver: /usr/local/libexec/steward-targets/app
+  openhelm:
+    ref: repositories/openhelm/main
+    driver: /usr/local/libexec/steward-targets/openhelm
     requires: [security-glm, security-second]
   steward-harness:
     ref: repositories/steward-harness/main
@@ -165,9 +165,9 @@ targets:
 #   events_file: "/var/lib/steward/desk/events.jsonl"
 
 repositories:
-  app:
-    path: "/home/steward/app"
-    remote_url: "ssh://git@example.invalid/app.git"
+  openhelm:
+    path: "/home/steward/openhelm"
+    remote_url: "ssh://git@example.invalid/openhelm.git"
     default_branch: "main"
     gates:
       - argv: ["cargo", "check", "--manifest-path", "app/src-tauri/Cargo.toml"]
@@ -199,8 +199,8 @@ repositories:
       - argv: ["uv", "run", "--frozen", "--extra", "dev", "pytest", "-q"]
         timeout_seconds: 600
 pipelines:
-  app-build:
-    repository: "app"
+  openhelm-build:
+    repository: "openhelm"
     observation_interval_seconds: 300
     repair_mode: "autonomous"
     probe:

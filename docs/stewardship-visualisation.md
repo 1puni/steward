@@ -64,6 +64,9 @@ labels that distinction; it does not pretend today's file is a historical run.
 - [Styles](../scripts/stewardship-flow.css): local browser presentation.
 - [Diagram source](../output/stewardship-flow/stewardship-flow.html): graph,
   traces, source references and stage links; no prompt text.
+- [September 14 review](stewardship-flow-review-2026-09-14.md): original findings
+  and dated verification; [feedback follow-through](stewardship-feedback-2026-09-14.md)
+  owns subsequent implementation and rollout evidence.
 
 The in-conversation version cannot execute local Python. Its cognition links
 open the local inspector, which must be running. It never falls back to stale

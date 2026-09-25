@@ -99,14 +99,15 @@ the token and the operator allowlist come from `TelegramConfig`
 
 **TLS.** Nothing in this repository terminates TLS, and this design does not
 pretend otherwise. The old one validated `task_app_url` as a public HTTPS URL,
-which *required* a reverse proxy that exists in no script here — the one an
-earlier rollout actually used was kept root-only on its host and was never in
-the repository. That field is not
+which *required* a reverse proxy that exists in no script here — the one the
+2026-09-05 rollout actually used was kept root-only at
+`/root/1puni-task-ui-upgrade-20260905/recovery/` and was never in the repository
+(`instances/1puni/task-ui-rollout-2026-09-05.md`). That field is not
 reintroduced. The harness binds loopback and has no opinion about what is in
 front of it. Telegram will only open a Mini App over HTTPS, so launching this
 from the bot requires an instance to put a TLS proxy in front and register the
-`web_app` URL itself; an ordinary nginx `proxy_pass` to the loopback listener,
-with WebSocket upgrade headers only where a service needs them, is the usual shape.
+`web_app` URL itself; `instances/1puni/browser-handoff.nginx` is the shape that
+instance already uses for another service.
 
 **Auth.** Every data request carries `Authorization: tma <initData>` and is
 verified before anything is read: HMAC-SHA256 over the sorted `initData` pairs

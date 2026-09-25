@@ -108,7 +108,7 @@ def test_observation_does_not_require_build_identity_but_apply_does(tmp_path, mo
 
 def test_installed_health_adapter_survives_worker_handoff(tmp_path, monkeypatch):
     config, settings, _, revision, _, jobs, _ = installed(tmp_path, monkeypatch)
-    entry = tmp_path / 'site-target.py'
+    entry = tmp_path / 'bathy-target.py'
     monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps(dict(target='production', revision=revision))))
     assert cli.main(['--config', str(config), '--settings', str(settings), 'apply'], worker_entry=entry) == 0
     job = jobs[0]

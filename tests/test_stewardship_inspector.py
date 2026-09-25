@@ -92,13 +92,7 @@ def test_http_stages_render_fresh_and_unknown_stages_fail():
     try:
         with urlopen(base + "/api/stages") as response:
             stages = json.load(response)
-        # The historical baseline exists only in a checkout that carries the full history.
-        has_baseline = subprocess.run(
-            ["git", "cat-file", "-e", "e2a7777^{commit}"], cwd=inspector.ROOT, capture_output=True
-        ).returncode == 0
         for stage in stages:
-            if stage.startswith("old-") and not has_baseline:
-                continue
             with urlopen(base + "/api/prompt/" + stage) as response:
                 assert response.headers["Cache-Control"] == "no-store"
                 sample = json.load(response)

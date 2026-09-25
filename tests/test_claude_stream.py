@@ -283,32 +283,3 @@ def test_interrupted_result_drains_completion_before_eof(tmp_path):
     assert not wire.closed
     command(stream, root, "completed")
     assert wire.closed
-
-
-@pytest.mark.parametrize("provider", ["claude", "glm"])
-def test_pre_init_dev_intent_does_not_open_input_or_complete_command(tmp_path, provider):
-    sessions, senders = [], []
-    request = RuntimeRequest(
-        execution_id="synthetic-dev-intent", resolved=resolve_model(provider, "fast"),
-        provider_session_id=None, prompt="synthetic check", cwd=tmp_path,
-        timeout_seconds=5, on_session_started=sessions.append, on_input_ready=senders.append,
-    )
-    lifecycle = _ClaudeLifecycle(None, provider)
-    stream = ClaudeInputStream(request, lifecycle)
-    wire = Wire()
-    stream.connect(wire)
-    root = wire.messages[0]["uuid"]
-    stream.consume(json.dumps({"type": "system", "subtype": "dev_intent",
-                               "kind": "android_app", "trigger": "project_scan"}))
-    assert not sessions and not senders and not wire.closed
-    assert stream.session_id is None
-    command(stream, root, "queued")
-    command(stream, root, "started")
-    emit(stream, type="system", subtype="init", model="synthetic-model")
-    assert sessions == [SESSION] and len(senders) == 1
-    result(stream, root)
-    assert not wire.closed
-    command(stream, root, "completed")
-    stream.finish()
-    assert wire.closed
-    assert lifecycle.finish() == ("findings", SESSION, "synthetic-model")

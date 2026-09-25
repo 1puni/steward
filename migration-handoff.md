@@ -173,9 +173,9 @@ remains in the private conversion report and original Git history.
 Inspect `epoch50-conversion.json` and require `complete: true`; a partial destination
 is not deployable. Compare task classifications against the same copied controller
 remote refs. Verify native lineage fields and original provider homes, run the target
-schema's integrity checks, then rehearse startup and retained-work recovery. A
-rehearsal recorded for one installation is not permission to reuse an old snapshot for
-a later cutover.
+schema's integrity checks, then rehearse startup and retained-work recovery. The
+[September 24 integration record](docs/refactor-integration-2026-09-24.md) records the
+GG-specific rehearsal; it is not permission to reuse an old snapshot for a later cutover.
 
 Apply the proven conversion to a fresh final quiescent copy. Update configuration
 keys listed above separately. Preserve original workspace paths, native homes,

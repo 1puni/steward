@@ -1,6 +1,6 @@
 # Source-derived working environments
 
-> September 7 workspace decision, later superseded in part by a container-retention effort that was withdrawn. The text below describes rematerialized checkouts and is the current policy on native Linux execution.
+> September 7 workspace decision, later superseded in part by the active [persistent development-environment migration](development-environment-migration.md). The text below describes rematerialized checkouts; it must not be read as the target container retention policy.
 
 Decided and implemented locally on 2026-09-07 following operator correction.
 
@@ -11,9 +11,11 @@ turns removed the directory, including ignored environments and local artifacts.
 Absolute output paths consequently described disposable storage. This confused
 checkpoint lifetime with the lifetime of ongoing work.
 
-The conduct rule in the [hierarchy contract](steward-hierarchy-and-memory.md) says:
-“Intent flows down. Work happens at the owning scope. Evidence and references
-flow up. Truth stays with its owner.” It is a statement about ownership of work and truth, not a mandate
+The operator-requested conduct in the GuruGee fork says: “Intent flows down. Work
+happens at the owning scope. Evidence and references flow up. Truth stays with
+its owner.” Its source is the sibling checkout's
+`vendor/steward-harness/docs/steward-hierarchy-and-memory.md`, Conduct section.
+The operator clarified that this is ownership of work and truth, not a mandate
 for restrictive filesystem compartments. Filesystem access and native intelligence
 should support exploration and emergence within the granted operating environment.
 
@@ -58,8 +60,7 @@ Extra access does not automatically checkpoint changes in every directory.
 Repository-local work still belongs in its repository and follows the existing
 candidate/gate/publication path. Parent worlds carry their own decisions and
 references, not copied child truth. The upstream change belongs here; recovering
-a downstream instance's actual artefacts and assessing its deployed state
-belongs downstream.
+GuruGee's actual SVG and assessing its deployed state belongs downstream.
 
 ## Evidence and limits
 

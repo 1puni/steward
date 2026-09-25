@@ -202,7 +202,7 @@ runtime output, not authenticated release content; release write access must
 remain restricted to trusted identities.
 
 For operator inspection, use the release's configured interpreter with `-B`,
-for example, from `/opt/steward-harness/current`:
+for example, from `/opt/1puni-steward/current`:
 
 ```sh
 python3.14 -B -m steward_harness.cli --help

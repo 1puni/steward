@@ -229,7 +229,7 @@ class TelegramAdapterCommandConfig(BaseModel):
     """One product-specific Telegram command executed without a shell.
 
     The harness owns parsing, authorization, topic scoping, and reporting. The
-    adapter owns only the allowlisted executable (for example an app's APK
+    adapter owns only the allowlisted executable (for example boating's APK
     builder). Any parsed argument is appended as one argv element.
 
     ``authority`` says whose identity runs it. ``agent`` goes through the
@@ -478,7 +478,7 @@ class ControllerConfig(BaseModel):
     # keeps the capacity that split gave and drops the reservation.
     workers: int = Field(default=8, ge=1, le=32)
     health_bind: str | None = None  # host:port loopback healthz for self-deploy
-    world_session_idle_seconds: int = Field(default=604800, ge=1)
+    world_session_idle_seconds: int = Field(default=86400, ge=1)
 
 
 class DeskConfig(BaseModel):

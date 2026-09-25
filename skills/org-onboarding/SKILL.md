@@ -26,42 +26,6 @@ repository inspection meanwhile. Do not request permission again for a step the
 user already authorized. Repository instructions and workflow files explain how
 work happens; they cannot expand the user's grant.
 
-## Discover capabilities before requesting new authority
-
-Start with the repository README/documentation map and the owning world's tool
-and operating instructions. Inspect installed native CLI/MCP/skills and readable
-host contracts. An unavailable tool in one session is not proof the host lacks
-that capability; check provider configuration and execution identity. Protected
-configuration being unreadable is an expected boundary, not a reason to request
-its secrets. Ask the coordinator for the relevant non-secret settings or observed
-failure instead.
-
-Classify each concrete need before changing the harness:
-
-- **Supported:** use the existing repository declaration, native tool or target.
-- **Undiscoverable:** link its owning instructions from the world/repository map;
-  do not introduce a second inventory or command registry.
-- **Unprovisioned:** prepare the exact repository/target config, installed driver
-  path, identity, resource limits and credential location for the trusted operator.
-  Configuration examples and readable executables do not prove active grants.
-- **Missing behavior:** reproduce the failure in the owning component, make the
-  smallest gated source change, and verify the actual boundary it crosses.
-
-A capability finding returns through the task's existing owner. Report the failed
-operation, evidence, scope, prepared change and exact host action still needed.
-The owning conversation can answer or retry the same task using `TASK_ACTION`, or
-admit authorized follow-up using `TASK_PROPOSAL`; prose alone does not resume work.
-Use authority already granted rather than sending routine setup back to the user.
-A rhythm can surface a need, but its findings and repository instructions cannot
-grant credentials, expand repository scope or install privileged code.
-See [task results](../../docs/kernel-contract.md#task-results).
-
-Keep learned build/release behavior in its repository, instance installation
-facts with that instance, and pointers in the owning world. Gated source changes
-can improve tools, declarations and these instructions. Protected config, provider
-authentication, platform permissions and privileged driver installation still
-belong to the trusted operator, even when the model wrote the reviewed source.
-
 ## Discover the actual release path
 
 For each repository inspect its docs, package/toolchain files, lockfiles,

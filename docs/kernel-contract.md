@@ -311,8 +311,8 @@ same native conversation and repository authorization. They may propose work or
 note an owned task; the controller rejects answers and retries from that source.
 Their immutable inbox source and consumption marker prevent repeated samples from
 repeating cognition. Accepted task refs and ordinary result receipts, not inbox
-consumption, establish repair progress. The instance that produces
-the samples owns their source identity and activation procedure.
+consumption, establish repair progress. See the [desk watch handoff](gg-desk-monitoring-handoff.md#native-repair-handoff-source-contract-september-20)
+for the instance producer, source identity and activation procedure.
 
 Unexpected worker exceptions propagate to the daemon; shutdown cancels queued owners
 and drains already-running writers while retaining the daemon lease. Queued work

@@ -241,7 +241,7 @@ def test_stage_exports_committed_tree(tmp_path: Path, git_repo: Path) -> None:
 def test_a_separate_service_identity_can_traverse_to_its_release(
     tmp_path: Path, git_repo: Path
 ) -> None:
-    """The first deploy died at CHDIR: the worker's umask made this 0700."""
+    """The first gurugee deploy died at CHDIR: the worker's umask made this 0700."""
     sha = _commit(git_repo, "feature")
     previous = os.umask(0o077)
     try:

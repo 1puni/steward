@@ -109,7 +109,7 @@ class TelegramAPI:
 
         Telegram omits *other* bots but includes this one, so a caller deciding
         admission must filter `user.is_bot` itself. Verified against the live
-        live chat, which returns the steward's own bot account alongside the
+        nsnodes chat, which returns the steward's own bot account alongside the
         two human administrators.
         """
         result = self._request("POST", "getChatAdministrators", json={"chat_id": chat_id})

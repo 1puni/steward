@@ -127,82 +127,6 @@ def test_notification_before_init_is_tolerated() -> None:
     assert lifecycle.finish() == ("did the thing", _SESSION, "glm-5.3")
 
 
-def _dev_intent() -> dict:
-    # Synthetic envelope from Claude Code 2.1.281's project scanner.
-    return {"type": "system", "subtype": "dev_intent",
-            "kind": "android_app", "trigger": "project_scan"}
-
-
-@pytest.mark.parametrize("provider", ["Claude", "GLM"])
-@pytest.mark.parametrize("resumed", [False, True])
-def test_dev_intent_is_informational_throughout_turn(provider, resumed):
-    lifecycle = _ClaudeLifecycle(_SESSION if resumed else None, provider)
-    assert lifecycle.consume_event(_dev_intent()) is None
-    assert lifecycle.session_id is None and lifecycle.effective_model is None
-    assert lifecycle.consume_event(json.loads(_init())) == _SESSION
-    lifecycle.consume_event(_dev_intent())
-    lifecycle.consume_event(json.loads(_result()))
-    lifecycle.consume_event(_dev_intent())
-    assert lifecycle.finish() == ("did the thing", _SESSION, "glm-5.3")
-
-
-@pytest.mark.parametrize("initialized", [False, True])
-def test_dev_intent_cannot_complete_a_turn(initialized):
-    lifecycle = _lifecycle()
-    if initialized:
-        lifecycle.consume_event(json.loads(_init()))
-    lifecycle.consume_event(_dev_intent())
-    with pytest.raises(RuntimeExecutionError, match="before a successful terminal result"):
-        lifecycle.finish()
-
-
-@pytest.mark.parametrize("event, match", [
-    ({"type": "system", "subtype": "unknown"}, "did not start with system init"),
-    ({"type": "assistant", "subtype": "dev_intent"}, "did not start with system init"),
-    ({"type": "error", "error": {"message": "synthetic error"}}, "did not start with system init"),
-    (json.loads(_result()), "did not start with system init"),
-    ({"type": "system", "subtype": "init", "session_id": "bad", "model": "model"},
-     "invalid persistent session identity"),
-    ({"type": "system", "subtype": "init", "session_id": _SESSION}, "omitted its effective model"),
-])
-def test_dev_intent_preserves_initialization_gate(event, match):
-    lifecycle = _lifecycle()
-    lifecycle.consume_event(_dev_intent())
-    with pytest.raises(RuntimeExecutionError, match=match):
-        lifecycle.consume_event(event)
-
-
-def test_dev_intent_preserves_resume_identity():
-    lifecycle = _ClaudeLifecycle("22222222-2222-4222-8222-222222222222", "Claude")
-    lifecycle.consume_event(_dev_intent())
-    with pytest.raises(RuntimeExecutionError, match="resumed a different"):
-        lifecycle.consume_event(json.loads(_init()))
-
-
-@pytest.mark.parametrize("event, match", [
-    ({"type": "error", "session_id": _SESSION, "error": {"message": "synthetic failure"}},
-     "synthetic failure"),
-    ({**json.loads(_result()), "is_error": True, "result": "synthetic failure"}, "synthetic failure"),
-    ({**json.loads(_result()), "terminal_reason": "interrupted"}, "did not finish"),
-    ({**json.loads(_result()), "session_id": "22222222-2222-4222-8222-222222222222"},
-     "different persistent session identity"),
-    ({**json.loads(_result()), "session_id": None}, "invalid persistent session identity"),
-])
-def test_dev_intent_preserves_turn_failures(event, match):
-    lifecycle = _lifecycle()
-    lifecycle.consume_event(_dev_intent())
-    lifecycle.consume_event(json.loads(_init()))
-    lifecycle.consume_event(_dev_intent())
-    with pytest.raises(RuntimeExecutionError, match=match):
-        lifecycle.consume_event(event)
-
-
-@pytest.mark.parametrize("line", ['{"type":"system","subtype":"dev_intent"', '[]', '{"subtype":"dev_intent"}'])
-def test_malformed_dev_intent_stream_is_rejected(line):
-    with pytest.raises(RuntimeExecutionError, match="malformed event stream"):
-        _lifecycle().decode(line)
-
-
 def test_notification_mid_turn_is_tolerated() -> None:
     """A background agent finishing mid-turn reports after init, without a session id."""
     lifecycle = _lifecycle()
@@ -276,8 +200,8 @@ def test_dropped_identity_grants_unrestricted_workspace(tmp_path: Path) -> None:
     boundary at all.
     """
     controller = ProcessController(UntrustedExecutionBroker(
-        UntrustedExecutionConfig(user="steward", group="steward",
-                                 home="/var/lib/steward-agent")))
+        UntrustedExecutionConfig(user="gurugee", group="gurugee",
+                                 home="/var/lib/gurugee-agent")))
     runtime = ClaudeRuntime(controller=controller, native_home=tmp_path)
     writable = runtime._command(_request(tmp_path, "workspace-write"), None)
 
