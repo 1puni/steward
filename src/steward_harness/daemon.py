@@ -24,7 +24,7 @@ from steward_harness.config.schema import (
 from steward_harness.conversations import ConversationService
 from steward_harness.telegram.api import TelegramAPIError
 from steward_harness.desk import DeskEvents, DeskInbox, DeskMessage
-from steward_harness.git import ISOLATED_GIT_ENV, redact_command_output, run_agent_git
+from steward_harness.git import redact_command_output
 from steward_harness.git_transport import (
     ControllerGitTransport,
     GitTransportError,
@@ -38,7 +38,7 @@ from steward_harness.provider_types import ProviderFamily, ProviderProfile
 from steward_harness.runtime.contracts import CognitionAdapter, RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.providers import build_runtimes
-from steward_harness.procedures import Procedures, resolve_input
+from steward_harness.procedures import Procedures
 from steward_harness.targets import Targets
 from steward_harness.state import (
     ConversationBusy,
@@ -135,21 +135,6 @@ def _controller_executable_refusal(executable: Path) -> str | None:
     return None
 
 
-def _native_git_heads(config, broker):
-    """Observe native commits through the agent boundary, including active worktrees."""
-    heads = {}
-    for name, repository in config.repositories.items():
-        result = run_agent_git(
-            broker, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/",
-            cwd=repository.path, timeout=30, extra_env=ISOLATED_GIT_ENV,
-        )
-        result.check_returncode()
-        for line in result.stdout.splitlines():
-            ref, sha = line.split()
-            heads[f"native:{name}:{ref}"] = sha
-    return heads
-
-
 class KernelCommands:
     """Small operator surface over current state and the two repository paths."""
 
@@ -171,14 +156,7 @@ class KernelCommands:
         self.reconciler = reconciler
         self.transports = dict(transports)
         self.broker = broker
-        if procedures is None:
-            world = GitWorld(config.world.root, execution_broker=broker) if config.world else None
-            procedures = Procedures(
-                config, state, transports,
-                world=world,
-                native_heads=lambda: _native_git_heads(config, broker),
-            )
-        self.procedures = procedures
+        self.procedures = procedures or Procedures(config, state, transports)
         self.targets = targets or Targets(config, state, transports, self.procedures)
 
     def __call__(
@@ -407,10 +385,11 @@ class KernelCommands:
             rhythm = self.config.rhythms[parts[1]]
             if rhythm.input == "world":
                 return f"{parts[1]} is a world rhythm; it runs once per interval on its schedule."
-            repository, candidate, base = resolve_input(rhythm.input, self.transports)
+            repository, candidate, base, activity = self.procedures.observe(rhythm)
             task = self.procedures.request(rhythm.procedure, repository, candidate, base,
                                           event=f"rhythm:{parts[1]}:manual:{uuid.uuid4().hex}",
-                                          owner=rhythm.owner, workdir=rhythm.workdir)
+                                          owner=rhythm.owner, activity=activity,
+                                          workdir=rhythm.workdir)
             return f"Queued {task}"
         return "Usage: /rhythm list | run <name>. Edit schedules in controller configuration."
 
@@ -625,11 +604,7 @@ class StewardDaemon:
             ),
         )
 
-        procedures = Procedures(
-            self.config, state, transports,
-            world=checkpoint.world if checkpoint else None,
-            native_heads=lambda: _native_git_heads(self.config, self.broker),
-        )
+        procedures = Procedures(self.config, state, transports)
         targets = Targets(self.config, state, transports, procedures)
         self._procedures, self._targets = procedures, targets
         reconciler = RepositoryReconciler(

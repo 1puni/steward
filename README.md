@@ -116,7 +116,7 @@ loader silently ignores is a field the operator believes is doing something.
 | `pipelines`, `incident_policy` | Probes, failure confirmation and repair allowance |
 | `world` | The Git world for durable knowledge; optional named reconciliation procedure |
 | `procedures` | Accepted instructions, model and access settings |
-| `rhythms` | Non-overlapping interval triggers for procedures; `input: world` runs one world turn per interval |
+| `rhythms` | Non-overlapping interval or quiet triggers for procedures, admitted only on new input; `input: world` runs one world turn per interval |
 | `targets` | Desired refs, installed drivers and required evidence |
 | `telegram`, `desk` | Optional ingress and result transports |
 

@@ -16,7 +16,7 @@ or permission to repeat side effects.
 | Repository publication | Validation failures block a task or are logged for ambient work; declared transport/runtime failures are logged at the repository boundary | A lost push response proves nothing landed |
 | Incident probe | Declared probe failure becomes an unhealthy sample under incident policy | A controller defect authorizes a repair task |
 | World acceptance | Retain prepared candidates through contention, conflict and failed application | Provider completion or an episode proves accepted edits |
-| Rhythm | Log declared Git transport failures in quiet-activity sampling and skip quiet rhythms until the next poll without changing their quiet state; interval rhythms remain eligible. Retain incomplete unprepared work for retry and prepared work for acceptance | Failure creates a new successful due boundary |
+| Rhythm | Log declared Git transport failures while observing a rhythm's input and skip that rhythm until the next poll without changing its quiet state; other rhythms remain eligible. Retain incomplete unprepared work for retry and prepared work for acceptance | Failure creates a new successful due boundary |
 | Deployment | Report staging/activation failure; failed restart or health attempts rollback | A pointer flip or HTTP success alone proves artifact integrity |
 | Desk ingress | Requeue messages on world contention, pending application or content conflict; log the deferral and retain candidates | One conflicted session requires stopping the controller or replaying accepted cognition |
 | Telegram update reply | Persist confirmed delivery pieces and retry unfinished pieces | Exactly-once network delivery |

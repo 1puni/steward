@@ -99,19 +99,3 @@ class GitWorld:
         ), revision, "--").split("\0")
         return {key: value.strip() for key, value in
                 zip((TURN_TRAILER, BASE_TRAILER, SOURCE_TRAILER), fields) if value.strip()}
-
-    def turn_sources(self, revisions) -> dict[str, tuple[str, str]]:
-        """(source, base) of each named commit that closed a world turn."""
-        listed = agent_git(
-            self.execution_broker, "log", "--no-walk=unsorted", "--ignore-missing", "--stdin",
-            f"--format=%H%x00%(trailers:key={SOURCE_TRAILER},valueonly)%x00%(trailers:key={BASE_TRAILER},valueonly)%x01",
-            cwd=self.root, timeout=30, env=ISOLATED_GIT_ENV,
-            input_text="".join(f"{revision}\n" for revision in revisions),
-        )
-        found = {}
-        for record in listed.split("\x01"):
-            if record.strip():
-                sha, source, base = record.strip("\n").split("\0")
-                if source.strip() and base.strip():
-                    found[sha] = (source.strip(), base.strip())
-        return found
