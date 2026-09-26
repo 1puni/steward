@@ -161,24 +161,25 @@ merge commits do not appear on the publication branch.
 
 ## Recurrence and evidence boundaries
 
-An interval rhythm starts at most one task per interval bucket. The accepted run retains the
-input snapshot chosen at that start; a moving ref does not fan out additional runs
-within the interval. An incomplete earlier run prevents overlapping subsequent
-runs. Recovery starts at most the current interval, without accumulating a backlog.
-A quiet rhythm (`schedule: {quiet: 300}`) instead waits for newly observed Git
-commits across configured repositories, native task branches, accepted task work
-and the world, then admits one batch after the quiet duration. No activity means
-no run. Exact source revisions are retained in the procedure task; its own
-review and world-assessment commits do not create another batch. First startup
-baselines without running; restart after accepted evidence re-arms a full quiet
-period only for newly observed inputs. See [schedule semantics](automatic-deployment.md#git-quiet-periods-and-intervals).
+A procedure rhythm admits a run only when its input holds a commit none of its
+finished runs captured: the candidate of its `input` ref, and for an
+organisation (`workdir`) rhythm also every observed remote head and ordinary
+task's accepted work. The runs' retained inputs are the cursor. An interval
+rhythm starts at most one task per interval bucket, and none in a bucket without
+new input; a moving ref does not fan out additional runs within the interval. An
+incomplete earlier run prevents overlapping subsequent runs. Recovery starts at
+most the current interval, without accumulating a backlog. A quiet rhythm
+(`schedule: {quiet: 300}`) instead admits one run once its new input has stopped
+moving for the quiet duration. Task-store bookkeeping and procedure evidence,
+the rhythm's own included, are never input. See [schedule semantics](automatic-deployment.md#git-quiet-periods-and-intervals).
 
 Manual runs are explicit new requests. Every rhythm explicitly names a configured
 result owner or `null` for retained evidence only. Owned findings enter ordinary
 world assessment, authorized follow-up admission and durable result delivery;
-there is no separate reflection notification lifecycle. Completed scheduled read-only
-reviews notify only with their owner's material update; `SILENT` retains evidence
-without sending. A checkpoint itself does not broadcast to Telegram.
+there is no separate reflection notification lifecycle. A finished read-only
+rhythm run without findings is not selected for assessment at all; completed
+scheduled reviews with findings notify only with their owner's material update.
+A checkpoint itself does not broadcast to Telegram.
 
 Read-only access constrains mutations; it does not turn every procedure into a
 full-tree audit. Scheduled and explicit procedure runs follow their accepted

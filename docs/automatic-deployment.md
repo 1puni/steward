@@ -57,9 +57,20 @@ input. Missing capability or a review question remains visible on its task.
 
 ## Git quiet periods and intervals
 
-An integer `schedule: 86400` is an interval: it can run every day even when
-Git has not changed. A quiet schedule instead collects a batch of observed Git
-work and runs once after that work stops:
+A procedure rhythm runs only on new input. Before admission the controller
+fetches what the rhythm reads and compares it with the commits its finished
+runs captured. A repository rhythm reads its `input` ref: its input is that
+candidate commit. A rhythm with a `workdir` reads the organisation: its input is
+also every observed `refs/steward/remote/*` head of every configured repository
+and the accepted work commit of every ordinary task. If every observed commit
+was captured by a finished run, the poll admits nothing, calls no model and
+logs at debug level. The runs' own `candidate` and `activity` fields are the
+cursor; nothing else records what a rhythm has seen.
+
+An integer `schedule: 86400` is an interval: at most one run per interval
+bucket, admitted on the first poll in the bucket that sees new input. A quiet
+schedule instead waits until the new input has stopped moving, then runs once
+over exactly that input:
 
 ```yaml
 rhythms:
@@ -70,88 +81,36 @@ rhythms:
     owner: telegram:0
 ```
 
-Every newly observed commit in configured repository branches, retained native
-work branches, accepted task work, or the Git world restarts the five-minute
-quiet window. `input` selects the procedure's execution checkout; it does not
-limit which repositories can trigger reflection. The accepted procedure task
-captures the complete source-to-revision map alongside that checkout's candidate
-and base. Its event identity derives from those inputs, so unchanged ticks do
-not create more tasks. A completed failure verdict is still consumed evidence.
-Manual requests remain explicit new work, and unfinished runs prevent overlap.
-A blocked run is not unfinished in that sense: nothing retries it, so the
-rhythm's next firing cancels it as superseded and starts a fresh run. A
-procedure's `provider` and `model` name a preference, not a pin: its run leads
-with that provider and falls back through `provider.family_order`, each
-fallback using its own configured model for the profile.
+Each newly observed commit in the rhythm's input restarts the five-minute quiet
+window. Unchanged ticks, removing a ref and aliases for an already observed
+commit do not. The quiet run's event identity derives from its input, so the
+same input never becomes two tasks. A completed failure verdict is still
+covered input. Manual requests remain explicit new work, and unfinished runs
+prevent overlap. A blocked run is not unfinished in that sense and covers no
+input: nothing retries it, so the rhythm's next admission cancels it as
+superseded. A procedure's `provider` and `model` name a preference, not a pin:
+its run leads with that provider and falls back through `provider.family_order`,
+each fallback using its own configured model for the profile.
 
 The controller measures elapsed quiet using its monotonic observation clock,
-not author or committer dates. Its first observation establishes a baseline and
-starts no task. After an accepted batch, restart reconstructs consumed inputs
-from task Git and waits a fresh full quiet period for newly observed work. A
-restart before the first accepted batch establishes a fresh baseline; it does
-not attempt to infer activity time from historical commits.
+not author or committer dates. After a restart, input no finished run captured
+waits a fresh full quiet period; input already captured stays covered, because
+coverage is read from accepted task Git. A controller with no finished run has
+covered nothing, so its first quiet period ends in one run over the current input.
 
-Review branches and scheduled task checkpoints do not trigger themselves. The
-Git world's existing application receipts identify an assessment of that
-rhythm's task and exclude the entire integrated assessment, including its native
-commits. That provenance is resolved uniformly for every observed revision,
-whether exposed by the world cursor, a native branch or a remote branch. Raw
-observed revisions remain in the accepted activity map and execution candidate;
-the receipt-derived revisions determine activity identity and quiet timing.
-Later operator or independent world commits still count, including
-commits that only record a conversation exchange. Ref deletion or aliases for already
-observed commits are bookkeeping, not new work. Dirty files without a commit do
-not start the quiet clock.
+Steward bookkeeping is not input. Task documents, `steward: accept task`
+commits, holds and procedure evidence live in the controller's task store, not
+in any repository remote, and every procedure task, the rhythm's own runs
+included, is excluded from task work. A rhythm's result therefore cannot
+trigger the rhythm. A product task's outcome landing on the input branch does
+count: it changes what the rhythm reads. The Git world is not a procedure
+rhythm's input; the world is read by its owner's assessment, not observed for
+admission. A failed fetch skips that rhythm for the poll without changing its
+quiet state; other rhythms remain eligible.
 
-## Change guard for interval rhythms
-
-An interval rhythm fires on its timer whether or not anything changed. An
-optional `guard` makes an unchanged firing free; without it behaviour is
-exactly as above.
-
-```yaml
-rhythms:
-  light-review:
-    schedule: 10800
-    procedure: reflect
-    input: repositories/app/main
-    owner: telegram:0
-    guard: {debounce: 900, window: 10800, max_stale: 86400}
-  daily-consolidation:
-    schedule: 86400
-    procedure: consolidate
-    input: world
-    owner: telegram:0
-    guard: {max_stale: 86400}   # unchanged days still run once a day
-```
-
-Before admitting a model turn, the rhythm samples the same inputs a quiet
-rhythm does (observed `refs/steward/remote/*` SHAs of every configured
-repository clone, accepted task work, retained native branches and the world
-cursor) and compares them with the cursor of its last completed run. The
-cursor is a controller receipt (`rhythm-cursor:<name>`), not a task or a status
-surface. Commits produced by the rhythm's own run or its result assessment are
-projected back through their base, so a rhythm's report never counts as change.
-
-- **Unchanged**: the firing settles as a no-op receipt. No provider is called,
-  no task or turn is created, nothing is delivered, and the cursor's
-  `checked_at` advances so monitoring sees the rhythm as alive.
-- **Changed**: the rhythm runs unless `debounce` or `window` holds it. `debounce`
-  seconds must pass since the latest observed change; `window` seconds must pass
-  since the last run. While held, the firing stays unsettled and is re-evaluated
-  each poll until the interval ends. A change first observed after an interval
-  settled is seen at the next firing, so keep `debounce` below the schedule.
-- **`max_stale`**: once the last run is this old, the rhythm runs even when
-  nothing changed and regardless of debounce. Set it to 86400 on daily and
-  sleep rhythms to keep their guaranteed daily run.
-- **Blocked or cancelled runs are not completed runs.** A blocked run is still
-  superseded by the next firing and its replacement runs even if nothing
-  changed, because that report was never delivered. Running and waiting runs
-  still prevent overlap. Provider fallback is unaffected.
-- All guarded runs stay read-only (or, for `input: world`, the same accepted
-  world turn as before); the guard only decides whether to admit one.
-- A failed sample of Git activity defers the rhythm to the next poll.
-- `guard` requires an interval schedule; quiet schedules already debounce.
+A finished read-only rhythm run without findings is retained evidence only. Its
+checkpoint commit names the outcome, and the result lane never selects it for
+assessment or delivery; see [rhythms](rhythms-direction.md).
 
 ## Driver protocol
 

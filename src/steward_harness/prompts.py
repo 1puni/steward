@@ -42,6 +42,13 @@ The COMMIT closure line supplies a subject for that harness checkpoint, not an
 instruction to run git commit."""
 
 
+RHYTHM_FINDINGS = """\
+Findings above the closure lines are delivered to this rhythm's owner. When
+nothing material is new since this rhythm's previous run, write no findings:
+end with only the three closure lines and say so in the COMMIT subject. The
+harness retains that checkpoint as evidence and notifies no one."""
+
+
 _TASK_CLOSURE = """\
 ## Close this task execution
 End your final response with exactly these three lines, after your findings:
