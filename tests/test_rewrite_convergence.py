@@ -392,6 +392,48 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
     assert not world_state.pending_task_result_conversations()
 
 
+def test_quiet_rhythm_result_is_retained_evidence_and_sends_nothing(tmp_path):
+    from test_world_durability import runtime, EditingCognition
+    from steward_harness.state import ConversationId
+    bare, clone = _repository(tmp_path)
+    adapter = InvestigationAdapter()
+    state, runner, statuses, _ = harness(tmp_path, bare, clone, adapter)
+    config, procedures = setup_procedures(tmp_path, state, runner)
+    owner = ConversationId("desk:steward")
+    config.rhythms["reflection"] = ProcedureRhythmConfig(owner=str(owner), schedule=100,
+        procedure="security-one", input="repositories/app/main")
+    execute = adapter.execute
+    adapter.execute = lambda request: replace(execute(request), output=(
+        "COMMIT: no material change since the previous reflection\n"
+        "DISPOSITION: idle\nQUESTION: NONE"))
+    procedures.advance_rhythms(now=100)
+    quiet = state.tasks.queued()[0]
+    runner.prepare(quiet)
+    assert "write no findings" in adapter.requests[-1].prompt
+    assert state.tasks.get(quiet).status is TaskStatus.DONE
+    assert "no material change" in state.tasks.git(
+        "show", "-s", "--format=%s", state.tasks.read(quiet)[1].work)
+    world_state, _, service, cognition = runtime(tmp_path, EditingCognition(), repositories={"app"})
+    service._state.tasks.transports = runner.transports
+    assert world_state.pending_task_result_conversations() == ()
+    sent = []
+    assert service.deliver_task_result(owner, send=lambda text, key: sent.append(text)) is None
+    assert sent == [] and cognition.calls == 0
+    # The same owner still hears a finding.
+    adapter.execute = lambda request: replace(execute(request), output=(
+        "A new consumer depends on the unpublished handoff.\n"
+        "COMMIT: reflection findings\nDISPOSITION: idle\nQUESTION: NONE"))
+    (clone / "handoff.txt").write_text("changed\n")
+    _git("add", ".", cwd=clone)
+    _git("commit", "-m", "handoff", cwd=clone)
+    _git("push", "origin", "main", cwd=clone)
+    procedures.advance_rhythms(now=200)
+    runner.prepare(state.tasks.queued()[0])
+    assert world_state.pending_task_result_conversations() == (owner,)
+    service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
+    assert cognition.calls == 1 and len(sent) == 1
+
+
 def test_rhythm_result_assessment_cannot_expand_repository_authority(tmp_path):
     from test_world_durability import runtime, EditingCognition
     from steward_harness.state import ConversationId

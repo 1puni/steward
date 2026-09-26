@@ -230,22 +230,27 @@ authority, not content.
 
 ### Interval or quiet
 
-`schedule: 604800` is an **interval in seconds**. Time is divided into fixed
-buckets of that length and at most one run is accepted per bucket. A moving
-input does not fan out extra runs inside a bucket, and an incomplete earlier run
-blocks the next one rather than overlapping it. After downtime, only the current
-bucket is considered; there is no backlog to work through. Reach for this when
-the work is worth doing whether or not anything changed — a weekly audit, a
-dependency sweep, a standing report.
+Either way, a rhythm runs only on **new input**: a commit none of its finished
+runs captured. For a repository rhythm that is the `input:` branch's current
+commit. For a rhythm with a `workdir:`, which reads across the organisation, it
+is also every configured repository's observed remote branch tips and the
+retained work of every ordinary task. Nothing the steward writes as bookkeeping
+counts: task documents and their acceptance commits live in the task store, and
+procedure runs, this rhythm's own included, are never input. A tick with nothing
+new admits nothing and calls no model.
 
-`schedule: {quiet: 900}` waits for **quiet** instead. The controller watches the
-observed tips of every configured repository's remote branches, the retained
-work of every ordinary task, the native branch heads, and the world head. Any
-newly observed commit restarts the window; 900 seconds with nothing new admits
-one run over exactly that snapshot. No activity means no run at all. The
-rhythm's own runs are excluded from the activity it watches, so a review cannot
-retrigger itself. The first observation after startup establishes a baseline
-without running. Reach for this when the work is *about* what changed — a
+`schedule: 604800` is an **interval in seconds**. Time is divided into fixed
+buckets of that length and at most one run is accepted per bucket, on the first
+poll in it that sees new input. A moving input does not fan out extra runs
+inside a bucket, and an incomplete earlier run blocks the next one rather than
+overlapping it. After downtime, only the current bucket is considered; there is
+no backlog to work through. Reach for this when the work should happen at most
+so often — a weekly audit, a dependency sweep, a standing report.
+
+`schedule: {quiet: 900}` waits for **quiet** instead. Any newly observed commit
+in the rhythm's input restarts the window; 900 seconds with nothing new admits
+one run over exactly that input. After a restart, input still unseen waits a
+full window again. Reach for this when the work is *about* what changed — a
 review, a reflection pass, a coherence check — and you want it to fire after the
 dust settles rather than mid-edit.
 
@@ -266,7 +271,9 @@ in that conversation: the owner's session sees the brief and the findings as
 *evidence*, can record what matters in the world, can propose a follow-up task
 within the repository authority it already has, and returns a concise update
 through its transport. It can also decide nothing needs saying and complete
-without a final message, which retains the evidence and sends nothing. Assessment cannot grant
+without a reply, which retains the evidence and sends nothing. A read-only
+rhythm run that finishes without findings never reaches assessment at all: its
+checkpoint names the outcome, and no turn runs and no message is sent. Assessment cannot grant
 itself repository access it did not have, and cannot steer tasks owned by
 another conversation.
 

@@ -1249,7 +1249,7 @@ class StateDatabase:
         from steward_harness.task_query import is_task_query
         for task in self.tasks.all():
             status = task.status
-            if (not task.owner or task.dispatchable or status not in {
+            if (not task.owner or task.dispatchable or task.quiet or status not in {
                     TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}
                     or (status is TaskStatus.WAITING and is_task_query(status.value, task.reason))):
                 continue

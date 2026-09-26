@@ -1,4 +1,4 @@
-"""Quiet Git activity batches become one accepted procedure task."""
+"""A rhythm admits a run only for input none of its finished runs has seen."""
 from dataclasses import replace
 import os
 import subprocess
@@ -9,15 +9,14 @@ from pydantic import ValidationError
 from steward_harness.config.schema import ProcedureRhythmConfig
 from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.procedures import Procedures
-from steward_harness.state import ConversationId, StateDatabase, TaskSpec
+from steward_harness.state import StateDatabase, TaskSpec
 from test_git_tasks import harness
 from test_rewrite_convergence import setup_procedures
 from test_task_no_changes import InvestigationAdapter
 from test_task_runner_kernel import _git, _repository
-from test_world_turn_checkpoint import _git_world, _commit_all
 
 
-def quiet_harness(tmp_path, **callbacks):
+def quiet_harness(tmp_path):
     bare, clone = _repository(tmp_path)
     adapter = InvestigationAdapter()
     execute = adapter.execute
@@ -28,7 +27,7 @@ def quiet_harness(tmp_path, **callbacks):
     config, _ = setup_procedures(tmp_path, state, runner)
     config.rhythms["light"] = ProcedureRhythmConfig(owner=None, schedule={"quiet": 300},
         procedure="security-one", input="repositories/app/main")
-    procedures = Procedures(config, state, runner.transports, **callbacks)
+    procedures = Procedures(config, state, runner.transports)
     return clone, state, runner, config, procedures, adapter
 
 
@@ -44,66 +43,130 @@ def commit(clone, name, *, push=True):
     return _git("rev-parse", "HEAD", cwd=clone)
 
 
-def test_no_work_means_no_light_then_nineteen_ticks_reuse_one_batch(tmp_path):
+def peer(tmp_path, state, runner):
+    root = tmp_path / "peer"
+    root.mkdir()
+    bare, clone = _repository(root)
+    from steward_harness.config.schema import RepositoryConfig
+    runner.repositories["peer"] = RepositoryConfig(path=str(clone), remote_url=str(bare))
+    runner.transports["peer"] = ControllerGitTransport(state.path, "peer", str(bare), "main", allow_local=True)
+    return clone
+
+
+def test_quiet_rhythm_runs_once_its_input_settles_and_never_again_while_unchanged(tmp_path):
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
-    for now in range(0, 6000, 300):
-        procedures.advance_rhythms(now=now)
-    assert not state.tasks.all()
+    procedures.advance_rhythms(now=0)
     sha = commit(clone, "changed.txt")
-    procedures.advance_rhythms(now=6000)
-    procedures.advance_rhythms(now=6299)
+    procedures.advance_rhythms(now=100)
+    procedures.advance_rhythms(now=399)
     assert not state.tasks.all()
-    procedures.advance_rhythms(now=6300)
+    procedures.advance_rhythms(now=400)
     task = state.tasks.queued()[0]
     run = state.tasks.read(task)[1].procedure
-    assert run.activity["repositories/app/main"] == sha
-    assert run.candidate == sha and ":quiet:" in run.event
+    assert run.candidate == sha and run.activity is None and ":quiet:" in run.event
     runner.prepare(task)
     assert state.tasks.get(task).verdict == "fail"
-    for now in range(6600, 12300, 300):
+    for now in range(700, 12300, 300):
         procedures.advance_rhythms(now=now)
     reopened = StateDatabase(state.path)
     restarted = Procedures(config, reopened, runner.transports)
     for now in (13000, 14000):
         restarted.advance_rhythms(now=now)
     assert len(reopened.tasks.all()) == len(adapter.requests) == 1
+    # A new commit is new input: it runs once it has been quiet for the period.
+    newer = commit(clone, "newer.txt")
+    restarted.advance_rhythms(now=14100)
+    restarted.advance_rhythms(now=14399)
+    assert len(reopened.tasks.all()) == 1
+    restarted.advance_rhythms(now=14400)
+    assert reopened.tasks.read(reopened.tasks.queued()[0])[1].procedure.candidate == newer
     # An explicit request remains a new task on unchanged inputs.
     manual = restarted.request(run.name, "app", run.candidate, run.base, event="manual:requested")
     assert manual != task
 
 
-def test_other_repository_and_world_activity_reset_same_quiet_window(tmp_path):
-    world = _git_world(tmp_path / "world")
-    clone, state, runner, _, procedures, _ = quiet_harness(tmp_path, world=world)
-    other_root = tmp_path / "other"
-    other_root.mkdir()
-    other_bare, other_clone = _repository(other_root)
-    runner.transports["other"] = ControllerGitTransport(state.path, "other", str(other_bare), "main", allow_local=True)
-    procedures.advance_rhythms(now=0)
-    first = commit(clone, "one.txt")
-    procedures.advance_rhythms(now=10)
-    other = commit(other_clone, "two.txt")
-    procedures.advance_rhythms(now=200)
-    (world.root / "observation.md").write_text("An operator's new observation.\n")
-    world_sha = _commit_all(world.root, "operator observation")
-    procedures.advance_rhythms(now=450)
-    procedures.advance_rhythms(now=749)
-    assert not state.tasks.all()
-    procedures.advance_rhythms(now=750)
-    task = state.tasks.queued()[0]
-    activity = state.tasks.read(task)[1].procedure.activity
-    assert activity["repositories/app/main"] == first
-    assert activity["repositories/other/main"] == other
-    assert activity["world"] == world_sha
-    runner.prepare(task)
-    # A world-only commit starts another batch without a repository change.
-    (world.root / "decision.md").write_text("New independent intent.\n")
-    _commit_all(world.root, "world-only activity")
-    procedures.advance_rhythms(now=800)
-    procedures.advance_rhythms(now=1099)
-    assert len(state.tasks.all()) == 1
-    procedures.advance_rhythms(now=1100)
+def test_interval_rhythm_admits_only_when_its_input_changed(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    config.rhythms = {"hourly": ProcedureRhythmConfig(owner=None, schedule=100,
+        procedure="security-one", input="repositories/app/main")}
+    procedures.advance_rhythms(now=100)
+    first = state.tasks.queued()[0]
+    runner.prepare(first)
+    for now in (150, 200, 300, 450):
+        procedures.advance_rhythms(now=now)
+    assert len(state.tasks.all()) == len(adapter.requests) == 1
+    sha = commit(clone, "changed.txt")
+    procedures.advance_rhythms(now=460)
+    second = state.tasks.queued()[0]
+    assert state.tasks.read(second)[1].procedure.event == "rhythm:hourly:4"
+    assert state.tasks.read(second)[1].procedure.candidate == sha
+    runner.prepare(second)
+    # At most one run per interval, however far the input moves inside it.
+    commit(clone, "again.txt")
+    procedures.advance_rhythms(now=470)
     assert len(state.tasks.all()) == 2
+    procedures.advance_rhythms(now=500)
+    assert len(state.tasks.all()) == 3
+
+
+def test_repository_rhythm_is_not_retriggered_by_steward_bookkeeping(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    other = peer(tmp_path, state, runner)
+    config.rhythms["daily"] = ProcedureRhythmConfig(owner=None, schedule=86400,
+        procedure="security-two", input="repositories/app/main")
+    procedures.advance_rhythms(now=0)
+    procedures.advance_rhythms(now=300)
+    for task in state.tasks.queued():
+        runner.prepare(task)
+    assert len(state.tasks.all()) == 2
+    # Accepting and executing ordinary work, a sibling rhythm's evidence and
+    # another repository's commits are not this repository's input.
+    product, _ = state.tasks.create(TaskSpec("app", "Investigate", "Investigate a real obligation."))
+    runner.prepare(product)
+    commit(other, "elsewhere.txt")
+    for now in (400, 800, 86400, 86800):
+        procedures.advance_rhythms(now=now)
+    assert len(state.tasks.all()) == 3
+
+
+def test_org_rhythm_input_is_every_remote_head_and_ordinary_task_work(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer_clone = peer(tmp_path, state, runner)
+    anchor = _git("rev-parse", "HEAD", cwd=clone)
+    config.rhythms = {"org": ProcedureRhythmConfig(owner=None, schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main")}
+    procedures.advance_rhythms(now=100)
+    first = state.tasks.queued()[0]
+    assert state.tasks.read(first)[1].procedure.activity == {
+        "repositories/app/main": anchor,
+        "repositories/peer/main": _git("rev-parse", "HEAD", cwd=peer_clone)}
+    runner.prepare(first)
+    # Its own evidence and the acceptance of new work are bookkeeping.
+    procedures.advance_rhythms(now=200)
+    product, _ = state.tasks.create(TaskSpec("app", "Investigate", "Investigate a real obligation."))
+    procedures.advance_rhythms(now=300)
+    assert len(state.tasks.all()) == 2
+    # Accepted native work is input, though the anchor has not moved.
+    runner.prepare(product)
+    procedures.advance_rhythms(now=400)
+    second = state.tasks.queued()[0]
+    run = state.tasks.read(second)[1]
+    assert run.procedure.candidate == anchor
+    assert run.procedure.activity[f"tasks/{product}"] == state.tasks.read(product)[1].work
+    runner.prepare(second)
+    account = adapter.requests[-1].prompt
+    assert "Execute security-one across the organisation" in account
+    assert f"tasks/{product}" not in account and "repositories/peer" not in account
+    # A branch pushed anywhere is input; deleting one is not.
+    sha = commit(peer_clone, "feature.txt", push=False)
+    _git("push", "origin", f"{sha}:refs/heads/feature", cwd=peer_clone)
+    procedures.advance_rhythms(now=500)
+    third = state.tasks.queued()[0]
+    assert state.tasks.read(third)[1].procedure.activity["repositories/peer/feature"] == sha
+    runner.prepare(third)
+    _git("push", "origin", ":refs/heads/feature", cwd=peer_clone)
+    procedures.advance_rhythms(now=600)
+    assert len(state.tasks.all()) == 4
 
 
 def test_org_reflection_refreshes_sibling_refs_without_moving_local_work(tmp_path):
@@ -141,91 +204,7 @@ def test_org_reflection_refreshes_sibling_refs_without_moving_local_work(tmp_pat
     assert state.tasks.get(task).status.value == "done"
 
 
-def test_native_unpublished_work_resets_timer_and_own_review_refs_do_not(tmp_path):
-    native = {}
-    clone, state, runner, _, procedures, _ = quiet_harness(tmp_path, native_heads=lambda: dict(native))
-    procedures.advance_rhythms(now=0)
-    sha = commit(clone, "native-one.txt", push=False)
-    native["native:app:refs/heads/work"] = sha
-    procedures.advance_rhythms(now=100)
-    native["native:app:refs/heads/work"] = commit(clone, "native-two.txt", push=False)
-    procedures.advance_rhythms(now=300)
-    procedures.advance_rhythms(now=599)
-    assert not state.tasks.all()
-    procedures.advance_rhythms(now=600)
-    task = state.tasks.queued()[0]
-    runner.prepare(task)
-    native[f"native:app:refs/heads/tasks/{task}"] = state.tasks.read(task)[1].work
-    procedures.advance_rhythms(now=700)
-    procedures.advance_rhythms(now=1100)
-    assert len(state.tasks.all()) == 1
-    # Removing a ref and adding an alias are not new commits.
-    old = native.pop("native:app:refs/heads/work")
-    procedures.advance_rhythms(now=1200)
-    native["native:app:refs/heads/alias"] = old
-    procedures.advance_rhythms(now=1300)
-    procedures.advance_rhythms(now=1600)
-    assert len(state.tasks.all()) == 1
-
-
-def test_nonrhythm_accepted_task_work_is_activity(tmp_path):
-    _, state, runner, _, procedures, _ = quiet_harness(tmp_path)
-    procedures.advance_rhythms(now=0)
-    product, _ = state.tasks.create(TaskSpec("app", "Investigate", "Investigate a real obligation."))
-    procedures.advance_rhythms(now=10)
-    assert len(state.tasks.all()) == 1  # Admission alone is not a native work commit.
-    runner.prepare(product)
-    procedures.advance_rhythms(now=100)
-    procedures.advance_rhythms(now=399)
-    assert len(state.tasks.all()) == 1
-    procedures.advance_rhythms(now=400)
-    light = [t for t in state.tasks.all() if t.task_id != product][0]
-    assert state.tasks.read(light.task_id)[1].procedure.activity[f"tasks/{product}"] == state.tasks.read(product)[1].work
-
-
-@pytest.mark.parametrize("alias", ["none", "native", "remote"])
-def test_own_world_assessment_batch_is_ignored_but_later_operator_commit_is_not(tmp_path, alias):
-    world = _git_world(tmp_path / "world")
-    callbacks = {"world": world}
-    if alias == "native":
-        callbacks["native_heads"] = lambda: {
-            "native:world:refs/heads/steward": world.input_cursor()}
-    clone, state, runner, config, procedures, _ = quiet_harness(tmp_path, **callbacks)
-    if alias == "remote":
-        branch = _git("branch", "--show-current", cwd=world.root)
-        runner.transports["world"] = ControllerGitTransport(
-            state.path, "world", str(world.root), branch, allow_local=True)
-    procedures.advance_rhythms(now=0)
-    commit(clone, "work.txt")
-    procedures.advance_rhythms(now=10)
-    procedures.advance_rhythms(now=310)
-    task = state.tasks.queued()[0]
-    runner.prepare(task)
-    base = world.input_cursor()
-    (world.root / "decision.md").write_text("Assessment changes durable memory.\n")
-    _commit_all(world.root, "native assessment work")
-    world.finish("turn_" + "a" * 32, "Assess result", "", base=base,
-                 source=f"task_result:{task}:revision:done")
-    applied = world.input_cursor()
-    # A second assessment chains to the first, as blocked then done assessments do.
-    world.finish("turn_" + "b" * 32, "Assess completion", "", base=applied,
-                 source=f"task_result:{task}:completed:done")
-    # The closing commit's trailers identify our own work, accepted or not.
-    procedures.advance_rhythms(now=400)
-    procedures.advance_rhythms(now=800)
-    assert len(state.tasks.all()) == 1
-    procedures = Procedures(config, StateDatabase(state.path), runner.transports, **callbacks)
-    procedures.advance_rhythms(now=810)
-    procedures.advance_rhythms(now=1110)
-    assert len(state.tasks.all()) == 1
-    (world.root / "decision.md").write_text("Operator: new work.\n")
-    _commit_all(world.root, "operator work")
-    procedures.advance_rhythms(now=1200)
-    procedures.advance_rhythms(now=1500)
-    assert len(state.tasks.all()) == 2
-
-
-def test_restart_with_changed_work_waits_full_quiet_and_daily_still_recurs(tmp_path):
+def test_restart_with_changed_work_waits_full_quiet_and_daily_recurs_on_new_input(tmp_path):
     clone, state, runner, config, procedures, _ = quiet_harness(tmp_path)
     config.rhythms["daily"] = ProcedureRhythmConfig(owner=None, schedule=86400,
         procedure="security-two", input="repositories/app/main")
@@ -256,48 +235,20 @@ def test_schedule_rejects_invalid_policy(schedule):
         ProcedureRhythmConfig(owner=None, schedule=schedule, procedure="review", input="repositories/app/main")
 
 
-def test_new_org_input_reaches_cognition_when_anchor_is_unchanged(tmp_path):
-    native = {}
-    clone, state, runner, config, procedures, adapter = quiet_harness(
-        tmp_path, native_heads=lambda: dict(native))
-    procedures.advance_rhythms(now=0)
-    anchor = _git("rev-parse", "HEAD", cwd=clone)
-    titles = []
-    for index, now in enumerate((10, 400)):
-        sha = commit(clone, f"unpublished-{index}.txt", push=False)
-        native["native:app:refs/heads/main"] = sha
-        procedures.advance_rhythms(now=now)
-        procedures.advance_rhythms(now=now + 300)
-        task = state.tasks.queued()[0]
-        definition = state.tasks.read(task)[1]
-        assert definition.procedure.candidate == anchor
-        titles.append(definition.title)
-        runner.prepare(task)
-        account = adapter.requests[-1].prompt
-        assert f"native:app:refs/heads/main: {sha}" not in account
-        assert config.repositories["app"].path not in account
-        assert definition.procedure.activity["native:app:refs/heads/main"] == sha
-        assert "Execute security-one across the organisation" in account
-        assert "Execute security-one on candidate" not in account
-    assert len(set(titles)) == 2
-
-
 def test_large_activity_stays_in_git_metadata_and_reflection_starts_at_org_root(tmp_path):
-    from pathlib import Path
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
     root = clone.parent
     config.rhythms["light"] = config.rhythms["light"].model_copy(update={"workdir": str(root)})
     procedures.advance_rhythms(now=0)
     sha = commit(clone, "new-evidence.txt")
     # A real organisation's many branches exceed the old brief limit.
-    activity = {f"native:app:refs/heads/feature-{i}": sha for i in range(200)}
-    procedures.native_heads = lambda: activity
+    _git("push", "origin", *(f"{sha}:refs/heads/feature-{i}" for i in range(200)), cwd=clone)
     procedures.advance_rhythms(now=10)
     procedures.advance_rhythms(now=310)
     task = state.tasks.queued()[0]
     definition = StateDatabase(state.path).tasks.read(task)[1]
     assert definition.procedure.workdir == str(root)
-    assert all(definition.procedure.activity[k] == v for k, v in activity.items())
+    assert all(definition.procedure.activity[f"repositories/app/feature-{i}"] == sha for i in range(200))
     assert len(state.tasks.get(task).brief) < 500
     execute = adapter.execute
 
@@ -317,8 +268,7 @@ def test_large_activity_stays_in_git_metadata_and_reflection_starts_at_org_root(
     assert state.tasks.get(task).verdict is None
     assert "Existing findings are owned" in state.tasks.git(
         "show", "-s", "--format=%B", state.tasks.read(task)[1].work)
-    restarted = Procedures(config, StateDatabase(state.path), runner.transports,
-                           native_heads=lambda: activity)
+    restarted = Procedures(config, StateDatabase(state.path), runner.transports)
     restarted.advance_rhythms(now=400)
     restarted.advance_rhythms(now=1000)
     assert len(state.tasks.all()) == 1
@@ -355,7 +305,7 @@ def settled_pass_spawns(tmp_path, backlog):
     procedures.advance_rhythms(now=0)
     spawned, original = [], state.tasks.git
     state.tasks.git = lambda *a, **k: (spawned.append(a[0]), original(*a, **k))[1]
-    procedures.advance_rhythms(now=300)
+    procedures.advance_rhythms(now=100)
     return spawned
 
 
@@ -374,7 +324,7 @@ def test_an_idle_rhythm_pass_asks_the_task_namespace_once(tmp_path):
     assert spawned.count("for-each-ref") == 1
 
 
-def test_failed_activity_fetch_skips_sample_and_retries_next_poll(tmp_path, caplog):
+def test_failed_input_fetch_skips_the_poll_and_retries_next_poll(tmp_path, caplog):
     clone, state, runner, _, procedures, _ = quiet_harness(tmp_path)
     procedures.advance_rhythms(now=0)
     sha = commit(clone, "pending.txt")
@@ -390,7 +340,7 @@ def test_failed_activity_fetch_skips_sample_and_retries_next_poll(tmp_path, capl
         procedures.advance_rhythms(now=310)
         assert not state.tasks.all()
         assert procedures._quiet == previous
-        assert "Rhythm activity sample failed" in caplog.text
+        assert "Rhythm light input unavailable this poll" in caplog.text
         assert "controller Git fetch failed with exit 128" in caplog.text
         assert "does not appear to be a git repository" in caplog.text
     finally:
@@ -402,7 +352,7 @@ def test_failed_activity_fetch_skips_sample_and_retries_next_poll(tmp_path, capl
     assert len(state.tasks.all()) == 1
 
 
-def test_activity_programming_fault_propagates(tmp_path, monkeypatch):
+def test_input_programming_fault_propagates(tmp_path, monkeypatch):
     _, _, runner, _, procedures, _ = quiet_harness(tmp_path)
 
     def broken_fetch():
@@ -413,12 +363,13 @@ def test_activity_programming_fault_propagates(tmp_path, monkeypatch):
         procedures.advance_rhythms(now=0)
 
 
-def test_failed_quiet_sample_does_not_skip_healthy_interval_rhythm(tmp_path):
+def test_failed_org_sample_does_not_skip_healthy_interval_rhythm(tmp_path):
     _, state, runner, config, procedures, _ = quiet_harness(tmp_path)
-    # Quiet activity observes every repository, while the interval rhythm
-    # only needs its own healthy input repository.
+    # The organisation rhythm observes every repository, while the interval
+    # rhythm only needs its own healthy input repository.
     runner.transports["offline"] = ControllerGitTransport(
         state.path, "offline", str(tmp_path / "missing.git"), "main", allow_local=True)
+    config.rhythms["light"] = config.rhythms["light"].model_copy(update={"workdir": str(tmp_path)})
     config.rhythms["interval"] = ProcedureRhythmConfig(
         owner=None, schedule=100, procedure="security-one", input="repositories/app/main")
     procedures.advance_rhythms(now=100)
@@ -455,6 +406,7 @@ def test_blocked_rhythm_run_is_superseded_by_the_next_interval(tmp_path):
     # The same interval does not re-fire or clear the evidence of its block.
     procedures.advance_rhythms(now=150)
     assert [t.status.value for t in state.tasks.all()] == ["blocked"]
+    # A blocked run reported nothing, so its unchanged input is still new.
     procedures.advance_rhythms(now=200)
     assert state.tasks.get(blocked).status.value == "cancelled"
     assert state.tasks.get(blocked).reason == "superseded by rhythm:interval:2"
@@ -471,105 +423,3 @@ def test_a_running_or_waiting_rhythm_run_still_prevents_overlap(tmp_path):
     queued = state.tasks.queued()[0]
     procedures.advance_rhythms(now=200)
     assert [str(t.task_id) for t in state.tasks.all()] == [str(queued)]
-
-
-def guarded_harness(tmp_path, **guard):
-    from steward_harness.config.schema import ChangeGuard
-    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
-    del config.rhythms["light"]
-    config.rhythms["guarded"] = ProcedureRhythmConfig(
-        owner=None, schedule=1000, procedure="security-one", input="repositories/app/main",
-        guard=ChangeGuard(**guard))
-    return clone, state, runner, procedures, adapter
-
-
-def run_guarded(state, runner, procedures, now):
-    procedures.advance_rhythms(now=now)
-    queued = list(state.tasks.queued())
-    for task in queued:
-        runner.prepare(task)
-    return queued
-
-
-def test_unchanged_guarded_firing_is_a_noop_receipt_without_a_provider_call(tmp_path):
-    clone, state, runner, procedures, adapter = guarded_harness(tmp_path)
-    assert len(run_guarded(state, runner, procedures, 1000)) == 1
-    assert run_guarded(state, runner, procedures, 2000) == []
-    assert run_guarded(state, runner, procedures, 3000) == []
-    assert len(adapter.requests) == 1 and len(state.tasks.all()) == 1
-    # The interval is settled by a receipt, and the cursor records the check.
-    assert state.result_receipt("rhythm:guarded:2")["noop"]
-    assert procedures._cursor("guarded")["checked_at"] == 3000
-    assert procedures._cursor("guarded")["ran_at"] == 1000
-    # Settled: no further sampling within the interval, and a restart agrees.
-    reopened = Procedures(procedures.config, StateDatabase(state.path), runner.transports)
-    assert run_guarded(state, runner, reopened, 3500) == []
-
-
-def test_changed_input_runs_the_guarded_rhythm_once(tmp_path):
-    clone, state, runner, procedures, adapter = guarded_harness(tmp_path)
-    run_guarded(state, runner, procedures, 1000)
-    sha = commit(clone, "changed.txt")
-    assert len(run_guarded(state, runner, procedures, 2000)) == 1
-    latest = [t for t in state.tasks.all() if t.procedure.event == "rhythm:guarded:2"][0]
-    assert state.tasks.read(latest.task_id)[1].procedure.activity["repositories/app/main"] == sha
-    assert run_guarded(state, runner, procedures, 3000) == []
-    assert len(adapter.requests) == 2
-
-
-def test_light_debounce_waits_for_quiet_then_window(tmp_path):
-    clone, state, runner, procedures, adapter = guarded_harness(tmp_path, debounce=300, window=1800)
-    run_guarded(state, runner, procedures, 1000)
-    commit(clone, "one.txt")
-    # Changed, but not yet quiet for 300s.
-    assert run_guarded(state, runner, procedures, 2100) == []
-    commit(clone, "two.txt")
-    assert run_guarded(state, runner, procedures, 2300) == []  # a new change restarts quiet
-    assert run_guarded(state, runner, procedures, 2599) == []
-    assert run_guarded(state, runner, procedures, 2600) == []  # quiet, inside the 1800s window
-    assert not state.result_receipt("rhythm:guarded:2").get("noop")  # waiting, not settled
-    assert len(run_guarded(state, runner, procedures, 2800)) == 1
-    assert len(adapter.requests) == 2
-
-
-def test_max_staleness_runs_a_long_quiet_rhythm(tmp_path):
-    clone, state, runner, procedures, adapter = guarded_harness(tmp_path, max_stale=3000)
-    run_guarded(state, runner, procedures, 1000)
-    assert run_guarded(state, runner, procedures, 2000) == []
-    assert run_guarded(state, runner, procedures, 3000) == []
-    # Nothing changed for 3000s, yet the guaranteed run happens.
-    assert len(run_guarded(state, runner, procedures, 4000)) == 1
-    assert run_guarded(state, runner, procedures, 5000) == []
-    assert len(adapter.requests) == 2
-
-
-def test_blocked_guarded_run_is_superseded_even_when_nothing_changed(tmp_path):
-    clone, state, runner, procedures, adapter = guarded_harness(tmp_path)
-    procedures.advance_rhythms(now=1000)
-    blocked = state.tasks.queued()[0]
-    state.tasks.hold(blocked, "blocked", "No provider can satisfy this turn")
-    procedures.advance_rhythms(now=1500)
-    assert [t.status.value for t in state.tasks.all()] == ["blocked"]
-    procedures.advance_rhythms(now=2000)
-    assert state.tasks.get(blocked).status.value == "cancelled"
-    fresh = state.tasks.queued()[0]
-    assert state.tasks.read(fresh)[1].procedure.event == "rhythm:guarded:2"
-    runner.prepare(fresh)
-    # The report finally delivered is what an unchanged firing may rely on.
-    assert run_guarded(state, runner, procedures, 3000) == []
-
-
-def test_unguarded_interval_rhythm_still_runs_unchanged(tmp_path):
-    _, state, runner, config, procedures, _ = quiet_harness(tmp_path)
-    del config.rhythms["light"]
-    config.rhythms["plain"] = ProcedureRhythmConfig(
-        owner=None, schedule=1000, procedure="security-one", input="repositories/app/main")
-    assert len(run_guarded(state, runner, procedures, 1000)) == 1
-    assert len(run_guarded(state, runner, procedures, 2000)) == 1
-
-
-def test_guard_requires_an_interval_schedule():
-    from steward_harness.config.schema import ChangeGuard
-    with pytest.raises(ValidationError):
-        ProcedureRhythmConfig(owner=None, schedule={"quiet": 300}, procedure="p", input="i",
-                              guard=ChangeGuard())

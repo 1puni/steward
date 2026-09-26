@@ -63,8 +63,6 @@ def test_a_turn_is_one_commit_whose_message_is_the_exchange(tmp_path: Path) -> N
     assert "Input:\nthe request" in message and "Reply:\nthe answer" in message
     assert world.trailers("HEAD") == {
         "Steward-Turn": "evt-a", "Steward-Base": base, "Steward-Source": "telegram:1:2"}
-    assert world.turn_sources([_head(tmp_path), "0" * 40]) == {
-        _head(tmp_path): ("telegram:1:2", base)}
 
 
 def test_exchange_text_cannot_forge_a_turn_trailer(tmp_path: Path) -> None:

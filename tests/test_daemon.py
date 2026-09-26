@@ -825,29 +825,6 @@ def test_result_delivery_defers_instead_of_killing_the_pass(
     assert calls, "the result lane never ran"
 
 
-def test_native_activity_reads_unpublished_commits_across_repositories(tmp_path):
-    from steward_harness.daemon import _native_git_heads
-    from test_task_runner_kernel import _repository, _git
-
-    roots = {}
-    for name in ("one", "two"):
-        directory = tmp_path / name
-        directory.mkdir()
-        _, roots[name] = _repository(directory)
-    config = SimpleNamespace(repositories={
-        name: SimpleNamespace(path=str(root)) for name, root in roots.items()
-    })
-    broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
-    before = _native_git_heads(config, broker)
-    worktree = tmp_path / "active-task"
-    _git("worktree", "add", "-b", "tasks/native-edit", str(worktree), cwd=roots["two"])
-    _git("commit", "--allow-empty", "-m", "native work before checkpoint", cwd=worktree)
-    after = _native_git_heads(config, broker)
-    assert after["native:one:refs/heads/main"] == before["native:one:refs/heads/main"]
-    assert after["native:two:refs/heads/tasks/native-edit"] != before["native:two:refs/heads/main"]
-    assert after["native:two:refs/heads/tasks/native-edit"] == _git("rev-parse", "HEAD", cwd=worktree)
-
-
 def test_rhythm_list_shows_quiet_policy_and_configured_runs_without_history(tmp_path):
     from steward_harness.config.schema import ProcedureRhythmConfig
 
