@@ -68,6 +68,8 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     # sees every one of them, just up to SATISFIED_REOBSERVE_SECONDS later; the
     # subject here is which receipts reach which owner, so observe every pass.
     monkeypatch.setattr("steward_harness.targets.SATISFIED_REOBSERVE_SECONDS", 0.0)
+    # Likewise the failure here is an outcome at once, not after five minutes.
+    monkeypatch.setattr("steward_harness.targets.FAILURE_PERSISTS_SECONDS", 0.0)
     bare, clone = _repository(tmp_path)
     adapter = InvestigationAdapter()
     root = tmp_path / "state"
@@ -101,16 +103,19 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     assert len(receipts) == 3
     assert {r["task_id"] for r in receipts} == {str(task)}
     assert {r["owner"] for r in receipts} == {"telegram:17"}
-    assert [r["observation"][1] for r in receipts] == ["satisfied", "blocked", "satisfied"]
-    cognition = FakeCognition([_reply(""), _reply("Deployment requires repair."), _reply("Recovered.")])
+    assert [r["observation"][1] for r in receipts] == ["satisfied", "failed", "satisfied"]
+    cognition = FakeCognition([_reply("Deployment requires repair.")])
     service = _service(root, cognition)
     # Skip already-covered publication receipt: this journey exercises later target evidence.
     for item in (old, task):
         key = f"task_result:{item}:{state.tasks.get(item).outcome}:done"
         state.save_result_receipt(dict(owner=state.tasks.read(item)[1].owner, task_id=str(item), source_key=key, done=True))
     owner = ConversationId("telegram:17")
-    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("routine target sent")) == ""
+    # Live is stated plainly; only the failure costs the owner a model turn.
     sent = []
+    assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == (
+        f"production is live at {revision[:12]}.")
+    assert cognition.requests == []
     def fail(*args):
         sent.append(args)
         raise OSError("transport offline")
@@ -118,11 +123,12 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
         service.deliver_task_result(owner, send=fail)
     restarted = _service(root, cognition)
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert sent[0] == sent[1]
-    assert len(cognition.requests) == 2
-    restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert len(cognition.requests) == 3 and sent[-1][0] == "Recovered."
+    assert sent[1] == sent[2] and sent[1][0] == "Deployment requires repair."
+    assert len(cognition.requests) == 1
     assert "Desired revision: " + revision in cognition.requests[-1].prompt
+    restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    assert len(cognition.requests) == 1
+    assert sent[-1][0] == f"production recovered and is live at {revision[:12]}."
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed")) is None
 
 

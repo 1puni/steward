@@ -28,6 +28,21 @@ from steward_harness.lease import Lease, Busy
 # every pass, because those are the states that need the loop.
 SATISFIED_REOBSERVE_SECONDS = 60.0
 
+# What a person is told about a target is its outcome, never its progress.
+# Pending, busy, awaiting evidence and a moved ref are the loop doing its job;
+# on a live instance they were two thirds of every deploy's messages, and each
+# one handed to an owning task cost a full model turn to say "nothing to do".
+# Only these statuses are outcomes: live at the desired revision, or not
+# getting there.
+FAILED = frozenset({"failed", "blocked", "failed-evidence"})
+# A failure is an outcome only once it has stood this long. The controller's
+# own shutdown drain makes every observe fail for a pass or two, and a target
+# that recovers before anyone could act has nothing to report. The clock
+# starts at the first failure since the target was last satisfied at this
+# revision, so flapping between failure and busy still accumulates. One
+# desk-watch cycle: long enough to span a restart, short against a real outage.
+FAILURE_PERSISTS_SECONDS = 300.0
+
 
 class Observation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -46,6 +61,10 @@ class Targets:
         # memory: a controller restart re-observes once, which is the correct
         # answer to "did anything change while I was not running".
         self._satisfied: dict[str, tuple[str, float]] = {}
+        # name -> (revision, monotonic time of the first failure since it was
+        # last satisfied there). In memory for the same reason: a restart is a
+        # fresh look, and a failure that outlives it is still told.
+        self._failing: dict[str, tuple[str | None, float]] = {}
 
     def call(self, name, operation, repository, revision):
         target = self.config.targets[name]
@@ -108,10 +127,22 @@ class Targets:
             return True
         return revision != seen[0]
 
+    def _outcome(self, name, status):
+        """What this observation means to a person, or None when it is progress."""
+        if status == "satisfied":
+            return "satisfied"
+        failing = self._failing.get(name)
+        if status in FAILED and failing and time.monotonic() - failing[1] >= FAILURE_PERSISTS_SECONDS:
+            return "failed"
+        return None
+
     def _retain_result(self, name, message, repository, revision, observed, status):
         # Only the exact published outcome supplies a task recipient. A push
-        # without an owning task still owes an operator-visible transition.
-        receipts = [json.loads(path.read_text()) for path in
+        # without an owning task still owes the operator its outcome.
+        outcome = self._outcome(name, status)
+        if outcome is None:
+            return
+        receipts =[json.loads(path.read_text()) for path in
                     self.state.result_receipt_path("").parent.glob("*.json")]
         owners = []
         for task in self.state.tasks.all():
@@ -123,24 +154,38 @@ class Targets:
             previous = max((r for r in receipts if r.get("target") == name
                             and r.get("task_id") == task_id),
                            key=lambda r: r["sequence"], default={})
-            # Driver prose may contain a timestamp on every poll. Delivery is
-            # driven by state/revision transitions, not changes in that prose.
-            identity = [revision, status, observed.model_dump(exclude={"details"}) if observed else None]
-            if previous.get("observation") == identity:
+            # One message per outcome per revision; driver prose and error text
+            # vary by poll and are not a new outcome. Receipts retained before
+            # outcomes existed name a status: read every failure as one.
+            was_revision, was = (previous.get("observation") or [None, None])[:2]
+            was = "failed" if was in FAILED else was
+            if (was_revision, was) == (revision, outcome):
                 continue
+            identity = [revision, outcome]
             sequence = previous.get("sequence", 0) + 1
             source = "target_result:" + hashlib.sha256(json.dumps(
                 [name, task_id, previous.get("source_key"), identity], sort_keys=True,
             ).encode()).hexdigest()
             at = datetime.now(timezone.utc).isoformat()
-            self.state.save_result_receipt({
+            short = (revision or "an unresolved revision")[:12]
+            if outcome == "failed":
+                reply = f"{name} is not reaching {short}.\n{message}"
+            elif (was_revision, was) == (revision, "failed"):
+                reply = f"{name} recovered and is live at {short}."
+            else:
+                reply = f"{name} is live at {short}."
+            receipt = {
                 "owner": owner, "task_id": task_id, "source_key": source,
                 "target": name, "sequence": sequence, "observation": identity,
                 "result_text": f"Target observation at {at}\nRepository: {repository}\n"
                                f"Desired revision: {revision}\n{message}\n"
                                + (f"Observed: {observed.model_dump_json()}" if observed else "No driver observation available."),
-            } | ({"reply": f"{message}\nDesired revision: {revision or 'unresolved'}"}
-                 if task_id is None else {}))
+            }
+            # Live is fully stated by the observation, so an owner's model could
+            # only restate it. A failure is owed the owner's assessment.
+            if task_id is None or outcome == "satisfied":
+                receipt["reply"] = reply
+            self.state.save_result_receipt(receipt)
 
     def _satisfied_age(self, name, revision):
         """Seconds since this exact revision was observed satisfied, while that still stands in for an observation."""
@@ -157,8 +202,11 @@ class Targets:
         def report(status, message):
             if status == "satisfied":
                 self._satisfied[name] = (revision, time.monotonic())
+                self._failing.pop(name, None)
             elif status != "unchanged":
                 self._satisfied.pop(name, None)
+            if status in FAILED and (name not in self._failing or self._failing[name][0] != revision):
+                self._failing[name] = (revision, time.monotonic())
             return message, repository, revision, observed, status
         try:
             repository, revision, base = resolve_input(target.ref, self.transports)

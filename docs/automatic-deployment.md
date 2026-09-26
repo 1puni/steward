@@ -194,25 +194,43 @@ serving or has durably received, rather than echo a requested revision.
 
 ## Observation feedback
 
-A target observation returns to an existing conversation only when its desired
+Only outcomes are delivered, never progress. A target has two outcomes at a
+revision: **live** (observed satisfied) and **failing** (`failed`, `blocked` or
+`failed-evidence`). `pending`, `busy`, `awaiting-evidence` and a moved ref are the
+loop at work and produce no receipt. A failure becomes an outcome only after it
+has stood for five minutes (`FAILURE_PERSISTS_SECONDS`), timed from the first
+failure since the target was last live at that revision; busy passes in between
+do not reset it. The controller's shutdown drain fails every observe for a pass
+or two, and those failures, like any that recover within the window, are never
+told. The clock is in memory: a restart looks afresh.
+
+Each outcome is delivered once per revision. A failure that was told and then
+recovers produces one "recovered" message. A failure that recovered before it
+was told stays silent, because no one acted on it and a recovery notice would
+describe a non-event. Transient failures that come and go within the window do
+not add up to messages.
+
+A target outcome returns to an existing conversation only when its desired
 revision is exactly the commit that landed that conversation's task.
 The controller retains the dated driver observation and desired SHA in an ordinary
-result receipt, then uses the same assessment and world-acceptance path as task
-results. Assessment may complete without a final message; failures and changed outcomes can produce a
-concise owner update or an authorized follow-up. Readiness still requires external
-observation and exact evidence; the assessment does not confer deployment authority.
+result receipt. A live outcome carries its plain reply ("`<target>` is live at
+`<sha>`"), because the observation already says everything the owner's model
+could. A failing outcome carries no reply and goes through the same assessment
+and world-acceptance path as task results, where the owner can act or propose an
+authorized follow-up. Readiness still requires external observation and exact
+evidence; the assessment does not confer deployment authority.
 
-Repeated state/revision observations are suppressed even if driver prose contains
-new timestamps. A changed state, including recovery and a later repeat failure,
-gets a new chained receipt. Target locking serializes receipt selection with
-observation. Existing receipt replay retains order and retries transport without
-repeating accepted cognition. Full evidence remains in the receipt and the accepted
-world turn's commit; task completion remains publication, independently of deployment.
+Driver prose and error text vary between polls and are not new outcomes.
+Target locking serializes receipt selection with observation. Existing receipt
+replay retains order and retries transport without repeating accepted cognition.
+Full evidence remains in the receipt and the accepted world turn's commit; task
+completion remains publication, independently of deployment.
 
 The recipient rule deliberately excludes historical ancestor candidates and tasks
 without an owner/publication. Coalesced or skipped intermediate candidates do not
-each receive task feedback. A transition without an exact task recipient is
-retained in the same receipt store with no task ID and a deterministic report.
+each receive task feedback. An outcome without an exact task recipient is
+retained in the same receipt store with no task ID and a plain report: live,
+recovered, or not reaching the revision with the driver's reason.
 The delivery lane assigns the configured `incidents` or `operator` Telegram
 topic, or the operator desk route. Without a configured route it remains pending
 and `/status` explains the delivery problem. No synthetic task or model assessment

@@ -245,7 +245,8 @@ work, or when the operator's judgment is part of what completion means.
 Delivery eligibility is derived from configured transport routes before dispatch.
 An unavailable route retains its pending receipt and a diagnostic visible in
 `/status`; restoring the route makes the same result eligible again. A target
-transition without a task owner uses a deterministic operator report in the same
+outcome (live, or persistently failing; never progress) without a task owner uses
+a deterministic operator report in the same
 receipt store. It does not fabricate a task or replay cognition to deliver an
 already retained reply. See [observation feedback](automatic-deployment.md#observation-feedback).
 

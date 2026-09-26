@@ -35,8 +35,9 @@ way you count errors.
 Result receipts are selected before assessment starts and stay pending until the
 transport confirms, so a crash mid-assessment cannot silently drop an outcome.
 Invalid routes retain a diagnostic and do not enter the worker queue until the
-configured route is usable. Unowned target transitions use a configured operator
-route and deterministic text without invoking task cognition.
+configured route is usable. Target results are outcomes only (live, or failing
+for five minutes), once per revision; unowned outcomes use a configured operator
+route and plain text without invoking task cognition.
 
 ## Cancellation and shutdown
 
