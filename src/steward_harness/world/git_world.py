@@ -57,6 +57,20 @@ class GitWorld:
         """Return the exact committed Git-world input boundary."""
         return self._git("rev-parse", "HEAD")
 
+    def changed(self, since: str, paths: tuple[str, ...]) -> bool:
+        """Does the accepted world differ from `since` under any of `paths`?
+
+        A revision Git can no longer read, or a Git that cannot answer, counts
+        as changed: an unanswerable cursor admits the run rather than silencing it.
+        """
+        try:
+            return run_agent_git(
+                self.execution_broker, "diff", "--quiet", since, "HEAD", "--", *paths,
+                cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
+            ).returncode != 0
+        except (OSError, subprocess.TimeoutExpired):
+            return True
+
     def finish(self, event_id: str, user_text: str, reply_text: str, *,
                base: str, source: str) -> None:
         """Commit this attempt's files as the turn, its exchange as the message.

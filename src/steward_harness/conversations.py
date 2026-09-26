@@ -13,8 +13,9 @@ from threading import RLock
 from typing import Literal, cast
 
 from steward_harness.cognition import Cognition, CognitionRequest
+from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
-from steward_harness.provider_types import ModelChoice, ProviderFamily, ProviderProfile
+from steward_harness.provider_types import ProviderFamily, ProviderProfile
 from steward_harness.runtime.contracts import ReadScope, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.world.orientation import repository_orientation, world_orientation
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldTurnWorktree, WorldUpdatePending, WorldContentConflict
@@ -201,7 +202,7 @@ class ConversationService:
         images: tuple[Path, ...] = (),
         ongoing_only: bool = False,
         allow_empty_output: bool = False,
-        model: ModelChoice | None = None,
+        procedure: ProcedureConfig | None = None,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
 
@@ -300,7 +301,7 @@ class ConversationService:
             images=images,
             live_input=True,
             allow_empty_output=allow_empty_output,
-            model=model,
+            procedure=procedure,
         )
         assert isinstance(accepted, ConversationTurnResult)
         return accepted
@@ -315,7 +316,7 @@ class ConversationService:
         images: tuple[Path, ...],
         live_input: bool,
         allow_empty_output: bool = False,
-        model: ModelChoice | None = None,
+        procedure: ProcedureConfig | None = None,
     ) -> ConversationTurnResult | Turn:
         """Run, retain and accept one declared world-session turn.
 
@@ -396,9 +397,10 @@ class ConversationService:
                 cwd=(worktree.path if worktree else self._workspace.world.root
                      if isinstance(self._workspace, WorldTurnCheckpoint) else self._workspace),
                 timeout_seconds=self._timeout_seconds,
-                # A configured model pins only this provider; fallbacks run their own.
-                provider_order=self._order_from(conversation.provider),
-                model=model,
+                # A procedure's model pins only its own provider; fallbacks run their own.
+                provider_order=procedure.provider_order(self._provider_order) if procedure
+                    else self._order_from(conversation.provider),
+                model=procedure.model if procedure else None,
                 provider_session_id=conversation.provider_session_id,
                 session_provider=cast(ProviderFamily, conversation.provider)
                 if conversation.provider_session_id

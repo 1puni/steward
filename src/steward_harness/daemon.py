@@ -38,7 +38,7 @@ from steward_harness.provider_types import ProviderFamily, ProviderProfile
 from steward_harness.runtime.contracts import CognitionAdapter, RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.providers import build_runtimes
-from steward_harness.procedures import Procedures
+from steward_harness.procedures import Procedures, interval
 from steward_harness.targets import Targets
 from steward_harness.state import (
     ConversationBusy,
@@ -369,12 +369,13 @@ class KernelCommands:
             lines = []
             runs = [task.procedure for task in self.state.tasks.all()]
             for name, rhythm in self.config.rhythms.items():
-                schedule = (f"every {rhythm.schedule}s" if isinstance(rhythm.schedule, int)
+                schedule = (f"after {rhythm.after}" if rhythm.after is not None
+                            else f"every {rhythm.schedule}s" if isinstance(rhythm.schedule, int)
                             else f"after {rhythm.schedule.quiet}s of quiet Git activity")
                 count = sum(bool(run and run.event.startswith(f"rhythm:{name}:")) for run in runs)
                 history = f"{count} accepted runs" if count else "no accepted run recorded"
                 if rhythm.input == "world":
-                    key = f"rhythm:{name}:{int(time.time() // rhythm.schedule)}"
+                    key = f"rhythm:{name}:{interval(self.config.rhythms, name, time.time())}"
                     turn = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
                     history = f"this interval: {turn.state if turn else 'not run yet'}"
                 pause = "; automatic admission paused" if self.state.paused() else ""
@@ -570,8 +571,8 @@ class StewardDaemon:
                 profile=self.config.provider.default_profile,
                 prompt=prompt, cwd=turn.worktree,
                 timeout_seconds=self.config.provider.timeout_seconds,
-                provider_order=self.config.provider.led_by(procedure.provider) if procedure
-                    else self.config.provider.family_order,
+                provider_order=procedure.provider_order(self.config.provider.family_order)
+                    if procedure else self.config.provider.family_order,
                 model=procedure.model if procedure else None,
                 sandbox_mode="workspace-write"))
 
@@ -604,7 +605,8 @@ class StewardDaemon:
             ),
         )
 
-        procedures = Procedures(self.config, state, transports)
+        procedures = Procedures(self.config, state, transports,
+                                world=checkpoint.world if checkpoint else None)
         targets = Targets(self.config, state, transports, procedures)
         self._procedures, self._targets = procedures, targets
         reconciler = RepositoryReconciler(

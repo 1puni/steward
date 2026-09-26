@@ -957,6 +957,16 @@ class StateDatabase:
             ).fetchone()
         return self._turn(row) if row is not None else None
 
+    def last_world_candidate(self, owner: ConversationId) -> str | None:
+        """The world revision this conversation's latest accepted turn produced."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT candidate_sha FROM turns WHERE conversation_id=? AND state='completed' "
+                "AND candidate_sha IS NOT NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+                (str(owner),),
+            ).fetchone()
+        return row["candidate_sha"] if row is not None else None
+
     def start_turn(
         self,
         conversation_id: ConversationId,
