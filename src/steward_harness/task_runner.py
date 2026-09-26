@@ -22,7 +22,7 @@ from steward_harness.landing.checkpoint import (
     parse_tick_closure,
 )
 from steward_harness.landing.worktree import WorktreeError, WorktreeManager
-from steward_harness.prompts import build_task_prompt, build_procedure_scope
+from steward_harness.prompts import RHYTHM_FINDINGS, build_task_prompt, build_procedure_scope
 from steward_harness.provider_types import ProviderFamily
 from steward_harness.runtime.contracts import (
     RuntimeExecutionError, RuntimeInput, RuntimeInputResult, RuntimeUnavailable,
@@ -618,6 +618,8 @@ class TaskRunner:
                 "Discover relevant evidence through their files and Git history. "
                 "Return findings and missing evidence, not a gate verdict."
             )
+        if procedure and procedure.access == "read-only" and procedure.event.startswith("rhythm:"):
+            procedure_prompt = f"{procedure_prompt}\n\n{RHYTHM_FINDINGS}".strip()
         request = CognitionRequest(
             execution_id=execution_id,
             native_owner=str(task.session_id),
