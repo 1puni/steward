@@ -96,12 +96,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("provider", choices=("codex", "glm"))
     parser.add_argument("--auth-file", type=Path, default=Path.home() / ".codex/auth.json")
-    parser.add_argument("--zaude-login-shell", action="store_true")
+    parser.add_argument("--login-shell", action="store_true")
     args = parser.parse_args()
     credential = ""
     if args.provider == "glm":
         credential = os.environ.get("ZAI_AUTH_TOKEN", "").strip()
-        if args.zaude_login_shell:
+        if args.login_shell:
             credential = subprocess.run(
                 ["/bin/sh", "-c", 'env -u ZAI_AUTH_TOKEN /bin/zsh -lic \'printf "%s" "${ZAI_AUTH_TOKEN:-}" >&3\' 3>&1 >/dev/null 2>/dev/null'],
                 capture_output=True, text=True, check=True, timeout=15,

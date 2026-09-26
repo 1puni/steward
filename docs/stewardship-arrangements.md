@@ -1,13 +1,10 @@
 # Ways to use and connect stewards
 
-**Status:** Usage and architecture guide. Implemented capabilities and intended
-connections are distinguished below. This is not new configuration syntax or a
-deployment plan.
-
 The same harness can steward one repository, an organisation, or a person's
 work across organisations. A conventional organisation does not need a personal
 steward above it. A person and their one-person company can overlap much more
-closely. Neither arrangement should dictate the other's structure.
+closely. Neither arrangement should dictate the other's structure. Below, what
+works today and what is only intended are kept visibly apart.
 
 The common rule is [knowledge ownership](steward-hierarchy-and-memory.md#ownership-law):
 project truth belongs to the project, company truth to the company, and
@@ -81,9 +78,9 @@ person's work without maintaining competing editable copies of it.
 The intended interconnection is a scoped request to an organisation and
 attributable evidence back to the personal steward. The organisation retains
 control of its repository and deployment authority. The [hierarchy contract](steward-hierarchy-and-memory.md#kernel-boundary)
-marks cross-scope delegation as architectural intent; the former shared-SQLite
-federation bus is retired. There is no current generic parent/child transport to
-enable in configuration.
+marks cross-scope delegation as architectural intent. There is no parent/child
+transport to switch on in configuration. (There once was a shared-SQLite bus. It
+did not enforce the authority boundaries it implied, so it went.)
 
 One personal world can also live on two machines, with private Git replication
 between them. That replication belongs to whoever built it. Replicating one
@@ -131,8 +128,9 @@ recording, and should not silently change when its subject changes.
 
 For an intertwined setup, keeping mixed discussions in the private scope and
 passing company-scoped outputs to the company is a coherent option; whether to
-add a dedicated company conversation surface is the operator's call. The harness should not depend on a promise never to discuss personal
-matters on Telegram.
+add a dedicated company conversation surface is the operator's call. Either way,
+the harness must not depend on a promise never to mention personal matters on
+Telegram.
 
 ## Connections and their current limits
 

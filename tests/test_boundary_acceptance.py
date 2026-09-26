@@ -10,9 +10,9 @@ nothing executed past its first two branches, because every other test either
 hands those callers a fabricated `BoundaryStatus` or monkeypatches
 `_require_boundary` away.
 
-That is the evidence gap of `docs/half-migrated-state.md` §3.6, stated more
-precisely than §3.6 states it. Read against the code, three of that section's
-four claims have drifted: `tests/test_execution_boundary.py` does configure a
+That is the evidence gap an earlier internal review described, stated more
+precisely than it did. Read against the code, three of its four claims had
+drifted: `tests/test_execution_boundary.py` does configure a
 real user, five tests do run a real child program through the real
 `ProcessController`, and pushes do go through real Git plumbing to real bare
 repositories. What is true, and worse, is narrower: **the function that decides

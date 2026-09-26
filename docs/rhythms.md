@@ -1,5 +1,8 @@
 # Rhythms invoke procedures
 
+A rhythm is a clock with no opinions. It says *when*; a procedure says *what*; a task
+is the one concrete run that actually happened. None of them is a workflow engine.
+
 A procedure is accepted instructions plus model and access settings. A task is a
 concrete execution over captured inputs. A rhythm supplies a recurring trigger.
 A target follows a ref and can require accepted procedure evidence; a gate enforces
@@ -31,7 +34,8 @@ rhythm in each interval bucket, and an incomplete run prevents overlap with late
 buckets. A reopened idle run, a blocked or waiting run, and workspace-write work still
 awaiting publication remain incomplete.
 Cancellation permits a future bucket once its live execution has stopped; it does
-not create a replacement in the cancelled run’s own bucket. A moving input does not create another run within the same bucket. After
+not create a replacement in the cancelled run's own bucket. A moving input does not
+create another run within the same bucket. After
 downtime, only the current interval is considered. `/rhythm run <name>` is an
 explicit additional request, while `/rhythm list` shows configured schedules,
 accepted-run counts (including no recorded run) and admission pause state. Edit
@@ -43,7 +47,8 @@ No new activity means no run. Captured inputs in accepted task Git prevent repea
 admission of a consumed batch, including after restart. The first observation on
 a controller with no accepted batch establishes a baseline. Read the complete
 [quiet-period contract](automatic-deployment.md#git-quiet-periods-and-intervals)
-for native work, self-reflection exclusions and restart semantics. The harness ships a generic
+for native work, self-reflection exclusions and restart semantics. The harness ships
+a generic
 [reflection skill](../src/steward_harness/skills/steward-reflection/SKILL.md);
 the procedure that names when and how an instance reflects belongs to that instance.
 
@@ -53,13 +58,13 @@ an entry README; existing checkouts can be linked into it. Native cognition star
 there, while its task account and checkpoint remain in a separate retained task
 worktree. The accepted run captures the directory so retries keep the same scope.
 Before cognition the existing credential-free Git transfer refreshes observed
-`refs/steward/remote/<branch>` refs in every configured repository without moving
-its HEAD, changing `origin/<branch>` or touching local changes. These labels are
-observations, not new authority; read source at the configured default branch
-under this namespace. See
+remote refs in the configured repositories, as `refs/steward/remote/<branch>`,
+without moving their HEADs, changing `origin/<branch>` or touching local changes.
+Those refs are observations, not new authority: read source at the configured
+default branch under that namespace. See
 [source and retained findings](provenance-discovery.md#observed-source-and-retained-findings).
-Manual `/rhythm run` uses the same working directory. Workspace-write procedures
-cannot select an external working directory.
+Manual `/rhythm run` uses the same working directory.
+Workspace-write procedures cannot select an external working directory.
 
 Quiet snapshots remain controller-owned admission metadata in accepted Git. They
 are not copied into the task brief or prompt. The procedure discovers relevant
@@ -117,28 +122,26 @@ rhythms:
     owner: telegram:3
 ```
 
-A world rhythm requires a configured `world`, a `workspace-write` procedure and
-an integer interval; configuration refuses anything else, including a `workdir`.
-The source key `rhythm:<name>:<interval index>` is the whole idempotency. After a
+A world rhythm needs a configured `world`, a `workspace-write` procedure and an
+integer interval; configuration refuses anything else, including a `workdir`.
+The source key `rhythm:<name>:<interval index>` is the whole idempotency: after a
 restart, the key replays an accepted turn rather than repeating cognition. A
 provider failure or crash consumes its interval. At most one run happens in each
-interval, and a missed interval is not made up. `86400` fires once per UTC day
+interval, and a missed interval is not made up. `86400` fires once per UTC day,
 on the first poll after midnight UTC.
 
 The turn cannot propose or steer tasks, because a rhythm has no transport to
-receive their results. It records suggested work in world files instead. A
-non-empty reply becomes a result receipt for `owner` and is delivered by the
+receive their results; it records suggested work in world files instead. A
+non-empty reply becomes a result receipt for `owner` and goes out through the
 ordinary result lane. An empty reply, or `owner: null`, settles the interval
 silently. `/rhythm list` shows whether the current interval ran. `/rhythm run`
-refuses a world rhythm: a second run in the same interval is the thing the key
-exists to prevent.
+refuses a world rhythm, because a second run in the same interval is exactly what
+the key exists to prevent.
 
-There are no default light/sleep/rem types or seeded world files. A world rhythm
-is configured like any other: the instance supplies its procedure file. Existing
-recurring files are migration material: retain their history, move intended
-reusable instructions to accepted procedure files and choose explicit intervals
-or quiet periods. Calendar and dependency schedules are not implemented. It does
-not contain a hook system or workflow graph.
+There are no built-in light, sleep or REM rhythms and no seeded world files; the
+harness never invents a schedule for you. A world rhythm is configured like any
+other, and the instance supplies its procedure file. Calendar and dependency
+schedules are not implemented, and there is no hook system or workflow graph.
 
 Publication requirements check the final integrated candidate before it can be
 pushed. Target requirements review the complete candidate tree before application

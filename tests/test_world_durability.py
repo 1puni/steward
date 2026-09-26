@@ -891,7 +891,7 @@ def test_an_episode_records_what_prompted_the_turn_not_the_prompt(tmp_path):
     A task-result turn's prompt is a page of controller preamble wrapped around
     a brief that is already committed on the task's own branch. Recording it as
     the episode's input stores it a second time and teaches the next pass
-    nothing — and it is the same constant every time, so 333 of gg's 558
+    nothing — and it is the same constant every time, so on one live instance 333 of 558
     episodes were 82% harness boilerplate by the time this was measured.
 
     The provider must still be asked the whole thing. This asserts both halves:

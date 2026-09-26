@@ -504,7 +504,7 @@ def test_observing_an_unchanged_remote_transfers_no_objects(
 
     The observation loop calls this for every repository on every poll. It sent
     the tip's whole object closure each time to a clone that already held all
-    of it — on gg that was ~2.85 of 8 cores, permanently, to learn that five
+    of it — on one live instance that was ~2.85 of 8 cores, permanently, to learn that five
     repositories were unchanged.
     """
     remote, source, base = _remote_repository(tmp_path)

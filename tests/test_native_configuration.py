@@ -83,18 +83,18 @@ def test_factory_threads_anthropic_router_configuration(tmp_path):
         default_family="claude", fallback_families=("glm",),
         native_homes=homes,
         glm_credential_path=str(token),
-        glm_anthropic_base_url="https://api.cheaperinference.com",
-        claude_anthropic_base_url="https://api.cheaperinference.com",
+        glm_anthropic_base_url="https://gateway.example.com",
+        claude_anthropic_base_url="https://gateway.example.com",
         claude_credential_path=str(token),
     ), broker)
     glm = providers["glm"]
-    assert glm.base_url == "https://api.cheaperinference.com"
-    assert glm.environment()["ANTHROPIC_BASE_URL"] == "https://api.cheaperinference.com"
+    assert glm.base_url == "https://gateway.example.com"
+    assert glm.environment()["ANTHROPIC_BASE_URL"] == "https://gateway.example.com"
     claude = providers["claude"]
-    assert claude.base_url == "https://api.cheaperinference.com"
+    assert claude.base_url == "https://gateway.example.com"
     assert claude.credential_path == token
     environment = claude.environment()
-    assert environment["ANTHROPIC_BASE_URL"] == "https://api.cheaperinference.com"
+    assert environment["ANTHROPIC_BASE_URL"] == "https://gateway.example.com"
     assert environment["ANTHROPIC_AUTH_TOKEN"] == "ci_live_router"
 
 

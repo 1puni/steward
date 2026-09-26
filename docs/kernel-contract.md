@@ -5,10 +5,10 @@ published repository revisions and configured releases.
 
 > The model proposes; the harness disposes.
 
-This is the current architecture contract. The [documentation map](README.md) separates
-operating references from proposals and historical evidence. The
-[execution boundary](execution-boundary.md) owns the supported native Linux
-identity and invocation ownership contract.
+This is the architecture contract: who owns which fact, who may do what, and what
+must stay true when a process dies at the worst possible moment. The
+[execution boundary](execution-boundary.md) owns the Linux identity and invocation
+ownership details.
 
 ## Purpose
 
@@ -37,6 +37,11 @@ The controller is one daemon with a bounded background executor. Native provider
 their tools and their local reasoning loops. The harness owns exactly the authority
 those loops cannot grant themselves, and nothing else.
 
+Mutable work has one writer, and only verified, immutable work crosses an authority
+boundary: a native session writes its checkout under the task lock; the controller
+publishes one fixed candidate SHA that no gate may change. The representation should
+make a second writer or a mutable publication input impossible, not merely detected.
+
 ## Deliberate limits
 
 This is not a generic workflow engine, an event-sourcing framework, a multi-agent role
@@ -54,6 +59,8 @@ Until a concrete production requirement proves otherwise, the kernel has:
 - no persisted publication queue or second scheduling lifecycle;
 - no provider capability that cannot honor its declared sandbox and workspace contract;
 - no dynamically imported local-tool subsystem;
+- no second executor: an external watch alerts while the controller is down, and
+  repairs arrive as ordinary admitted tasks;
 - no configuration field that does not select implemented behavior.
 
 That last one matters most. A field the loader accepts and quietly ignores is a field
@@ -64,6 +71,34 @@ Read this list as a constraint on responsibilities, not a boast about line count
 Moving code between modules, compressing syntax, or handing the same complexity to
 another harness does not satisfy any of it. See the
 [engineering doctrine](engineering-doctrine.md).
+
+## Configuration
+
+YAML is trusted policy. Each block owns one kind of decision:
+
+| Block | Owns |
+| --- | --- |
+| `identity`, `provider` | Steward identity, provider order, model profiles, private native homes, workdir and state database |
+| `execution` | Untrusted execution identity and environment boundary |
+| `controller` | Polling, health listener and one background-worker budget |
+| `tasks` | Optional private remote for accepted `tasks/*` refs |
+| `repositories` | Trusted remotes, default branches, gates and publication requirements; configuring one is the authority to work in it |
+| `pipelines`, `incident_policy` | Probes, failure confirmation and repair allowance |
+| `world` | The Git world for durable knowledge; optional named reconciliation procedure |
+| `procedures` | Accepted instructions, model and access settings |
+| `rhythms` | Non-overlapping interval triggers for procedures; `input: world` runs one world turn per interval |
+| `targets` | Desired refs, installed drivers and required evidence |
+| `telegram`, `desk` | Optional ingress and result transports |
+
+`controller.poll_seconds` bounds only background rechecks — admission, convergence and
+probes. Conversation ingress and running task turns do not wait on it, so raising it
+trades background latency for controller CPU and nothing else.
+
+Each selected built-in provider needs an explicit private `native_homes` entry; see
+[native runtime setup](native-provider-runtime.md). The
+[example configuration](../config/steward.example.yaml) is a provisioning template:
+its accounts, directories, provider logins and remote URLs must already exist on the
+target host.
 
 ## Authority
 
@@ -76,10 +111,25 @@ another harness does not satisfy any of it. See the
 
 All model-controlled commands cross the execution broker. The controller does not run
 repository code under its privileged identity. Native credentials stay private to the
-selected provider; push credentials and release mutation stay controller-side.
+selected provider; the landing credential and release mutation stay controller-side.
 Filesystem scope and ownership of accepted work are distinct: a model may inspect
 granted repositories, but only the owning acceptance path can publish their changes. See
 [execution identities](execution-boundary.md).
+
+Effective permission is the configured grant intersected with what the external system
+actually grants; neither widens the other. Repository content is evidence of how an
+organisation works, never permission. Learning that someone leads a repository is a
+durable fact for the world; giving them controller capabilities or registering a
+remote is a separate, explicit grant. Delegate only effects the delegate can perform:
+a task returns findings and proposals, and the owning conversation or the controller
+applies anything controller-only.
+
+Organisation-specific commands belong in `telegram.adapter_commands` as one declared
+argv and argument shape. They run without a shell through the same untrusted broker. A
+model turn can reach anything that broker runs, so an act only the operator may cause —
+minting a phone pairing link, say — declares `authority: controller` instead: the
+controller runs it as itself, with an empty environment, from an executable the
+boundary audit proves the agent cannot replace.
 
 Controller Git uses the configured remote URL and its private bare store. Candidate
 objects cross by Git's own fetch and push, with the agent side run as the agent identity,
@@ -114,13 +164,13 @@ Git store is enumerated directly, and a missing native lineage permits a fresh r
 Decisions need durable representation when they cannot be derived; that does not
 require SQL. Git can record a withheld grant, cancellation, failed gate, answer or
 retry. Controller permissions and accepted refs establish authority independently
-of authored work. The [rewrite contract](git-native-rewrite.md) specifies discovery,
+of authored work. The [rewrite contract](git-native-tasks.md) specifies discovery,
 concurrency, private metadata, editable understanding and publication crash boundaries.
 
 An incompatible database is preserved and startup refuses it. There is no automatic
 migration or reset, because a harness that rewrites the operator's state on startup is a
 harness that can destroy it on startup. An upgrade includes the adjacent files and Git
-stores, not just SQLite. Follow the [upgrade procedure](../migration-handoff.md).
+stores, not just SQLite. Follow the [upgrade procedure](upgrading.md).
 
 ## Provider neutrality
 
@@ -141,6 +191,11 @@ callbacks. See [native runtime](native-provider-runtime.md) for storage, live in
 protocol evidence.
 
 ## Task lifecycle
+
+Only the owning conversation, a rhythm or incident policy admits harness tasks. A task
+session may use its provider's native subagents freely, but it cannot admit further
+tasks; native work becomes a harness task only when it needs its own scope, admission
+or deliverable. A native subtask ID is correlation, not a task ID.
 
 Admission creates the accepted task document. A slice holds the task lock, resumes its
 native session, then commits its findings and a validated closure on the `tasks/<id>`
@@ -169,13 +224,23 @@ builds on. The controller accepts it by exact-base compare-and-swap into the tas
 document only, and acknowledges the accepted revision over live input. Acceptance
 changes no Definition field, consumes no input, touches no product files and grants no
 publication; closure reconciles against the last accepted offer. See
-[live task understanding](live-task-understanding-implementation.md).
+[live task understanding](live-task-understanding.md).
+
+Accepting understanding, ending native execution and authorizing publication are three
+boundaries, and none implies another. A clock or a poll may observe work but never
+creates a semantic stopping point. Silence means the last accepted account is old, not
+that the task failed.
 
 Notes are pending context. A checkpoint records only inputs actually consumed;
 unacknowledged and later inputs remain in accepted Git for a later slice. Answers
 and retries reuse the task's work. There is no SQL task-input ledger.
 
 ### Task results
+
+A finished task is evidence for its owner to reassess against the broader outcome, not
+closure of that outcome. The owner may close on sufficient evidence without routine
+operator sign-off; it involves the operator when ambiguity would materially change the
+work, or when the operator's judgment is part of what completion means.
 
 Delivery eligibility is derived from configured transport routes before dispatch.
 An unavailable route retains its pending receipt and a diagnostic visible in
@@ -202,7 +267,7 @@ configured result owner, or null for retained evidence only. Owned rhythm task f
 use this same assessment path, including world knowledge and authorized follow-up
 admission. An assessment cannot steer tasks owned by another conversation. A world
 rhythm is itself a world turn: it admits no task, and its reply is a receipt for
-its owner ([world rhythms](rhythms-direction.md#world-rhythms)).
+its owner ([world rhythms](rhythms.md#world-rhythms)).
 
 Accepted assessment and external delivery are separate facts. A private task-result
 receipt retains the selected outcome before assessment and remains pending until
@@ -215,8 +280,31 @@ saved reply, including silence, without repeating assessment. Checkpoints are lo
 Git/log evidence; they have no separate broadcast channel. Accepted world work is replayed without another model turn;
 failed assessment still delivers the retained task findings with its interruption.
 Telegram reuses per-piece receipts across retry and restart. Preserve both adjacent
-receipt directories during upgrades. Historical delivery without receipts remains
-unknown; see [usage regressions](usage-regressions.md#result-return-can-stop-after-assessment-starts).
+receipt directories during upgrades. A crash between the transport accepting a send
+and the local receipt write can still duplicate that piece: this is at-least-once
+delivery with receipts, not exactly-once.
+
+### Telegram ingress
+
+Each update is written to its receipt under `<state_db>.telegram-receipts/<chat>/` before
+the poll offset moves past it: the offset is the acknowledgement and the receipt files
+are the spool. Receipts are pruned only after a poll acknowledges them. Delivery is
+at-least-once — an uncertain send can duplicate. Never run two pollers for one bot
+token; when moving a bot, copy the offset only after the old ingress has stopped.
+
+Inputs are deduplicated by source identity, never by content: the same words under a
+different update ID are a new input and get a new reply. An input is marked handled
+only after processing and delivery succeed; caching it earlier turns one transient
+failure into permanent suppression of a valid retry.
+
+In a forum, Telegram sends no thread ID for General, so topic `0` is a valid route in
+both directions. Ingress logs whether the thread field was present, its value and the
+selected route, and never infers a destination from message content. `passive_topics`
+drops declared feed topics at the trust boundary, before commands and replay;
+undeclared topics are still admitted. Group-administrator admission is read at most
+once a minute and fails closed without caching the failure. Unknown and retired
+commands fail honestly; they never become model prompts, and the menu advertises only
+implemented verbs.
 
 ## Publication
 
@@ -282,11 +370,20 @@ duplicate of themselves. The task lock and the repository lease are the exclusio
 unlike an in-memory key they are durable, so they hold across the crash that would
 strand a claim.
 
+Each exclusion answers a different question: the daemon lease says which controller is
+alive, the task lock who runs a task, the repository lease who publishes, the world
+lease who applies a world update.
+
 Repositories run independently. Each task has its own lock. One rhythm dispatch owner
 resumes incomplete scheduled work before choosing another due definition. Desk messages
 have message dispatch keys and retain their inbox/conversation ownership. Result
 assessment is keyed by the owning conversation. No separate repository-observation pool
 exists.
+
+A days-long task turn holds one slot for all of those days; the remedy is operator
+policy, not reservation or preemption. A controller restart interrupts every running
+task turn. Continuity comes from the accepted account, retained work and the native
+session, not from any process surviving.
 
 There is no recovery pass either. A task interrupted by a crash never left the queue and
 its lock died with its worker, so the next pass yields it like any other and the runner
@@ -313,8 +410,12 @@ same native conversation and repository authorization. They may propose work or
 note an owned task; the controller rejects answers and retries from that source.
 Their immutable inbox source and consumption marker prevent repeated samples from
 repeating cognition. Accepted task refs and ordinary result receipts, not inbox
-consumption, establish repair progress. The instance that produces
-the samples owns their source identity and activation procedure.
+consumption, establish repair progress. The instance that produces the samples owns
+their source identity and activation procedure. Keep the inbox's `.source`, `.claimed`,
+`.failed` and `.done` files with desk state across upgrades. Inspect a parked
+`.failed` message's native evidence before retrying it; deleting a source receipt or
+minting a second one is not a repair. See [watching a live steward](watching-a-steward.md)
+for what a watch should measure.
 
 Unexpected worker exceptions propagate to the daemon; shutdown cancels queued owners
 and drains already-running writers while retaining the daemon lease. Queued work
@@ -351,16 +452,41 @@ whether bounded waiting is acceptable, and keep the pre-push withdrawal check ei
 
 ## Verification
 
-The [validation map](demolition.md#validation-map) links the implementation to
-behavioral checks. Local regression, Linux identity tests, native-provider probes and
-deployed acceptance establish different things. None substitutes for the others, and an
-old green suite does not validate a changed checkout. A green macOS run says nothing
-whatsoever about the UID boundary; only the Linux acceptance script does. Test totals
-are not evidence. A suite has to state what it establishes.
+Local regression, Linux identity tests, native-provider probes and deployed
+acceptance establish different things. None substitutes for the others, and an old
+green suite does not validate a changed checkout. A green macOS run says nothing
+whatsoever about the UID boundary; only `scripts/linux-boundary-acceptance.sh` does.
+Test totals are not evidence. A suite has to state what it establishes.
 
 Required outcomes include isolated native work, retained interruption evidence, world
 acceptance before dependent admission, clean exact-revision gates, remote-safe
 publication, truthful withdrawal, artifact verification, rollback to a prior release or
-absence, and an observable result at the owning transport. The [usage
-review](usage-regressions.md) distinguishes established behavior from post-refactor
-gaps; the handoff records instance readiness.
+absence, and an observable result at the owning transport. The open edges are listed
+honestly in the [README](../README.md#where-it-actually-is).
+
+### Validation map
+
+Each link names an executable check, not a claim that any particular revision or
+deployed instance has passed it. Implementation paths are relative to
+`src/steward_harness/`.
+
+| Behavior | Implementation | Validation |
+| --- | --- | --- |
+| Admission creates the accepted task ref and document | `task_store.py` | [admission](../tests/test_task_admission.py), [task files](../tests/test_task_charter.py) |
+| Status derives from accepted decisions, trailers, ancestry and locks | `task_query.py`, `task_lock.py` | [task status](../tests/test_task_status.py), [operator transitions](../tests/test_state_control.py) |
+| Publication holds the repository lock through integration, gates and exact-base push | `repository_reconciler.py`, `landing/` | [reconciliation](../tests/test_reconcile.py), [landing](../tests/test_landing.py), [rewrite journeys](../tests/test_rewrite_convergence.py) |
+| Deployment converges on an exact revision, verifies health and rolls back | `deploy/` | [automatic deployment](../tests/test_automatic_deployment.py), [rollback truth](../tests/test_rollback_truth.py) |
+| World acceptance applies the retained candidate under the world lease | `world/turn_checkpoint.py`, `state.py` | [world durability](../tests/test_world_durability.py), [checkpoint acceptance](../tests/test_world_turn_checkpoint.py) |
+| Native sessions use private homes and candidate-owned records | `runtime/native_workspace.py`, `runtime/providers/` | [workspace](../tests/test_native_workspace.py), [Claude transport](../tests/test_claude_stream.py), [Codex transport](../tests/test_codex_app_server.py) |
+| Provider errors separate "declined" from "failed" | `runtime/providers/` | [provider errors](../tests/test_provider_errors.py) |
+| Task results survive restart and are not re-assessed | `conversations.py`, `receipts.py`, `telegram/` | [result delivery](../tests/test_task_result_delivery.py), [Telegram](../tests/test_telegram.py) |
+| Live conversations stay responsive with a full worker budget | `daemon.py` | [responsiveness](../tests/test_scheduler_responsiveness.py) |
+| The broker enforces a separate service identity | `runtime/execution.py` | [Linux boundary acceptance](../tests/test_boundary_acceptance.py) |
+| An invocation cannot leave escaped writers or kill a peer | `runtime/ownership.py`, `runtime/process.py` | [host ownership](../tests/test_host_ownership.py), [process input and stop](../tests/test_process_input.py) |
+| Configuration rejects unknown fields and colliding resources | `config/` | [configuration](../tests/test_config.py) |
+
+The [follow-through environment](follow-through-environment.md) runs the whole
+message-to-result journey against a fake Bot API and a scripted provider. The
+[native probes](../experiments/native_sessions/README.md) drive real installed
+providers. Scripted cognition cannot establish provider behaviour, and a successful
+isolated probe cannot establish the health of a deployed steward.

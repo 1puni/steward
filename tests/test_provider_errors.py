@@ -175,7 +175,7 @@ def test_runtime_reports_native_failure_through_real_process(
 def test_an_expired_sign_in_is_a_refusal_not_a_failed_turn():
     """Claude's dead OAuth session must reach the configured fallback.
 
-    A downstream instance saw exactly this text on 2026-09-20 and the turn ended there,
+    A downstream instance saw exactly this text and the turn ended there,
     with a working GLM credential configured behind it and never asked.
     """
     parser = lifecycle()

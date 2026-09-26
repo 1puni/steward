@@ -5,39 +5,54 @@ stack. The agent works; the controller accepts. Git holds the work. Your reposit
 gates decide what can land. Your chosen release system decides how that commit reaches
 users.
 
-This guide takes a fork to its first useful task. For an existing instance, use [the
-upgrade procedure](../migration-handoff.md) instead — do not read this page as a
-migration.
+This guide picks up where the [README](../README.md) leaves off: you have cloned it,
+watched `steward check` refuse your laptop, and want a steward that does real work on a
+real host. It ends at a first task you can actually believe. Upgrading an instance that
+already runs is a different job: see [upgrading](upgrading.md).
 
-## Try the complete loop
+## Fork it first
 
-Fork this repository into your account, then clone your fork. Python 3.11+, Git and `uv`
-are required for development.
+Fork this repository and install from your fork. Your steward can then propose fixes to
+the harness that runs it as ordinary tasks against its own repository, and you decide
+what comes home upstream.
 
 ```sh
-git clone https://github.com/YOUR-OWNER/steward-harness.git
+git clone https://github.com/YOUR-OWNER/steward.git steward-harness
 cd steward-harness
 uv sync --extra dev
-uv run pytest -q
+uv run --extra dev python -m pytest -q -p no:cacheprovider
 ```
 
-With Docker Compose available, exercise a real daemon against the bundled fake Bot API
-and scripted provider:
+The suite takes a few minutes and runs against fixtures and a scripted provider. On
+macOS the Linux identity tests skip, which is honest, not green.
+
+## Take the tour
+
+With Docker Compose available, run a real daemon against the bundled fake Bot API and a
+scripted native CLI:
 
 ```sh
 ACCEPT_PROJECT=my-first-steward SELFTEST_PROJECT=my-first-steward-selftest \
   FAKE_PORT=8099 sh scripts/follow-through-acceptance.sh
 ```
 
-This needs no real Telegram or model credentials. It carries a message in, gets a reply
-out, edits an accepted world, asks a task question, publishes through a gate and
-checks the resulting revision — all in disposable fixtures. The runner recreates its named projects **and
-volumes**, so pick names you do not mind losing. See [the follow-through
-environment](follow-through-environment.md) for inspection commands and for the
-difference between its service adapter and real systemd.
+No Telegram or model credentials needed. A message goes in, a reply comes out, the
+accepted world gets edited, a task asks a question, the answer resumes it, the work
+publishes through a gate and the resulting revision is checked. All of it in disposable
+fixtures. The runner recreates its named projects **and volumes**, so pick names you do
+not mind losing. [The follow-through environment](follow-through-environment.md) has
+inspection commands, and explains where its service adapter differs from real systemd.
 
-It is the executable tour. It is not your production installation, and a green run of it
-is not evidence about your host.
+It is the executable tour. It is not your production installation, and a green run is
+not evidence about your host.
+
+Your fork is where you contribute from, not where harness fixes should live. Keep your
+instance in configuration, installed drivers, procedures and instance files, and send
+harness changes upstream as pull requests. A fix carried only on a fork's diverged main
+is stranded there, and every one makes the next upgrade more expensive. A change
+belongs upstream when it fixes a reproducible generic failure or adds a broadly useful
+capability, keeps provider neutrality and the controller/agent credential boundary,
+brings evidence or a regression test, and imports no single organisation's policy.
 
 ## Choose who deploys each repository
 
@@ -66,10 +81,9 @@ external setup still missing.
 
 ## Install one real steward
 
-The published production layout is a Linux controller and a separate execution account.
-The controller may initially run as root. Models must not, ever, and no amount of
-convenience changes that. Use this native host layout. The former container
-execution backend has been removed.
+Production is a Linux controller and a separate execution account. The controller may
+start out running as root. Models must not, ever, and no amount of convenience changes
+that.
 
 Install a reviewed harness revision under a controller-owned path such as
 `/opt/steward-harness`, then run `uv sync --frozen` there as its owner. The source, venv
@@ -107,7 +121,12 @@ Initialize the world as `steward`, with a first commit containing a short `READM
 and `docs/README.md`. State who the steward serves, what it owns, which repositories it
 may work on and what good evidence looks like. This is orientation, not authority: it
 tells the steward what it is for, and it grants nothing. Grants live in controller
-config. Do not put credentials in the world. Install procedure instructions and target drivers outside model-writable roots; see [the current target contract](automatic-deployment.md). Rhythms are explicit procedure triggers; the controller never seeds recurring definitions.
+config. Do not put credentials in the world.
+
+Procedure instructions and target drivers are authority, not content, so install them
+outside every model-writable root; see [targets and deployment](automatic-deployment.md).
+There are no default rhythms. Nothing recurs until you configure it, and
+[give it a body of work](ongoing-work.md) explains how.
 
 Create a Telegram bot and place its token in `/etc/steward/telegram-token`, owned by
 root with mode `0600`. Use the actual numeric chat and allowed user IDs. The allowed-user
@@ -158,10 +177,15 @@ After=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/steward-harness
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/steward-harness/.venv/bin/steward run --config /etc/steward/steward.yaml
 Restart=on-failure
 RestartSec=5
 UMask=0077
+# The controller drains running turns on SIGTERM. Signal only the main process,
+# and give the drain time to finish.
+KillMode=mixed
+TimeoutStopSec=1300s
 
 [Install]
 WantedBy=multi-user.target
@@ -175,10 +199,44 @@ journalctl -u steward.service -f
 
 Supervision belongs to systemd, not to the harness: an unexpected worker fault
 propagates out and exits the process, and `Restart=on-failure` is the recovery
-mechanism. This controller service is separate from the application's service. A
-self-deploying harness must start through its release pointer and use
-the installed systemd driver with a separate supervisor unit; a fixed bootstrap path does not become self-updating just because
-its source repository is managed.
+mechanism.
+
+On `SIGTERM` the controller stops taking work and drains what is running, so an
+in-flight turn can reach durable acceptance. `TimeoutStopSec` bounds that wait, so
+set it longer than your longest turn, and a unit "deactivating" for several
+minutes is the drain doing its job, not a hang.
+`KillMode=mixed` sends the signal to the controller alone; the default,
+`control-group`, signals every process in the unit at once and defeats the drain.
+Check `KillMode` before you believe any drain.
+
+This controller service is separate from your application's service. A
+self-deploying harness starts through its release pointer and uses the installed
+systemd driver with a separate supervisor unit; see
+[targets and deployment](automatic-deployment.md). A fixed bootstrap path does not
+become self-updating just because its source repository is managed.
+
+A few host facts that are easy to get wrong:
+
+- A long `deactivating` is the drain, not a hang. Restarting to "unstick" it cuts the
+  drain short.
+- A timer can be enabled and active with no next firing: `OnBootSec` plus
+  `OnUnitActiveSec` has nothing to count from until it has run once. Use
+  `OnCalendar`, and check `NextElapse` in `systemctl list-timers`, never
+  `is-enabled`.
+- Anything outside the harness that runs Git as root inside agent-owned storage —
+  a monitor, a guard, an operator shell — can corrupt it. A root `git status`
+  rewrites the index; a root-created `objects/xx` directory makes roughly one object
+  write in 256 fail, which looks like random flakiness. Read as the agent identity,
+  or with `git --no-optional-locks` and plumbing. Repository config can also run
+  code (fsmonitor, hooks, filters), which is one more reason root never opens it.
+- Scope any ownership repair. A `chown` must never reach controller-private paths;
+  afterwards check that the agent still cannot read the state database. Task-lock
+  files are controller-owned by construction.
+- A paused steward looks exactly like a healthy idle one. When nothing is
+  happening, check pause first.
+
+See [automatic deployment](automatic-deployment.md#operating-the-installed-driver) for
+the self-deploying driver.
 
 ## Prove the first useful task
 
@@ -196,9 +254,8 @@ unhealthy-release rollback — a rollback path you have never run is a rollback 
 do not have. Record the revision, service identity, command or message, and observed
 outcome, because a memory of a working journey is not evidence of one.
 
-Then read [usage after the refactor](usage-regressions.md). It lists the current limits
-a new installation must not mistake for guarantees, including a reproduced gap in result
-return.
+Then read [where it actually is](../README.md#where-it-actually-is). It lists the current
+limits a new installation must not mistake for guarantees.
 
 ## Use the onboarding skill
 

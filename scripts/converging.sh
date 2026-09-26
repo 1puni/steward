@@ -4,7 +4,7 @@
 # Usage: scripts/converging.sh [window]     (default: last 4 commits)
 #
 # Prints size and representation counts for the convergence audit in
-# docs/demolition.md. These are diagnostic signals; the audit judges
+# docs/engineering-doctrine.md. These are diagnostic signals; the audit judges
 # removed responsibilities and preserved behavior from the diff.
 set -eu
 
@@ -34,5 +34,5 @@ printf "  src lines      %s\n" "$(find src -name '*.py' -exec cat {} + | wc -l |
 
 echo
 echo "== interpretation =="
-echo "  Review removed concepts and their owning primitives: docs/demolition.md"
+echo "  Review removed concepts and their owning primitives: docs/engineering-doctrine.md"
 echo "  Source size is a signal, not a fixed-ratio target or proof of correctness."

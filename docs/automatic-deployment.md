@@ -1,6 +1,7 @@
 # Named targets and executable drivers
 
-Publication and target satisfaction are independent. An accepted task lands one
+Landing a commit and running it are different facts, and this page keeps them
+apart. Publication and target satisfaction are independent. An accepted task lands one
 single-parent outcome on its repository's default branch. Each configured target
 then follows its own ref and uses an installed executable to observe and apply an
 exact revision. A task remains landed if a target is unavailable.
@@ -177,7 +178,7 @@ not compete for the same external endpoint. Driver descendants are killed when
 the finite invocation ends; long-running work belongs in a supervisor, not an
 orphaned background child. Failures and timeouts remain local to that target.
 
-`blocked` defaults to false for existing drivers. It reports that applying this
+`blocked` defaults to false. It reports that applying this
 requested revision cannot usefully advance the target; `details` explains the
 required intervention. The controller keeps observing but does not apply or
 start prerequisite reviews while blocked. Readiness still describes the actual
@@ -230,8 +231,8 @@ A changed local ref is immediately eligible; otherwise the interval bounds the
 next remote refresh and health observation. Explicit `/git target` forces a fresh
 observation. Blocked, pending and failed states remain observable because external
 repair can happen at the same revision. Observation verifies protected deployment
-evidence without probing build-workspace readiness. Container observation still
-checks mount policy; apply and build require the full execution boundary.
+evidence without probing build-workspace readiness; apply and build require the
+full execution boundary.
 
 ## Included systemd release driver
 
@@ -304,8 +305,8 @@ failure. Observe reports the actual serving revision and readiness, which will
 not match the condemned desired revision. Prefer moving the desired ref to a
 corrected or rollback revision. Retrying the same condemned SHA requires an
 operator to deliberately remove its `.<sha>.failed` marker after diagnosis,
-with target convergence quiesced, before running apply; running worker alone
-no longer bypasses condemnation.
+with target convergence quiesced, before running apply; a running worker alone
+does not bypass condemnation.
 
 Artifact pruning keeps the five newest release directories plus the active
 release and the explicitly retained healthy rollback release. It removes older
@@ -314,39 +315,76 @@ Condemnation survives artifact removal and repeated pruning, so requesting an
 old failed SHA still requires the explicit operator clearance described above.
 Failure markers have no age or count limit tied to artifact retention.
 
-## Migration and proof
+### Operating the installed driver
 
-`repositories.*.deploy`, `executor`, `health_reports_sha`, the ambient `work_branch`
-and `/git deploy` are removed. Move platform settings into installed driver
-configuration and bind a named target. Use `/git target <name>` for an immediate
-convergence attempt. Root `rhythms` now references procedures; old world
-`tasks/recurring` files are preserved historical material and are never seeded or
-scheduled automatically. Export their instructions into accepted procedure files
-and translate their intended intervals explicitly.
+Four things read the controller configuration, and a deploy advances only one of
+them. The service runs the new release. The driver's environment is pinned to the
+harness it was built from and rejects unknown keys like any other loader. The
+configuration file and the schema-epoch check live outside the release entirely. So a
+new configuration field deploys cleanly to the service and then fails every
+`observe`: self-deploy stops while health stays green. The order that works is push,
+install the configuration, restart, rebuild the driver environment at the new release,
+then verify with `observe`. Where a source constant would do, prefer it to a new key.
+Once accepted records carry a new field, an older strict reader cannot read them, so
+upgrade the driver before you introduce one.
 
-Do not treat this branch as a live rollout. Historical instance configurations in
-`instances/` describe their recorded deployments and need a deliberate migration.
-The [rewrite contract](git-native-rewrite.md) covers Git task migration and privacy.
-The Linux acceptance test exercises real split identities, build import, HTTP
-identity and rollback in a disposable environment; it requires Linux/root and must
-be rerun on the intended host before adopting the systemd driver. Other platform
-drivers require their own external-observation and interruption proof.
+A schema-epoch change cannot self-deploy. The new release refuses the old database,
+health fails, and the driver rolls back. Convert the database deliberately; see
+[upgrading](upgrading.md).
 
-### Release-owned systemd driver bootstrap
+Build the driver environment from a copy of the release source, never by installing
+against the release directory itself. The worker's policy digest covers the
+controller and settings files, not the driver environment, so pause target
+convergence before you replace it.
 
-A protected stable wrapper can execute `scripts/systemd-target.py` from the
-current harness release instead of an independently installed Python package.
-Resolve the script to its immutable release path **before** executing it, for
-example `entry=$(readlink -f /opt/INSTANCE/current/scripts/systemd-target.py)`,
-then `exec /usr/bin/python3 -B "$entry" --config /etc/INSTANCE/steward.yaml
---settings /etc/INSTANCE/target.yaml "$@"` (on one shell line). Use the instance's
+The driver only recognises release directories named by a full 40-hex SHA that carry
+an integrity receipt. On an installation that predates it there is no previous
+release to fall back to, and a failed first apply removes the pointer and stops the
+service. Stage a verified full-SHA release and point `current` at it before you enable
+self-deployment. The service must import the harness from `<release>/src`, not from a
+per-release environment, or health identity breaks and every deploy rolls back.
+
+The worker starts through plain `systemd-run` and inherits only `PATH`; it has no
+`HOME`. Git and `gh` cannot find the controller's credentials there, and a private
+remote's fetch fails with exit 128, which reads like a network fault. Configure the
+credential helper in `/etc/gitconfig`. The driver's `systemctl` calls carry no client
+timeout on purpose: systemd owns the job and its deadlines, and a timed-out client
+leaves the job running while a rollback races a controller that is still draining.
+
+Anything that must outlive a release lives outside it: configuration in `/etc`,
+backup and monitor units under `/usr/local/libexec` or similar. A companion unit that
+runs a script from inside the release fails at the first cutover, and a monitor
+inside `current/` disappears exactly when a bad deploy is what you need to see.
+
+### Running the driver from the release
+
+Instead of installing the driver as a separate Python package, a protected stable
+wrapper can execute `scripts/systemd-target.py` from the current release. Resolve the
+script to its immutable release path **before** executing it, for example
+`entry=$(readlink -f /opt/INSTANCE/current/scripts/systemd-target.py)`, then
+`exec /usr/bin/python3 -B "$entry" --config /etc/INSTANCE/steward.yaml
+--settings /etc/INSTANCE/target.yaml "$@"` (on one shell line), with your
 controller interpreter and protected configuration paths.
 
-The bootstrap prepends that release's `src` and `vendor` to Python's import path
-and calls the existing deployment CLI with its resolved `worker_entry`. The
-supervised worker therefore executes the same immutable script, core and vendored
-dependencies even if `current` moves after dispatch. It does not depend on
-`PYTHONPATH` surviving `systemd-run`, and adds no second deployment implementation.
-Keep that release available while its workers run. Installing or switching the
-stable wrapper remains a protected operator/coordinator operation; source
-publication alone does not perform that change.
+The script prepends that release's `src` and `vendor` to the import path and calls the
+ordinary deployment CLI with its resolved `worker_entry`. The supervised worker
+therefore runs the same immutable script, core and vendored dependencies even if
+`current` moves after dispatch, does not depend on `PYTHONPATH` surviving
+`systemd-run`, and is not a second deployment implementation. Keep that release on
+disk while its workers run. Installing or switching the wrapper is a protected
+operator step; publishing source does not do it.
+
+## Proving a driver
+
+Run `scripts/linux-boundary-acceptance.sh` on the intended host before trusting the
+systemd driver there. It exercises real split identities, build import, HTTP
+identity and rollback in a disposable environment, and it needs Linux and root.
+Any other platform driver needs its own proof of external observation and of what
+happens when it is interrupted halfway. A driver you have never seen roll back is a
+driver that cannot roll back.
+
+Configuration keys from older versions (`repositories.*.deploy`, `executor`,
+`health_reports_sha`, `work_branch`) fail validation; platform settings belong in
+the installed driver's own configuration, bound through a named target. Use
+`/git target <name>` for an immediate convergence attempt. Moving an instance onto a
+new harness revision is a deliberate migration; see [upgrading](upgrading.md).

@@ -13,8 +13,8 @@
     </select>
   </div>
   <div class="sf-compare">
-    <section><h3>Before</h3><div class="text-small">Baseline · e2a7777</div><div id="sf-old"></div></section>
-    <section><h3>Reviewed snapshot</h3><div class="text-small">0c91c67 · September 14, 2026 · prompts below use the working tree</div><div id="sf-new"></div></section>
+    <section><h3>Before</h3><div class="text-small">Historical baseline (full development history only)</div><div id="sf-old"></div></section>
+    <section><h3>Reviewed snapshot</h3><div class="text-small">Reviewed snapshot · prompts below use the working tree</div><div id="sf-new"></div></section>
   </div>
   <div class="viz-row text-small sf-legend"><span>→ Implemented signal</span><span>Boxes: owners / durable facts</span><span>Cognition boxes open their prompts</span></div>
   <div id="sf-detail" class="text-small" aria-live="polite"></div>
@@ -231,7 +231,7 @@
   const [from,to,label,,source,,missing]=edge;
   const node=id=>model.nodes.find(n=>n[0]===id)[3];
   const proof=key==='new'?proofs[from+':'+to]:null;
-  const rows=[['Model',key==='new'?'Reviewed snapshot · 0c91c67 · September 14, 2026':'Historical baseline · e2a7777'],['Signal',label],['From',node(from)],['Receiver',node(to)],['Contract',source],['Evidence',missing?'Absent in reviewed source':key==='new'?'Curated source review. Verification references below describe scoped checks, not a fresh test run or live telemetry.':'Historical source comparison']];
+  const rows=[['Model',key==='new'?'Reviewed snapshot':'Historical baseline'],['Signal',label],['From',node(from)],['Receiver',node(to)],['Contract',source],['Evidence',missing?'Absent in reviewed source':key==='new'?'Curated source review. Verification references below describe scoped checks, not a fresh test run or live telemetry.':'Historical source comparison']];
   if(proof)rows.push(['Source',proof[0]],['Verification',proof[1]]);
   const table=document.createElement('table');table.className='table table-sm';
   const body=document.createElement('tbody');

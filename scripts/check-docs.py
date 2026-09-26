@@ -30,7 +30,7 @@ def anchors(path: Path) -> set[str]:
 
 
 def check(root: Path) -> int:
-    files = [root / name for name in ("README.md", "migration-handoff.md")]
+    files = [root / "README.md"]
     for name in ("docs", "skills"):
         files.extend(sorted((root / name).rglob("*.md")))
     failures = []
