@@ -16,7 +16,7 @@ DISABLED_FEATURES = (
     "hooks", "codex_hooks", "plugin_hooks", "multi_agent", "multi_agent_v2",
     "memories", "memory_tool", "external_agent_memory_import", "js_repl",
     "browser_use", "computer_use", "image_generation", "imagegenext",
-    "view_image", "apply_patch_freeform", "code_mode", "code_mode_host",
+    "view_image", "apply_patch_freeform",
     "skill_mcp_dependency_install", "skill_search", "request_permissions_tool",
     "request_permissions", "remote_control", "shell_snapshot", "shell_snapshot_v2",
 )
@@ -31,7 +31,10 @@ def scope_config(roots: tuple[Path, ...], workspace: Path) -> dict:
         "project_doc_max_bytes": 0,
         "allow_login_shell": False,
         "shell_environment_policy": {"inherit": "none", "set": {"PATH": "/usr/bin:/bin"}},
-        "features": {**dict.fromkeys(DISABLED_FEATURES, False), "skip_host_skill_discovery": True},
+        # Luna dispatches shell tools through exec. This host only dispatches the
+        # already-confined tools; disabling it also disables permitted reads.
+        "features": {**dict.fromkeys(DISABLED_FEATURES, False), "skip_host_skill_discovery": True,
+                     "code_mode": True, "code_mode_host": True},
         "agents": {"enabled": False},
         "mcp_servers": {},
         "permissions": {PROFILE: {

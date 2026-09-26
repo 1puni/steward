@@ -508,6 +508,19 @@ conflicting managed settings or an unsupported protocol fail closed. Codex
 0.153.4 was exercised with real sandbox reads, a symlink escape, writes and
 loopback denial, plus app-server configuration and profile confirmation, without
 starting model inference.
+Code mode and its host remain enabled: Luna uses `exec` to dispatch even ordinary
+shell reads. The dispatched commands still use the named permission profile;
+disabling the dispatcher prevents permitted reads as well as denied operations.
+
+The opt-in `test_live_luna_dispatches_confined_reads` additionally runs real
+`gpt-5.6-luna` turns through the adapter. It checks native `exec` outputs for an
+unknown public fixture value, then resumes the same session and checks actual
+denials for sibling history, symlink escape, authentication, parent process
+environment, writes and loopback access. Run it with
+`STEWARD_LIVE_CODEX_AUTH_HOME=/absolute/private/codex-home uv run --extra dev python -m pytest -q tests/test_codex_read_scope.py -k live_luna`.
+This consumes provider usage and links the existing login into an isolated test
+home; credentials and unrelated transcripts are never printed. Ordinary source
+gates skip this authenticated test.
 
 Providers that do not declare and implement scoped reads are skipped for this
 access mode; Claude and GLM do not. An unavailable Codex cannot silently fall
