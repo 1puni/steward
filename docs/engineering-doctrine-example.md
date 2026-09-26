@@ -1,4 +1,6 @@
-Concrete example: a task may simply be a file
+# A task may simply be a file
+
+A worked example for the [engineering doctrine](engineering-doctrine.md).
 
 Do not assume that a domain concept requires a corresponding application object, database record, repository abstraction and persistence lifecycle.
 
@@ -43,7 +45,7 @@ The same artifact is directly readable by humans and models.
 
 In such a system, introducing a database representation of the same task may not improve the architecture. It may merely create a second truth that now has to be maintained.
 
-This is the kind of substitution you should actively search for during the refactor.
+This is the kind of substitution to go looking for.
 
 Do not ask only:
 
@@ -58,3 +60,7 @@ The correct answer may genuinely be a database.
 But that decision must come from requirements such as query patterns, concurrency, transactional semantics, scale or external integration — not from the assumption that persistent application state belongs in a database.
 
 Prefer the representation that contains the least independent knowledge while still satisfying the real requirements.
+
+This harness took the idea one step further. A task here is a controller-owned
+Git ref holding one `task.md`: the ref is the identity, the document is the
+account, and every decision is a commit. See [Git-native tasks](git-native-tasks.md).

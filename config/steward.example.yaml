@@ -42,15 +42,15 @@ provider:
   claude_executable: "/usr/local/bin/claude"
   codex_executable: "/usr/bin/codex"
   glm_credential_path: "/etc/steward/zai-token"
-  # The Claude-CLI families target one Anthropic-compatible endpoint. Route
-  # their turns through a discounting gateway (e.g. cheaperinference.com) by
-  # storing its key in the credential file and pointing the base URL there;
-  # model IDs under `models` must then match that gateway's exact catalog.
+  # The Claude-CLI families target one Anthropic-compatible endpoint. To route
+  # their turns through another Anthropic-compatible gateway, store its key in
+  # the credential file and point the base URL there; model IDs under `models`
+  # must then match that gateway's exact catalog.
   # GLM always reads glm_credential_path; Claude keeps native-home login
   # unless its optional base URL + credential pair is configured together.
-  # glm_anthropic_base_url: "https://api.cheaperinference.com"
-  # claude_anthropic_base_url: "https://api.cheaperinference.com"
-  # claude_credential_path: "/etc/steward/cheaperinference-token"
+  # glm_anthropic_base_url: "https://gateway.example.com"
+  # claude_anthropic_base_url: "https://gateway.example.com"
+  # claude_credential_path: "/etc/steward/gateway-token"
   # Per-provider model overrides, by profile. A bare string names the model and
   # leaves the built-in reasoning effort for that profile alone; a mapping
   # declares both, and an omitted `effort` sends no effort flag at all so the

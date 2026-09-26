@@ -1,6 +1,8 @@
 # Inspect stewardship signals and prompts
 
-Run from the repository:
+A local page that draws the lifecycle (who signals whom, who accepts what) and
+renders the exact prompt each cognition boundary would send, using the runtime's
+own prompt builders. Run from the repository:
 
 ```sh
 uv run python scripts/serve-stewardship-flow.py --port 8766
@@ -8,12 +10,12 @@ uv run python scripts/serve-stewardship-flow.py --port 8766
 
 Open `http://127.0.0.1:8766/`. Choose a lifecycle trace, click a cognition box,
 or select a stage under **Prompts at cognition boundaries**. Arrows expose
-their receiving owner, source and verification references. The baseline is
-historical `e2a7777`; the reviewed graph is a curated snapshot of `0c91c67`
-dated September 14, 2026, not telemetry or a fresh verification run. Prompt
-metadata separately identifies the full working-tree HEAD and any uncommitted
-source files used by that rendering. Historical composers identify their own
-committed revision.
+their receiving owner, source and verification references. The graph is a
+curated source review, not telemetry and not a fresh verification run; its
+"before" column compares against an older baseline revision that exists only in
+the full development history, so those historical stages cannot render in a
+checkout without it. Prompt metadata identifies the working-tree `HEAD` and any
+uncommitted source files used by each rendering.
 
 The repair and publication traces include assessment, world acceptance and
 authorized task follow-up. **World conflict reconciliation** is a separate

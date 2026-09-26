@@ -364,12 +364,12 @@ def test_claude_explicit_routing_replaces_ambient_endpoint_identity(tmp_path: Pa
         Path(sys.executable),
         controller=_controller(),
         native_home=tmp_path,
-        base_url="https://api.cheaperinference.com",
+        base_url="https://gateway.example.com",
         credential_path=router_token,
     )
     assert runtime.available().available
     environment = runtime.environment(inherited)
-    assert environment["ANTHROPIC_BASE_URL"] == "https://api.cheaperinference.com"
+    assert environment["ANTHROPIC_BASE_URL"] == "https://gateway.example.com"
     assert environment["ANTHROPIC_AUTH_TOKEN"] == "ci_live_router"
     assert "ANTHROPIC_API_KEY" not in environment
     assert "ZAI_AUTH_TOKEN" not in environment
@@ -388,7 +388,7 @@ def test_claude_explicit_routing_needs_base_url_and_credential_together(tmp_path
             Path(sys.executable),
             controller=_controller(),
             native_home=tmp_path,
-            base_url="https://api.cheaperinference.com",
+            base_url="https://gateway.example.com",
         )
     with pytest.raises(ValueError, match="both base URL and credential path"):
         ClaudeRuntime(
@@ -409,9 +409,9 @@ def test_glm_base_url_is_configurable_and_defaults_to_zai(tmp_path: Path) -> Non
     assert default.environment()["ANTHROPIC_BASE_URL"] == _ZAI
     routed = ClaudeRuntime(
         Path(sys.executable), controller=_controller(), native_home=tmp_path,
-        family="glm", base_url="https://api.cheaperinference.com", credential_path=token,
+        family="glm", base_url="https://gateway.example.com", credential_path=token,
     )
-    assert routed.environment()["ANTHROPIC_BASE_URL"] == "https://api.cheaperinference.com"
+    assert routed.environment()["ANTHROPIC_BASE_URL"] == "https://gateway.example.com"
     assert routed.environment()["ANTHROPIC_AUTH_TOKEN"] == "zai-file"
 
 

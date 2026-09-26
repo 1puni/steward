@@ -1,55 +1,61 @@
-# Read the task file and Git history
+# Read the task account and Git history
 
-The agent reads its `tasks/<task-id>.md` account and uses `git log` and
-`git show` in its checkout for provenance and earlier work. Repository and
-world README files point to their existing documentation and episodes.
+The prompt carries a task's identity, its accepted account (the `task.md` body,
+which starts as the brief), attributed pending input and the execution protocol.
+Everything else the agent finds for itself. Earlier slices' findings are the
+messages of the work branch's commits, so `git log` and `git show` in its checkout
+are the history. Repository and world README files point to the documentation
+that already exists.
 
-An admitted procedure's frozen instructions are included once in its task
-file. Changing the configured policy after admission does not replace them.
-The prompt carries the task identity, task-file path, attributed task input
-and execution protocol; it does not repeat the account or procedure text.
+An admitted procedure's instructions are frozen into its accepted task document
+once, at admission, and their text is hashed into the task's identity. Changing
+the configured policy afterwards does not rewrite a run that already exists.
 
 There is no generated history map, copied Git log, task-state snapshot or
-provenance export directory. Git remains the history. The controller retains
-its private admission, credential and execution boundaries; a Git publication
-alone is not proof of live deployment.
+provenance export directory. Git is the history. Copying it into the prompt would
+make a second history that is already stale by the time the model reads it.
 
 Pending inputs derive their source from the accepted input commit's
 `Steward-Source` trailer. Direct operator commands, accepted assistant actions
 and controller query observations remain distinct in both startup context and
-live native input. Missing historical provenance is unverified. New account
-sections retain the source beside the input; consumption does not erase it.
+live native input. Missing provenance is unverified, not assumed: it is never
+inferred from prose and never backfilled. Consuming an input does not erase where
+it came from.
 An assistant answer to one task is evidence of that answer, not a standing
-operator grant to other tasks.
+operator grant to other tasks. The speaker and the scope travel with every
+decision that gets reused.
 
 ## Observed source and retained findings
 
-For an organisation-root read-only rhythm, the controller refreshes every
-configured clone's `refs/steward/remote/<branch>` before cognition. These are
-convenience labels for observed remote commits, not new acceptance, publication
-or deployment authority. Working HEADs, local changes and `origin/<branch>`
-remain unchanged and can be old. Read source at the observed ref, recording the
-resolved SHA and observation time; follow that revision's README and docs map:
+Before an organisation-root read-only rhythm thinks, the controller refreshes
+every configured clone's `refs/steward/remote/<branch>`. Those refs are
+convenience labels for remote commits the controller observed. They grant no
+acceptance, publication or deployment authority. Working HEADs, local changes and
+`origin/<branch>` are left alone, and can be old. Read source at the observed
+ref, record the resolved SHA and when you observed it, and follow that revision's
+README and docs map:
 
 ```sh
 git -C app show -s --format=%H refs/steward/remote/main
 git -C app show refs/steward/remote/main:README.md
 ```
 
-Substitute the configured default branch for `main`. Read-only procedure findings
-can be retained in task-ref commit messages without publication to product main:
+Substitute the configured default branch for `main`. A read-only procedure's
+findings can be kept in task-ref commit messages without being published to the
+product's main branch:
 
 ```sh
 git -C app log --all --decorate --oneline
 git -C app show -s --format=full <evidence-commit>
 ```
 
-These readable refs provide findings and provenance. Controller-private accepted
-task Git, current locks and result-delivery receipts have separate roles. Absence
-from product main or inability to read private stores does not establish lost or
-unaccepted work. A prior finding also does not establish current source or live
-behavior: reobserve installed releases and public responses when relevant.
-Missing delivery evidence should be reported as unverified delivery, not failure.
+These readable refs carry findings and provenance. Controller-private accepted
+task Git, current locks and result-delivery receipts each have their own role.
+Work missing from product main, or a private store you cannot read, does not
+mean the work was lost or unaccepted. An earlier finding does not establish the
+current source or live behaviour either: observe installed releases and public
+responses again when they matter. Report missing delivery evidence as
+unverified delivery, not as a failure.
 
 ## Current ownership on request
 

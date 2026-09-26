@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "steward-harness"
 version = "0.1.0"
-description = "Universal declarative autonomous project steward harness"
+description = "An organisation pipeline that moves work forward: native agents propose, Git and a small controller dispose"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

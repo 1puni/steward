@@ -360,8 +360,8 @@ class ProviderConfig(BaseModel):
     codex_executable: str = "/usr/bin/codex"
     glm_credential_path: str = "/etc/steward/zai-token"
     # Anthropic-compatible endpoint the Claude CLI families target. Routing
-    # through a discounting gateway (for example cheaperinference.com) is one
-    # base URL plus a credential file; omit the pair to keep native-home login.
+    # through a gateway is one base URL plus a credential file; omit the pair
+    # to keep native-home login.
     glm_anthropic_base_url: str = "https://api.z.ai/api/anthropic"
     claude_anthropic_base_url: str | None = None
     claude_credential_path: str | None = None

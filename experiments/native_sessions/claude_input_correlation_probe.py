@@ -1,6 +1,6 @@
 """Observe native input/result correlation without treating echoes as completion.
 
-Run through glm_probe.py --zaude-login-shell --correlation-only. The fixture
+Run through glm_probe.py --login-shell --correlation-only. The fixture
 records identifiers and event shapes, never authentication or transcript text.
 """
 from __future__ import annotations
