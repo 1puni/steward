@@ -41,16 +41,27 @@ def captured(runs):
             for sha in (task.procedure.candidate, *(task.procedure.activity or {}).values())}
 
 
+def interval(rhythms, name, now):
+    """The interval a rhythm is in; a dependent rhythm is in its predecessor's."""
+    rhythm = rhythms[name]
+    if rhythm.after is not None:
+        return interval(rhythms, rhythm.after, now)
+    return int((now - rhythm.offset) // rhythm.schedule)
+
+
 class Procedures:
-    def __init__(self, config, state, transports):
+    def __init__(self, config, state, transports, *, world=None):
         self.config, self.state, self.transports = config, state, transports
+        self.world = world
         # Per quiet rhythm: the commits seen so far, and when the newest arrived.
         self._quiet = {}
 
     def request(self, name, repository, candidate, base, *, event="", owner=None, activity=None, workdir=None):
         config = self.config.procedures[name]
         instructions = Path(config.instructions).read_text()
-        payload = config.model_dump(mode="json") | {"text": instructions}
+        # A default left unsaid keeps the identity every earlier run was accepted under.
+        payload = config.model_dump(mode="json", exclude=set() if not config.fallback else {"fallback"})
+        payload["text"] = instructions
         if workdir is not None:
             payload["workdir"] = workdir
         identity = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -152,9 +163,9 @@ class Procedures:
             open_runs = [task for task in runs if task.status not in {TaskStatus.DONE, TaskStatus.CANCELLED}]
             if any(task.status is not TaskStatus.BLOCKED for task in open_runs):
                 continue
-            interval = isinstance(rhythm.schedule, int)
-            event = f"{prefix}{int(now // rhythm.schedule)}" if interval else None
-            if interval and any(task.procedure.event == event for task in runs):
+            periodic = isinstance(rhythm.schedule, int)
+            event = f"{prefix}{interval(self.config.rhythms, name, now)}" if periodic else None
+            if periodic and any(task.procedure.event == event for task in runs):
                 continue
             try:
                 repository, candidate, base, activity = self.observe(rhythm, definitions, heads)
@@ -166,7 +177,7 @@ class Procedures:
                 self._quiet.pop(name, None)
                 log.debug("Rhythm %s has no new input since its last run", name)
                 continue
-            if not interval:
+            if not periodic:
                 known, since = self._quiet.get(name, (set(), observed_now))
                 since = observed_now if observed - known else since
                 self._quiet[name] = (known | observed, since)
@@ -191,17 +202,39 @@ class Procedures:
 
         The source key is the whole idempotency: one turn per rhythm and
         interval, replayed rather than repeated after a restart. A recorded
-        receipt settles the interval; an interrupted turn consumes it.
+        receipt settles the interval; an interrupted turn consumes it. A
+        dependent rhythm shares its predecessor's interval and waits for that
+        interval's accepted turn, so a failed predecessor ends the chain. A
+        rhythm with `paths` starts only when the world changed under them since
+        its last accepted run.
         """
         now = time.time() if now is None else now
         for name, rhythm in self.config.rhythms.items():
             if rhythm.input != "world":
                 continue
-            key = f"rhythm:{name}:{int(now // rhythm.schedule)}"
+            index = interval(self.config.rhythms, name, now)
+            key = f"rhythm:{name}:{index}"
             prior = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
             if self.state.result_receipt(key) or (prior is not None and prior.state == "interrupted"):
                 continue
+            if rhythm.after is not None:
+                before = self.state.turn_for_source(
+                    ConversationId(f"rhythm:{rhythm.after}"), f"rhythm:{rhythm.after}:{index}")
+                if before is None or before.state != "completed":
+                    continue
+            if rhythm.paths and prior is None and not self._world_changed(name, rhythm.paths):
+                continue
             yield name, key
+
+    def _world_changed(self, name, paths):
+        """Did the world change under `paths` since this rhythm's last accepted run?
+
+        The cursor is that run's own candidate, not its base: what it wrote is
+        in both sides of the comparison, so its writes never retrigger it,
+        while anything another turn wrote since its base still counts.
+        """
+        last = self.state.last_world_candidate(ConversationId(f"rhythm:{name}"))
+        return last is None or self.world.changed(last, paths)
 
     def run_world_rhythm(self, conversations, name, key):
         """Run one interval as a world turn, then hand any reply to its owner."""
@@ -219,7 +252,7 @@ class Procedures:
                 transport="rhythm", transport_key=name, source_event_key=key,
                 operator_id="harness:rhythm", text=Path(procedure.instructions).read_text(),
                 episode_input=f"Scheduled {name} rhythm ({key}).",
-                allow_empty_output=True, model=procedure.model,
+                allow_empty_output=True, procedure=procedure,
             )
         except (Busy, ConversationBusy, WorldContentConflict, WorldUpdatePending) as error:
             log.info("world rhythm %s deferred: %s", key, error)

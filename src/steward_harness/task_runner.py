@@ -640,7 +640,7 @@ class TaskRunner:
             # Task cognition may work for days. A procedure run is a
             # finite review and keeps the provider deadline.
             timeout_seconds=self.timeout_seconds if procedure else None,
-            provider_order=self._provider_order(procedure.provider) if procedure else order,
+            provider_order=procedure.provider_order(self.provider_fallbacks) if procedure else order,
             model=procedure.model if procedure else None,
             provider_session_id=lineage.provider_session_id,
             session_provider=(

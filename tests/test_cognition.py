@@ -632,3 +632,33 @@ def test_pinned_model_stays_with_its_provider_and_fallback_runs_its_own(tmp_path
 
     assert result.resolved.provider == "claude"
     assert claude.requests[0].resolved.model == "claude-configured"
+
+
+def test_a_procedure_leads_with_its_preference_and_pins_only_when_it_says_so(tmp_path):
+    from steward_harness.config.schema import ProcedureConfig
+
+    preference = ProcedureConfig(instructions="/etc/steward/p.md", provider="claude",
+                                 model=ModelChoice(model="claude-preferred", effort="high"))
+    assert preference.provider_order(("codex", "claude", "glm")) == ("claude", "codex", "glm")
+    pinned = preference.model_copy(update={"fallback": False})
+    assert pinned.provider_order(("codex", "claude", "glm")) == ("claude",)
+
+    claude, codex = FakeAdapter("claude"), FakeAdapter("codex")
+    configured = {"codex": {"balanced": ModelChoice(model="codex-configured", effort="low")}}
+    cognition = Cognition({"claude": claude, "codex": codex}, custom_models=configured)
+    cognition.run(_request(tmp_path, provider_order=preference.provider_order(("codex", "claude")),
+                           model=preference.model))
+    # The preference is the model and its effort, not the model alone.
+    assert (claude.requests[0].resolved.model, claude.requests[0].resolved.reasoning_effort) == (
+        "claude-preferred", "high")
+
+    claude.is_available = False
+    result = cognition.run(_request(tmp_path, execution_id="turn-2", model=preference.model,
+                                    provider_order=preference.provider_order(("codex", "claude"))))
+    # A fallback runs its own configured model at its own configured effort.
+    assert (result.resolved.model, result.resolved.reasoning_effort) == ("codex-configured", "low")
+
+    with pytest.raises(RuntimeUnavailable, match="claude: unavailable"):
+        cognition.run(_request(tmp_path, execution_id="turn-3", model=pinned.model,
+                               provider_order=pinned.provider_order(("codex", "claude"))))
+    assert len(codex.requests) == 1

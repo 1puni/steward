@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -422,10 +422,6 @@ class ProviderConfig(BaseModel):
         """Ordered automatic provider policy, primary first."""
         return (self.default_family, *self.fallback_families)
 
-    def led_by(self, primary: str) -> tuple[ProviderFamily, ...]:
-        """The same policy with one preferred provider moved to the front."""
-        return (primary, *(family for family in self.family_order if family != primary))  # type: ignore[return-value]
-
 
 class WorldConfig(BaseModel):
     """Configured Git-world cognitive storage."""
@@ -523,9 +519,18 @@ class TaskIntakeConfig(BaseModel):
 class ProcedureConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     instructions: str
+    # The preference: this provider running this model at this effort. Unless
+    # `fallback` is false, `provider.family_order` follows it, each fallback
+    # running its own configured model for the profile.
     provider: str
     model: ModelChoice
     access: Literal["read-only", "workspace-write"] = "read-only"
+    fallback: bool = True
+
+    def provider_order(self, family_order: tuple[ProviderFamily, ...]) -> tuple[ProviderFamily, ...]:
+        """Its provider first, then the configured order unless it is pinned."""
+        return (self.provider, *(family for family in family_order
+                                 if self.fallback and family != self.provider))
 
 
 class QuietSchedule(BaseModel):
@@ -535,16 +540,31 @@ class QuietSchedule(BaseModel):
 
 class ProcedureRhythmConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schedule: Annotated[int, Field(gt=0)] | QuietSchedule
+    # Exactly one of `schedule` or `after`: a world rhythm may run in each
+    # interval of another world rhythm, once that rhythm's run has completed.
+    schedule: Annotated[int, Field(gt=0)] | QuietSchedule | None = None
+    after: str | None = None
+    # Where an interval starts, in seconds past the epoch's interval boundary.
+    offset: int = Field(default=0, ge=0)
     procedure: str
     input: str
     owner: str | None  # Explicit null retains findings without assessment/delivery.
     workdir: str | None = None
+    # World paths whose change since the rhythm's last accepted run is its input.
+    paths: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validates_workdir(self):
         if self.workdir is not None:
             _require_bounded_absolute("rhythm workdir", self.workdir)
+        if (self.schedule is None) == (self.after is None):
+            raise ValueError("rhythm requires exactly one of schedule or after")
+        if self.offset and not (isinstance(self.schedule, int) and self.offset < self.schedule):
+            raise ValueError("rhythm offset requires an interval schedule longer than it")
+        for path in self.paths:
+            parts = PurePosixPath(path).parts
+            if not path.strip() or path.startswith("/") or ".." in parts or ".git" in parts:
+                raise ValueError(f"rhythm path must stay inside the world: {path!r}")
         return self
 
 
@@ -608,8 +628,10 @@ class StewardConfig(BaseModel):
                     raise ValueError("world rhythm requires a configured world")
                 if self.procedures[rhythm.procedure].access != "workspace-write":
                     raise ValueError("world rhythm requires a workspace-write procedure")
-                if not isinstance(rhythm.schedule, int):
+                if rhythm.after is None and not isinstance(rhythm.schedule, int):
                     raise ValueError("world rhythm requires an interval schedule")
+            elif rhythm.after is not None or rhythm.paths:
+                raise ValueError("rhythm after and paths apply only to world rhythms")
             if rhythm.owner is not None:
                 kind, _, reference = rhythm.owner.partition(":")
                 if kind == "telegram":
@@ -617,6 +639,14 @@ class StewardConfig(BaseModel):
                         raise ValueError("rhythm owner must name a configured Telegram topic")
                 elif kind != "desk" or not self.desk or not reference.strip():
                     raise ValueError("rhythm owner must name an enabled desk or Telegram conversation")
+        for name, rhythm in self.rhythms.items():
+            chain = [name]
+            while (predecessor := self.rhythms[chain[-1]].after) is not None:
+                if predecessor not in self.rhythms or self.rhythms[predecessor].input != "world":
+                    raise ValueError(f"rhythm {chain[-1]} must follow a configured world rhythm")
+                if predecessor in chain:
+                    raise ValueError("rhythm after chain is a cycle: " + " > ".join((*chain, predecessor)))
+                chain.append(predecessor)
         if self.world and self.world.reconcile:
             procedure = self.procedures.get(self.world.reconcile)
             if procedure is None or procedure.access != "workspace-write":

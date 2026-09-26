@@ -123,15 +123,44 @@ claim that the evidence commit landed on the product branch. An owner's native
 session is optional and can be reconstructed on a fresh controller. Changing the
 configured owner affects future runs; an already accepted bucket keeps its owner.
 
+## Model preference
+
+A procedure's `provider` and `model` are a preference: this provider, running
+this model at this effort. `effort` is part of the choice and reaches Codex as
+its reasoning effort and Claude as `--effort`; leave it out and the provider
+decides. If the preferred provider cannot take the run, for whatever reason, the
+run falls back through `provider.family_order`, and each fallback runs its own
+configured model for the profile, never the preferred model under another
+provider's name. Conversations and ordinary tasks work the same way, led by
+their own selected provider and profile.
+
+When a procedure needs exactly that model, say so:
+
+```yaml
+procedures:
+  audit:
+    instructions: /etc/steward/procedures/audit.md
+    provider: claude
+    model: {model: configured-audit-model, effort: high}
+    fallback: false
+```
+
+A pinned run tries its provider and nothing else. When that provider cannot
+take it, the run fails like any other unavailable provider: a task blocks and a
+world rhythm consumes its interval. There is no ordered list of models. The
+fallback order is the configured family order and each fallback's model is its
+configured profile, so a per-procedure list would be a second copy of both.
+
 ## World rhythms
 
 A rhythm over `input: world` consolidates the world itself, such as a nightly
 sleep over accumulated episodes. It is not a task. Each interval is one ordinary
 world turn in the rhythm's own conversation, `rhythm:<name>`, taking the same
 lease, checkpoint and acceptance as an operator's message. Its text is the
-procedure's instructions, and it runs on the procedure's provider and model
-without fallback. Each interval starts a fresh native session; the world, not
-the previous session, carries what earlier runs consolidated.
+procedure's instructions, and it runs on the procedure's
+[model preference](#model-preference). Each interval starts a fresh native
+session; the world, not the previous session, carries what earlier runs
+consolidated.
 
 ```yaml
 procedures:
@@ -149,14 +178,58 @@ rhythms:
 ```
 
 A world rhythm needs a configured `world`, a `workspace-write` procedure and an
-integer interval; configuration refuses anything else, including a `workdir`.
+integer interval or an `after` (below); configuration refuses anything else,
+including a `workdir`.
 The source key `rhythm:<name>:<interval index>` is the whole idempotency: after a
 restart, the key replays an accepted turn rather than repeating cognition. A
 provider failure or crash consumes its interval. At most one run happens in each
 interval, and a missed interval is not made up. `86400` fires once per UTC day
-on the first poll after midnight UTC. A world rhythm is not gated on new input
-like a procedure rhythm: its input is the world its own previous turn wrote, and
-telling the two apart would need world-turn provenance for one nightly run.
+on the first poll after midnight UTC; `offset: 3600` moves the start of every
+interval an hour later, so the same rhythm fires on the first poll after 01:00
+UTC. The offset must be shorter than the interval, and it works the same way
+for a procedure rhythm's interval.
+
+A world rhythm without `paths` runs every interval. With `paths`, a model call
+needs new input there, as it does for a procedure rhythm:
+
+```yaml
+rhythms:
+  staging:
+    schedule: 3600
+    procedure: staging
+    input: world
+    paths: [episodes/, episodes.md]
+    owner: null
+```
+
+The rhythm is admitted on the first poll in an interval that finds the world
+changed under those paths since its last accepted run, and a poll that finds
+nothing calls no model and records nothing. The rhythm's last accepted turn is
+the cursor, and nothing else is: its captured candidate, the world as that turn
+left it, is compared with the accepted world by `git diff`. The comparison
+starts from the candidate rather than the turn's base, so whatever the rhythm
+wrote under its own paths is on both sides and never makes it fire again, while
+anything another turn wrote after its base still counts. With no accepted run
+yet, it runs. Paths are relative to the world root.
+
+A world rhythm can follow another instead of keeping a clock:
+
+```yaml
+rhythms:
+  sleep: {schedule: 86400, offset: 3600, procedure: sleep, input: world, owner: telegram:3}
+  rem: {after: sleep, procedure: rem, input: world, owner: telegram:3}
+  dream-away: {after: rem, procedure: dream-away, input: world, owner: telegram:3}
+```
+
+`after` takes the place of `schedule`. The dependent shares its predecessor's
+interval index, so its key `rhythm:rem:<index>` still admits at most one run per
+interval and replays after a restart exactly as above. It becomes due once the
+predecessor's turn for that interval has been accepted. If the predecessor
+failed or was interrupted, or a `paths` gate kept it from running, the
+dependent does not run in that interval: the chain stops for the night. A
+predecessor whose run is still going when its interval ends takes the chain
+with it, because the dependent is always asked about the current interval.
+`after` must name a configured world rhythm, and configuration refuses a cycle.
 
 The turn cannot propose or steer tasks, because a rhythm has no transport to
 receive their results; it records suggested work in world files instead. A
@@ -168,8 +241,9 @@ the key exists to prevent.
 
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
 harness never invents a schedule for you. A world rhythm is configured like any
-other, and the instance supplies its procedure file. Calendar and dependency
-schedules are not implemented, and there is no hook system or workflow graph.
+other, and the instance supplies its procedure file. A chain is one predecessor
+per rhythm, not a graph: there are no calendars, fan-in, hooks or conditions
+beyond "the previous one was accepted".
 
 Publication requirements check the final integrated candidate before it can be
 pushed. Target requirements review the complete candidate tree before application

@@ -396,6 +396,21 @@ def test_procedure_run_falls_back_through_the_canonical_provider_order(tmp_path)
     assert adapter.requests[-1].resolved.model != "model-one"
 
 
+def test_a_pinned_procedure_refuses_every_other_provider(tmp_path):
+    _, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    config.procedures["security-one"] = config.procedures["security-one"].model_copy(
+        update={"provider": "codex", "fallback": False})
+    runner.provider_fallbacks = ("claude",)
+    config.rhythms["interval"] = ProcedureRhythmConfig(
+        owner=None, schedule=100, procedure="security-one", input="repositories/app/main")
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    assert state.tasks.read(task)[1].procedure.fallback is False
+    runner.prepare(task)
+    assert state.tasks.get(task).status.value == "blocked"
+    assert adapter.requests == []
+
+
 def test_blocked_rhythm_run_is_superseded_by_the_next_interval(tmp_path):
     _, state, runner, config, procedures, _ = quiet_harness(tmp_path)
     config.rhythms["interval"] = ProcedureRhythmConfig(

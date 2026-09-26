@@ -51,7 +51,7 @@ def test_world_rhythm_runs_once_per_interval_as_a_world_turn(tmp_path):
     assert due == [("sleep", "rhythm:sleep:20")]
     procedures.run_world_rhythm(service, *due[0])
 
-    # An ordinary accepted world turn, with the procedure's model and no fallback.
+    # An ordinary accepted world turn, with the procedure's model (no fallback is configured).
     assert (checkpoint.world.root / "decision.md").exists()
     request = seen[0]
     assert request.model.model == "night-model" and request.provider_order == ("codex",)
@@ -185,3 +185,214 @@ def test_rhythm_command_reports_the_interval_and_refuses_an_extra_run(tmp_path):
         commands("rhythm", "list", 1, 3, 7))
     assert "world rhythm" in commands("rhythm", "run sleep", 1, 3, 7)
     assert state.tasks.all() == []
+
+
+def _night(root, world_root, rhythms, **procedure):
+    """Sleep, then REM, then Dream Away: a chain of world rhythms."""
+    config = _config(root, world_root).model_dump()
+    config["procedures"]["sleep"] |= procedure
+    config["rhythms"] = rhythms
+    return StewardConfig.model_validate(config)
+
+
+CHAIN = {
+    "sleep": {"schedule": DAY, "procedure": "sleep", "input": "world", "owner": "telegram:3"},
+    "rem": {"after": "sleep", "procedure": "sleep", "input": "world", "owner": None},
+    "dream-away": {"after": "rem", "procedure": "sleep", "input": "world", "owner": None},
+}
+
+
+def _chain(tmp_path, cognition=None, rhythms=CHAIN):
+    state, checkpoint, service, cognition = runtime(tmp_path, cognition)
+    config = _night(tmp_path, checkpoint.world.root, rhythms)
+    return config, state, checkpoint, service, cognition, Procedures(
+        config, state, {}, world=checkpoint.world)
+
+
+def test_a_chain_runs_each_rhythm_after_its_predecessor_completes(tmp_path):
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path)
+    ran = []
+    for _ in range(4):
+        for name, key in list(procedures.due_world_rhythms(now=NOW)):
+            ran.append(key)
+            procedures.run_world_rhythm(service, name, key)
+    # Each dependent keys on its predecessor's interval, and one poll never
+    # starts a dependent whose predecessor has not yet been accepted.
+    assert ran == ["rhythm:sleep:20", "rhythm:rem:20", "rhythm:dream-away:20"]
+    assert cognition.calls == 3
+
+    # A restarted controller reads the same settled chain and repeats nothing.
+    state, checkpoint, service, cognition = runtime(tmp_path, cognition)
+    restarted = Procedures(config, state, {}, world=checkpoint.world)
+    assert list(restarted.due_world_rhythms(now=NOW + 600)) == []
+    assert list(restarted.due_world_rhythms(now=NOW + DAY)) == [("sleep", "rhythm:sleep:21")]
+    assert cognition.calls == 3
+
+
+def test_a_dependent_waits_for_an_accepted_predecessor(tmp_path):
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path)
+    # Started but not accepted: the dependent has nothing to follow yet.
+    state.open_conversation(ConversationId("rhythm:sleep"), provider="codex", profile="balanced")
+    state.start_turn(ConversationId("rhythm:sleep"), "rhythm:sleep:20", "harness:rhythm", "Sleep.")
+    assert [name for name, _ in procedures.due_world_rhythms(now=NOW)] == ["sleep"]
+
+
+def test_a_failed_predecessor_ends_the_chain_for_the_interval(tmp_path):
+    class Failing(EditingCognition):
+        def run(self, request, *, execution_id=None):
+            self.calls += 1
+            request()
+            raise RuntimeExecutionError("provider failed")
+
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, Failing())
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert list(procedures.due_world_rhythms(now=NOW)) == []
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("sleep", "rhythm:sleep:21")]
+    assert cognition.calls == 1
+
+
+def test_a_dependent_accepted_before_its_receipt_replays_after_restart(tmp_path, monkeypatch):
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+
+    def crash(_receipt):
+        raise Crash
+
+    monkeypatch.setattr(state, "save_result_receipt", crash)
+    with pytest.raises(Crash):
+        procedures.run_world_rhythm(service, "rem", "rhythm:rem:20")
+    monkeypatch.undo()
+    state, checkpoint, service, _ = runtime(tmp_path, cognition)
+    procedures = Procedures(config, state, {}, world=checkpoint.world)
+    # The accepted turn, not its receipt, is what the next rhythm follows.
+    assert list(procedures.due_world_rhythms(now=NOW)) == [
+        ("rem", "rhythm:rem:20"), ("dream-away", "rhythm:dream-away:20")]
+    procedures.run_world_rhythm(service, "rem", "rhythm:rem:20")
+    assert cognition.calls == 2
+    assert [name for name, _ in procedures.due_world_rhythms(now=NOW)] == ["dream-away"]
+
+
+def test_an_offset_moves_where_the_interval_starts(tmp_path):
+    rhythms = {"sleep": CHAIN["sleep"] | {"offset": 3600}, "rem": CHAIN["rem"]}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    assert list(procedures.due_world_rhythms(now=DAY * 20 + 3599)) == [("sleep", "rhythm:sleep:19")]
+    assert list(procedures.due_world_rhythms(now=DAY * 20 + 3600)) == [("sleep", "rhythm:sleep:20")]
+
+
+@pytest.mark.parametrize(("rhythms", "error"), [
+    ({"rem": CHAIN["rem"]}, "must follow a configured world rhythm"),
+    ({"sleep": CHAIN["sleep"] | {"after": "rem"}, "rem": CHAIN["rem"]}, "exactly one of schedule or after"),
+    ({"sleep": CHAIN["rem"] | {"after": "rem"}, "rem": CHAIN["rem"]}, "cycle"),
+    ({"sleep": CHAIN["rem"] | {"after": "sleep"}}, "cycle"),
+    ({"sleep": {k: v for k, v in CHAIN["sleep"].items() if k != "schedule"}},
+     "exactly one of schedule or after"),
+    ({"sleep": CHAIN["sleep"] | {"offset": DAY}}, "offset"),
+    ({"sleep": CHAIN["sleep"] | {"paths": ["../outside"]}}, "inside the world"),
+    ({"sleep": CHAIN["sleep"] | {"paths": ["/episodes"]}}, "inside the world"),
+])
+def test_configuration_refuses_an_unfollowable_chain(tmp_path, rhythms, error):
+    with pytest.raises(ValueError, match=error):
+        _night(tmp_path, tmp_path / "world", rhythms)
+
+
+def test_after_and_paths_belong_to_world_rhythms(tmp_path):
+    config = _config(tmp_path, tmp_path / "world").model_dump()
+    config["repositories"] = {"app": {"path": str(tmp_path / "app"),
+                                      "remote_url": "https://example.com/app.git"}}
+    config["procedures"]["review"] = config["procedures"]["sleep"] | {"access": "read-only"}
+    review = {"schedule": DAY, "procedure": "review", "input": "repositories/app/main", "owner": None}
+    config["rhythms"] = {"review": review, "rem": CHAIN["rem"] | {"after": "review"}}
+    with pytest.raises(ValueError, match="must follow a configured world rhythm"):
+        StewardConfig.model_validate(config)
+    config["rhythms"] = {"review": review | {"paths": ["episodes/"]}}
+    with pytest.raises(ValueError, match="only to world rhythms"):
+        StewardConfig.model_validate(config)
+
+
+class Consolidating(EditingCognition):
+    """A sleep that also rewrites the episodes it reads."""
+
+    def run(self, request, *, execution_id=None):
+        if callable(request):
+            request = request()
+        (request.cwd / "episodes").mkdir(exist_ok=True)
+        (request.cwd / "episodes" / "digest.md").write_text(f"Digest {self.calls}.\n")
+        return super().run(request, execution_id=execution_id)
+
+
+def _world_commit(world_root, name):
+    import subprocess
+
+    path = world_root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(name)
+    subprocess.run(["git", "add", name], cwd=world_root, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=t@x", "commit", "-q", "-m", name],
+                   cwd=world_root, check=True)
+
+
+def test_paths_gate_calls_no_model_without_new_episodes(tmp_path):
+    rhythms = {"sleep": CHAIN["sleep"] | {"paths": ["episodes/", "episodes.md"]}}
+    config, state, checkpoint, service, cognition, procedures = _chain(
+        tmp_path, Consolidating(), rhythms=rhythms)
+    # No accepted run yet: the first interval runs.
+    assert list(procedures.due_world_rhythms(now=NOW)) == [("sleep", "rhythm:sleep:20")]
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert (checkpoint.world.root / "episodes" / "digest.md").exists()
+
+    # Its own write under its paths, and a change elsewhere, are not input.
+    _world_commit(checkpoint.world.root, "notes/unrelated.md")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
+    assert list(procedures.due_world_rhythms(now=NOW + DAY + 3000)) == []
+
+    # A new episode later in the same interval is: the first poll that sees it runs.
+    _world_commit(checkpoint.world.root, "episodes/2026-09-27.md")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY + 3600)) == [("sleep", "rhythm:sleep:21")]
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
+    assert cognition.calls == 2
+    _world_commit(checkpoint.world.root, "episodes.md")
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == [("sleep", "rhythm:sleep:22")]
+    # A cursor Git can no longer read admits the run rather than silencing it.
+    assert checkpoint.world.changed("0" * 40, ("episodes/",))
+
+
+def test_a_gated_predecessor_that_did_not_run_does_not_start_its_dependent(tmp_path):
+    rhythms = {"sleep": CHAIN["sleep"] | {"paths": ["episodes/"]}, "rem": CHAIN["rem"]}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    procedures.run_world_rhythm(service, "rem", "rhythm:rem:20")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
+    assert cognition.calls == 2
+
+
+def test_world_rhythm_leads_with_its_preference_and_falls_back_unless_pinned(tmp_path):
+    seen = []
+    config, state, checkpoint, service, cognition, procedures = _chain(
+        tmp_path, EditingCognition(before_return=seen.append), rhythms={"sleep": CHAIN["sleep"]})
+    service._provider_order = ("claude", "codex", "glm")
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert seen[-1].provider_order == ("codex", "claude", "glm")
+    assert (seen[-1].model.model, seen[-1].model.effort) == ("night-model", "high")
+
+    procedures.config = _night(tmp_path, checkpoint.world.root, {"sleep": CHAIN["sleep"]}, fallback=False)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
+    assert seen[-1].provider_order == ("codex",)
+
+
+def test_rhythm_list_names_a_dependent_by_its_predecessor(tmp_path):
+    from typing import cast
+
+    from steward_harness.config.schema import UntrustedExecutionConfig
+    from steward_harness.conversations import ConversationService
+    from steward_harness.daemon import KernelCommands
+    from steward_harness.repository_reconciler import RepositoryReconciler
+    from steward_harness.runtime.execution import UntrustedExecutionBroker
+
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path)
+    commands = KernelCommands(
+        config, state, cast(ConversationService, SimpleNamespace()),
+        cast(RepositoryReconciler, SimpleNamespace()), {},
+        UntrustedExecutionBroker(UntrustedExecutionConfig()), procedures=procedures,
+    )
+    assert "rem: after sleep, sleep, world, owner=retained only; this interval: not run yet" in (
+        commands("rhythm", "list", 1, 3, 7))
