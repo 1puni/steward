@@ -110,7 +110,7 @@ quiet state; other rhythms remain eligible.
 
 A finished read-only rhythm run without findings is retained evidence only. Its
 checkpoint commit names the outcome, and the result lane never selects it for
-assessment or delivery; see [rhythms](rhythms-direction.md).
+assessment or delivery; see [rhythms](rhythms.md).
 
 ## Driver protocol
 
