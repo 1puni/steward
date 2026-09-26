@@ -982,6 +982,30 @@ def test_unowned_target_waits_for_operator_route_then_delivers_without_task(tmp_
     assert state.tasks.all() == []
 
 
+def test_owned_live_target_reaches_its_owner_without_a_model_turn(tmp_path):
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42, "work": 44}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    state.save_result_receipt({
+        "owner": "telegram:44", "task_id": "task-1", "target": "app", "sequence": 1,
+        "source_key": "target_result:owned", "result_text": "Target observation",
+        "observation": ["a" * 40, "satisfied"], "reply": "app is live at aaaaaaaaaaaa.",
+    })
+    # The service has no cognition at all: an assessment attempt would raise.
+    daemon, queued, step = _result_pass(tmp_path, config, state)
+    sent = []
+    daemon._telegram = SimpleNamespace(config=config.telegram,
+                                       send_result=lambda *args: sent.append(args))
+    step()
+    for key, work in queued:
+        if key[0] == "result":
+            work()
+    assert sent == [(1, 44, "app is live at aaaaaaaaaaaa.", "target_result:owned")]
+    assert state.result_receipt("target_result:owned")["done"]
+
+
 def test_status_exposes_undeliverable_receipts(tmp_path):
     commands = _status_commands(tmp_path)
     commands.state.save_result_receipt({
