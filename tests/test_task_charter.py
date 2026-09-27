@@ -19,6 +19,9 @@ def test_task_keeps_the_admitted_charter_when_policy_changes(tmp_path):
     runner.prepare(task)
     runner.prepare(task)
     assert len(adapter.requests) == 2
+    assert all(request.native_owner == str(state.tasks.get(task).session_id)
+               for request in adapter.requests)
+    assert adapter.requests[0].native_generation == adapter.requests[1].native_generation
     request = adapter.requests[-1]
     assert request.prompt.count(accepted) == 1
     assert "Different policy after admission" not in request.prompt

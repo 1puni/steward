@@ -514,3 +514,63 @@ def test_codex_native_interrupt_reaches_process_and_bounds_cleanup(tmp_path, mon
     assert checkpoint.exists() == cooperates
     if cooperates:
         assert checkpoint.read_text() == "final native write"
+
+
+@pytest.mark.parametrize("family", ["claude", "glm"])
+def test_retained_claude_project_namespace_is_fixed_inside_each_owner_home(tmp_path, monkeypatch, family):
+    from dataclasses import replace
+
+    seed = tmp_path / 'seed'
+    seed.mkdir()
+    runtime = ClaudeRuntime(controller=_controller(), native_home=seed, family=family)
+    launches = []
+
+    def capture(command, *, env, **kwargs):
+        launches.append(dict(env))
+        raise RuntimeError('captured launch')
+
+    monkeypatch.setattr(runtime._controller, 'run', capture)
+    monkeypatch.setenv('CLAUDE_CODE_PROJECT_DIR_NAME', 'ambient-unrelated-project')
+    monkeypatch.setenv('CLAUDE_SECURESTORAGE_CONFIG_DIR', '/unrelated/private/authority')
+    for owner in ('one', 'one', 'two', None):
+        request = replace(_request(tmp_path), native_owner=owner, resolved=resolve_model(family, 'fast'))
+        with pytest.raises(RuntimeError, match='captured launch'):
+            runtime.execute(request)
+    assert [env.get('CLAUDE_CODE_PROJECT_DIR_NAME') for env in launches] == ['steward'] * 3 + [None]
+    assert launches[0]['CLAUDE_CONFIG_DIR'] == launches[1]['CLAUDE_CONFIG_DIR']
+    assert launches[0]['CLAUDE_CONFIG_DIR'] != launches[2]['CLAUDE_CONFIG_DIR']
+    assert launches[3]['CLAUDE_CONFIG_DIR'] == str(seed)
+    assert all(env['CLAUDE_SECURESTORAGE_CONFIG_DIR'] == str(seed) for env in launches)
+
+
+@pytest.mark.parametrize('family', ['claude', 'glm'])
+@pytest.mark.parametrize('access', ['read-only', 'workspace-write'])
+def test_native_transcript_retention_is_explicit_and_keeps_persistence(tmp_path, family, access):
+    runtime = ClaudeRuntime(controller=_controller(), native_home=tmp_path, family=family)
+    command = runtime._command(_request(tmp_path, access), None)
+    settings = json.loads(command[command.index('--settings') + 1])
+    assert settings['cleanupPeriodDays'] == 365000
+    assert '--no-session-persistence' not in command
+
+
+@pytest.mark.parametrize('family', ['claude', 'glm'])
+@pytest.mark.parametrize('owner', [None, 'owner'])
+def test_routed_provider_does_not_use_seed_oauth_store(tmp_path, monkeypatch, family, owner):
+    from dataclasses import replace
+
+    seed = tmp_path / 'seed'
+    seed.mkdir()
+    token = tmp_path / 'router-token'
+    token.write_text('router-credential')
+    runtime = ClaudeRuntime(controller=_controller(), native_home=seed, family=family,
+                            base_url='https://router.invalid', credential_path=token)
+    captured = {}
+    def capture(command, *, env, **kwargs):
+        captured.update(env)
+        raise RuntimeError('captured launch')
+    monkeypatch.setattr(runtime._controller, 'run', capture)
+    with pytest.raises(RuntimeError, match='captured launch'):
+        runtime.execute(replace(_request(tmp_path), native_owner=owner))
+    assert captured['ANTHROPIC_AUTH_TOKEN'] == 'router-credential'
+    assert captured['CLAUDE_SECURESTORAGE_CONFIG_DIR'] == str(Path(captured['CLAUDE_CONFIG_DIR']) / '.steward-routed-auth')
+    assert captured['CLAUDE_SECURESTORAGE_CONFIG_DIR'] != str(seed)

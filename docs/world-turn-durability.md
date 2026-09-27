@@ -56,7 +56,9 @@ Interrupted native edits and Git operations still belong to their session.
 ## Preparation and application
 
 Capture stages the current files and commits them with the attributed exchange
-as the message. A resumed unprepared attempt amends its own earlier closing
+as the message. The world records what is remembered, not what was asked: operator
+text is recorded verbatim, while a harness-authored prompt is recorded in its short
+form. The provider still receives the whole prompt. A resumed unprepared attempt amends its own earlier closing
 commit (same `Steward-Turn`) rather than adding a second; once a candidate is
 prepared, recovery replays that exact candidate instead. Native records remain
 in their native format; credentials and private runtime state stay out of Git.
@@ -67,6 +69,9 @@ the owner's, derived from its conversation); when
 the provider returns it retains the completed output, provenance and execution
 generation; after Git capture it records the candidate; acceptance completes it
 with the reply and task effect. Each step is one SQL update on that row.
+If the checkout is contended before any provider starts, the turn is withdrawn and its
+replay starts it fresh: no provider saw it, so it never happened. A turn that reached a
+provider but has no retained output is never replayed automatically.
 Recovery captures and accepts the original turn before admitting another
 source; it does not call the working model again. A cleared or switched native
 session cannot be restored by delayed completion from its previous generation.
@@ -90,6 +95,11 @@ The checkout keeps its files for the owner's next source. Other owners can conti
 returned provider failure releases the claim and leaves ordinary partial work
 for the next source. The state database and unfinished checkouts must be
 backed up together.
+
+Never commit into the accepted world by hand to clear a blocker; move the offending file
+out instead. A hand commit moves HEAD off the pending turn's base, and the retry then
+fails with an unrecoverable "world moved". A dirty path defers application only when
+it collides with a path the revision writes.
 
 The trailer is as trustworthy as the world branch, which the agent identity can write:
 an agent could make its own pending turn read as applied by landing a commit that
@@ -139,12 +149,19 @@ unrelated operator work is not permission to reset the world.
 ## Idle session retention
 
 An hourly controller pass retires owner checkouts after
-`controller.world_session_idle_seconds` (default 604800, seven days) since the
-latest completed turn. Owners without a completed latest turn stay materialized.
+`controller.world_session_idle_seconds` (default 86400, one day) since the
+latest completed turn. Each checkout is a full copy of the world's files and
+recreating one takes seconds (8 s for gg's 1.1 GB world), so one day keeps a
+conversation in use warm without holding a week of copies. Owners without a
+completed latest turn stay materialized.
 Under the world lease, a SQL write transaction prevents new turn admission while
 eligibility and removal are checked. Pending prepared turns or completion receipts
-prevent removal. The checkout must contain no dirty, untracked or ignored files,
+prevent removal. The checkout must contain no dirty or untracked files,
 no unfinished Git operation, and no commits outside the accepted world's ancestry.
+Ignored files do not block: the repository declares them regenerable, and Git's
+`worktree remove` deletes them while still refusing modified or untracked files.
+Finished task worktrees follow the same rule, which keeps a venv or
+`node_modules` from retaining a done task's checkout indefinitely.
 Refusals due to local work or pending recovery are logged. Removal uses Git
 `worktree remove` without force and `worktree prune`, keeping accepted history and
 native session records. The next turn recreates the checkout from the world.

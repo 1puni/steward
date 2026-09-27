@@ -131,9 +131,18 @@ class DeskInbox:
             return []
         messages: list[DeskMessage] = []
         for path in sorted(self.dir.glob("*.json")):
-            message = self._parse(path)
+            try:
+                message = self._parse(path)
+            except FileNotFoundError:
+                # Ingress may claim this file between listing and reading.
+                continue
             if message is None:
-                self._park(path, "rejected")
+                try:
+                    self._park(path, "rejected")
+                except FileNotFoundError:
+                    # Ingress may claim a file after another scanner lists it.
+                    # Its claimed copy remains owned by that ingress worker.
+                    pass
                 continue
             messages.append(message)
         return messages
@@ -172,7 +181,7 @@ class DeskInbox:
     def _parse(path: Path) -> DeskMessage | None:
         try:
             job = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return None
         if not isinstance(job, dict) or job.get("kind") not in ("message", "observation"):
             return None

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from pathlib import Path
 
 from steward_harness.desk import DeskEvents, DeskInbox
@@ -120,3 +122,46 @@ def test_a_message_may_carry_bounded_framing_for_the_model(tmp_path: Path) -> No
     contexts = {m.msg_id: m.context for m in inbox.pending()}
     assert contexts == {"framed": "Live call.", "huge": None, "typed": None}
     assert inbox.claim(next(m for m in inbox.pending() if m.msg_id == "framed")).context == "Live call."
+
+
+def test_pending_tolerates_ingress_claim_between_listing_and_read(tmp_path, monkeypatch):
+    _queue(tmp_path, 'racing', 'preserve this message')
+    inbox = DeskInbox(tmp_path / 'desk-inbox')
+    [queued] = inbox.pending()
+    parse = inbox._parse
+    claimed = []
+
+    def claim_before_read(path):
+        claimed.append(inbox.claim(queued))
+        return parse(path)
+
+    monkeypatch.setattr(inbox, '_parse', claim_before_read)
+    assert inbox.pending() == []
+    assert len(claimed) == 1
+    assert parse(claimed[0].path).text == 'preserve this message'
+    assert not list(inbox.dir.glob('*.rejected'))
+
+
+def test_pending_read_error_does_not_reject_valid_job(tmp_path: Path, monkeypatch) -> None:
+    _queue(tmp_path, "unreadable", "preserve on read failure")
+    inbox = DeskInbox(tmp_path / "desk-inbox")
+    [queued] = inbox.pending()
+    read = Path.read_text
+
+    def fail_read(path, *args, **kwargs):
+        if path == queued.path:
+            raise PermissionError("fixture transient read failure")
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    with pytest.raises(PermissionError, match="fixture transient"):
+        inbox.pending()
+    assert queued.path.exists()
+    assert not list(inbox.dir.glob("*.rejected"))
+
+
+def test_pending_rejects_invalid_utf8(tmp_path: Path) -> None:
+    inbox = DeskInbox(tmp_path)
+    (tmp_path / "invalid.json").write_bytes(b"\xff")
+    assert inbox.pending() == []
+    assert (tmp_path / "invalid.rejected").read_bytes() == b"\xff"

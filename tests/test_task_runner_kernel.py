@@ -1156,3 +1156,56 @@ def test_retry_cannot_republish_its_old_idle_checkpoint(tmp_path):
     run_task(runner)
     assert task_status(runner, admitted.task_id) is TaskStatus.DONE
     assert _git('show','main:result.txt',cwd=bare) == 'green'
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_unverified_teardown_holds_task_without_committing_partial_work(tmp_path, cancelled):
+    from steward_harness.runtime.contracts import RuntimeExecutionError
+    from steward_harness.runtime.execution import ExecutionBoundaryUnavailable
+
+    bare, clone = _repository(tmp_path)
+    state = StateDatabase(tmp_path / 'state.db')
+    admitted = admit_task(state, TaskSpec('app', 'Containment', 'Preserve partial work'),
+                          provider='claude', profile='balanced')
+    prior_work = state.tasks.get(admitted.task_id).work_sha
+
+    class UncontainedAdapter(EditingAdapter):
+        def execute(self, request):
+            self.requests.append(request)
+            request.on_session_started('retained-native-session')
+            (request.cwd / 'partial.txt').write_text('must stay uncommitted\n')
+            if cancelled:
+                state.tasks.cancel(admitted.task_id, 'operator cancellation')
+            try:
+                raise ExecutionBoundaryUnavailable('owned unit not verified empty')
+            except ExecutionBoundaryUnavailable as error:
+                raise RuntimeExecutionError('containment failed',
+                                            session_id='retained-native-session') from error
+
+    adapter = UncontainedAdapter()
+    class ForbiddenFallback(EditingAdapter):
+        family = 'codex'
+
+        def execute(self, request):
+            pytest.fail('containment failure must not reach fallback')
+
+    runner = TaskRunner(
+        state=state,
+        repositories={'app': RepositoryConfig(path=str(clone), remote_url=str(bare),
+                                               default_branch='main')},
+        transports={'app': ControllerGitTransport(tmp_path / 'controller.db', 'app',
+                                                  str(bare), 'main', allow_local=True)},
+        worktrees_root=tmp_path / 'worktrees',
+        broker=UntrustedExecutionBroker(UntrustedExecutionConfig()),
+        cognition=Cognition({'claude': adapter, 'codex': ForbiddenFallback()}),
+        provider_fallbacks=('codex',), timeout_seconds=30,
+    )
+    assert runner.prepare(admitted.task_id) == admitted.task_id
+    retained = adapter.requests[0].cwd
+    assert (retained / 'partial.txt').read_text() == 'must stay uncommitted\n'
+    assert '?? partial.txt' in _git('status', '--porcelain', cwd=retained)
+    held = state.tasks.get(admitted.task_id)
+    assert held.status is (TaskStatus.CANCELLED if cancelled else TaskStatus.BLOCKED)
+    assert held.work_sha == prior_work
+    assert state.get_conversation(held.session_id).provider_session_id == 'retained-native-session'
+    assert not state.tasks.queued()

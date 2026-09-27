@@ -165,9 +165,18 @@ by the agent identity through no-follow path traversal. The controller never ope
 model-writable world content on the model's behalf.
 
 Provider authentication belongs to the agent identity. Log Claude/Codex in as `steward`,
-or place only the provider API credentials it needs in the agent's home. Deployment, Git
-push, Telegram, signing, Docker, and cloud-administration credentials stay
-controller-only.
+or place only the provider API credentials it needs in the agent's home. Deployment,
+Telegram, signing, Docker, and cloud-administration credentials stay controller-only.
+
+Enforce authority on the side that can actually enforce it. A prompt, a local hook or a
+convention in the agent's checkout is not enforcement; a remote's branch protection is.
+An instance may give the agent a scoped Git write credential — a GitHub App token, say —
+where the remote itself protects what matters: the agent can push its own branches and
+open pull requests, and the remote refuses what the grant does not allow. Any branch
+that feeds publication or self-deployment must be one the agent's credential cannot
+write, because a direct write bypasses the controller's gates entirely. The controller's
+landing credential stays controller-only. Artifact integrity checks bytes; it grants no
+authority.
 
 Inbound Telegram media is the deliberate read-only exception. Split-identity instances
 configure a dedicated `telegram.inbound_media_dir`; the controller owns the directory

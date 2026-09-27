@@ -241,6 +241,32 @@ def test_cancellation_during_availability_stops_fallback(tmp_path):
     assert first.requests == fallback.requests == []
 
 
+@pytest.mark.parametrize("during_execute", [False, True])
+def test_cancellation_during_last_provider_refusal_is_not_exhaustion(
+    tmp_path, during_execute,
+):
+    cognition = None
+
+    class Unavailable(FakeAdapter):
+        def available(self):
+            if during_execute:
+                return Availability(True)
+            assert cognition.cancel("turn-1")
+            return Availability(False, "offline")
+
+        def execute(self, request):
+            self.requests.append(request)
+            assert cognition.cancel("turn-1")
+            raise RuntimeUnavailable("custody busy")
+
+    adapter = Unavailable("codex")
+    cognition = Cognition({"codex": adapter})
+    with pytest.raises(RuntimeExecutionError, match="cancelled"):
+        cognition.run(_request(tmp_path, provider_order=("codex",)))
+    assert len(adapter.requests) == int(during_execute)
+    assert not cognition.cancel("turn-1")
+
+
 def test_a_returned_run_is_no_longer_cancellable(tmp_path):
     """The ordering the world-turn holes were deleted in favour of.
 
@@ -574,3 +600,65 @@ def test_wrong_adapter_identity_is_a_contract_fault_not_a_provider_outage(tmp_pa
         )
     assert not isinstance(raised.value, RuntimeExecutionError)
     assert fallback.requests == []
+
+
+def test_missing_session_recomputes_native_generation_before_retry(tmp_path):
+    generation = 7
+
+    def invalidate(_provider):
+        nonlocal generation
+        generation += 1
+
+    adapter = MissingSessionAdapter('codex')
+    Cognition({'codex': adapter}).run(_request(
+        tmp_path, provider_order=('codex',), native_owner='retained-owner',
+        native_generation=lambda _provider: generation,
+        provider_session_id='stale', session_provider='codex',
+        on_session_invalidated=invalidate,
+    ))
+    assert [(r.native_owner, r.native_generation) for r in adapter.requests] == [
+        ('retained-owner', 7), ('retained-owner', 8),
+    ]
+
+
+def test_pinned_model_stays_with_its_provider_and_fallback_runs_its_own(tmp_path):
+    codex = FakeAdapter("codex", available=False)
+    claude = FakeAdapter("claude")
+    result = Cognition(
+        {"codex": codex, "claude": claude},
+        custom_models={"claude": {"balanced": "claude-configured"}},
+    ).run(_request(tmp_path, provider_order=("codex", "claude"),
+                   model=ModelChoice(model="codex-pinned")))
+
+    assert result.resolved.provider == "claude"
+    assert claude.requests[0].resolved.model == "claude-configured"
+
+
+def test_a_procedure_leads_with_its_preference_and_pins_only_when_it_says_so(tmp_path):
+    from steward_harness.config.schema import ProcedureConfig
+
+    preference = ProcedureConfig(instructions="/etc/steward/p.md", provider="claude",
+                                 model=ModelChoice(model="claude-preferred", effort="high"))
+    assert preference.provider_order(("codex", "claude", "glm")) == ("claude", "codex", "glm")
+    pinned = preference.model_copy(update={"fallback": False})
+    assert pinned.provider_order(("codex", "claude", "glm")) == ("claude",)
+
+    claude, codex = FakeAdapter("claude"), FakeAdapter("codex")
+    configured = {"codex": {"balanced": ModelChoice(model="codex-configured", effort="low")}}
+    cognition = Cognition({"claude": claude, "codex": codex}, custom_models=configured)
+    cognition.run(_request(tmp_path, provider_order=preference.provider_order(("codex", "claude")),
+                           model=preference.model))
+    # The preference is the model and its effort, not the model alone.
+    assert (claude.requests[0].resolved.model, claude.requests[0].resolved.reasoning_effort) == (
+        "claude-preferred", "high")
+
+    claude.is_available = False
+    result = cognition.run(_request(tmp_path, execution_id="turn-2", model=preference.model,
+                                    provider_order=preference.provider_order(("codex", "claude"))))
+    # A fallback runs its own configured model at its own configured effort.
+    assert (result.resolved.model, result.resolved.reasoning_effort) == ("codex-configured", "low")
+
+    with pytest.raises(RuntimeUnavailable, match="claude: unavailable"):
+        cognition.run(_request(tmp_path, execution_id="turn-3", model=pinned.model,
+                               provider_order=pinned.provider_order(("codex", "claude"))))
+    assert len(codex.requests) == 1

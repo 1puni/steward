@@ -71,8 +71,9 @@ come from the `telegram` block.
 **TLS.** Nothing in this repository terminates TLS, and the harness has no opinion
 about what sits in front of it. Telegram only opens a Mini App over HTTPS, so
 reaching the board from a phone means the instance puts a TLS proxy in front and
-registers the `web_app` URL itself. An ordinary reverse proxy to the loopback
-listener is the usual shape.
+registers the `web_app` URL itself. An ordinary reverse proxy (an nginx
+`proxy_pass`, say) to the loopback listener is the usual shape; send WebSocket
+upgrade headers only for a service that needs them.
 
 **Auth.** Every data request carries `Authorization: tma <initData>` and is
 verified before anything is read: HMAC-SHA256 over the sorted `initData` pairs,
@@ -114,7 +115,9 @@ practice, grow its own cancellation semantics. One write surface cannot have two
 
 The one thing a board is genuinely better at, cleaning up a pile of superseded
 work, is met where the write already lives: `/task cancel a b c :: superseded by d`
-cancels several tasks with one reason and reports per-task outcomes.
+cancels several tasks with one reason, through the same cancellation each id
+would get on its own, and reports per-task outcomes. The single-id syntax is
+unchanged.
 
 ## 6. Deliberately not built
 
@@ -125,6 +128,10 @@ cancels several tasks with one reason and reports per-task outcomes.
   A fence guards a write.
 - **No inline keyboards or callback queries.** The text commands already do those
   actions, and a menu would be a third way to express them.
+- **No attempts, landings or deployment panel.** For a `done` task, the commit the
+  remote took is the fact that matters, and the board shows it.
+- **No `supersede` action.** It would be `cancel` with a prefixed reason, so it is
+  spelled `/task cancel <id> :: superseded by <other>`.
 - **No launch button, menu-button reconciliation or demo mode.** Each assumes a
   public HTTPS endpoint this repository cannot provide.
 

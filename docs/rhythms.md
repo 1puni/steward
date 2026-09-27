@@ -29,26 +29,45 @@ configuration is refused if no configured topic carries that id. Copying an
 example's number into an instance whose topics use different ids is the usual way
 this fails.
 
-An integer schedule uses interval seconds. At most one run is accepted for a
-rhythm in each interval bucket, and an incomplete run prevents overlap with later
-buckets. A reopened idle run, a blocked or waiting run, and workspace-write work still
-awaiting publication remain incomplete.
-Cancellation permits a future bucket once its live execution has stopped; it does
-not create a replacement in the cancelled run's own bucket. A moving input does not
-create another run within the same bucket. After
-downtime, only the current interval is considered. `/rhythm run <name>` is an
-explicit additional request, while `/rhythm list` shows configured schedules,
-accepted-run counts (including no recorded run) and admission pause state. Edit
-schedules in controller configuration; there is no second persisted override.
+A model call needs new input; a clock tick is not input. A procedure rhythm is
+admitted only when its input holds a commit that none of its finished runs
+captured. The input follows what the rhythm reads. A repository rhythm reads its
+`input` ref, so its input is that ref's candidate commit. An organisation rhythm
+(`workdir`, below) reads across everything, so its input is also every observed
+`refs/steward/remote/*` head of every configured repository and the accepted
+work commit of every ordinary task. Accepted runs already record exactly these
+commits (`candidate`, and `activity` for an organisation run), so the rhythm's
+own finished runs are the cursor; there is no second record of what it has seen.
+Deleting a branch or naming an already seen commit again is not new input.
 
-For Light-style reflection, use `schedule: {quiet: 300}`: newly observed commits
-across configured repositories and the Git world reset a five-minute quiet window.
-No new activity means no run. Captured inputs in accepted task Git prevent repeat
-admission of a consumed batch, including after restart. The first observation on
-a controller with no accepted batch establishes a baseline. Read the complete
+The steward's own bookkeeping cannot appear in that input. Task documents,
+their `steward: accept task` commits and holds live in the controller's task
+store, never in a repository remote. Procedure runs, a rhythm's own included,
+are excluded from task work, so a run's evidence can never make its successor
+fire. What does count is a real change to what the rhythm reads: a product
+task's outcome landing on the input branch, or native work retained on an
+ordinary task, is new input even though the steward made it.
+
+An integer schedule uses interval seconds. At most one run is accepted for a
+rhythm in each interval bucket, on the first poll in that bucket that sees new
+input; a bucket without new input admits nothing and calls no model. An
+incomplete run prevents overlap with later buckets. A reopened idle run, a
+waiting run, and workspace-write work still awaiting publication remain
+incomplete. Only a finished run covers its input. A blocked run reported
+nothing, so the next bucket supersedes it even on unchanged input; a cancelled
+run likewise permits a future bucket once its live execution has stopped, but
+not a replacement in its own bucket. After downtime, only the current interval
+is considered. `/rhythm run <name>` is an explicit additional request on the
+current input, while `/rhythm list` shows configured schedules, accepted-run
+counts (including no recorded run) and admission pause state. Edit schedules in
+controller configuration; there is no second persisted override.
+
+For Light-style reflection, use `schedule: {quiet: 300}`: the rhythm waits until
+its new input has stopped moving for five minutes, then admits one run over
+exactly that input. No new input means no run, including after restart; a
+restart only re-arms the full quiet period for input still unseen. Read the complete
 [quiet-period contract](automatic-deployment.md#git-quiet-periods-and-intervals)
-for native work, self-reflection exclusions and restart semantics. The harness ships
-a generic
+for its timing and failure semantics. The harness ships a generic
 [reflection skill](../src/steward_harness/skills/steward-reflection/SKILL.md);
 the procedure that names when and how an instance reflects belongs to that instance.
 
@@ -58,16 +77,20 @@ an entry README; existing checkouts can be linked into it. Native cognition star
 there, while its task account and checkpoint remain in a separate retained task
 worktree. The accepted run captures the directory so retries keep the same scope.
 Before cognition the existing credential-free Git transfer refreshes observed
-remote refs in the configured repositories without moving their HEADs or touching
-local changes. Manual `/rhythm run` uses the same working directory.
+remote refs in the configured repositories, as `refs/steward/remote/<branch>`,
+without moving their HEADs, changing `origin/<branch>` or touching local changes.
+Those refs are observations, not new authority: read source at the configured
+default branch under that namespace. See
+[source and retained findings](provenance-discovery.md#observed-source-and-retained-findings).
+Manual `/rhythm run` uses the same working directory.
 Workspace-write procedures cannot select an external working directory.
 
-Quiet snapshots remain controller-owned admission metadata in accepted Git. They
-are not copied into the task brief or prompt. The procedure discovers relevant
-changes from repository files and Git history. An organisation-root reflection
-returns findings, not a PASS/FAIL verdict about its anchor commit. Missing policy
-files or rejected admissions are logged without stopping other rhythms or operator
-ingress, and failed admission does not consume the activity batch.
+An organisation run's captured `activity` remains controller-owned admission
+metadata in accepted Git. It is not copied into the task brief or prompt. The
+procedure discovers relevant changes from repository files and Git history. An
+organisation-root reflection returns findings, not a PASS/FAIL verdict about its
+anchor commit. Missing policy files or rejected admissions are logged without
+stopping other rhythms or operator ingress, and failed admission consumes no input.
 
 Each run captures exact input commits, instruction text, execution settings and a
 configuration digest in its accepted Git task document. Its native session is a
@@ -86,6 +109,13 @@ result through its configured transport. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
 repeating accepted world edits or follow-up admission.
 
+A finished read-only rhythm run with no findings owes its owner nothing. Its
+prompt says so: findings above the closure lines are delivered, and when nothing
+material is new the run writes none and names that in its COMMIT subject. That
+checkpoint is retained on the task ref as evidence, and the result lane never
+selects it: no assessment turn, no model call, no message. Any finding, a
+question or a blocked run still enters assessment as above.
+
 `owner: null` deliberately retains the task's evidence without assessment or
 notification. Requirement-only review tasks also retain evidence without an owner.
 Read-only results identify their evidence commit and reviewed candidate; they never
@@ -93,9 +123,127 @@ claim that the evidence commit landed on the product branch. An owner's native
 session is optional and can be reconstructed on a fresh controller. Changing the
 configured owner affects future runs; an already accepted bucket keeps its owner.
 
+## Model preference
+
+A procedure's `provider` and `model` are a preference: this provider, running
+this model at this effort. `effort` is part of the choice and reaches Codex as
+its reasoning effort and Claude as `--effort`; leave it out and the provider
+decides. If the preferred provider cannot take the run, for whatever reason, the
+run falls back through `provider.family_order`, and each fallback runs its own
+configured model for the profile, never the preferred model under another
+provider's name. Conversations and ordinary tasks work the same way, led by
+their own selected provider and profile.
+
+When a procedure needs exactly that model, say so:
+
+```yaml
+procedures:
+  audit:
+    instructions: /etc/steward/procedures/audit.md
+    provider: claude
+    model: {model: configured-audit-model, effort: high}
+    fallback: false
+```
+
+A pinned run tries its provider and nothing else. When that provider cannot
+take it, the run fails like any other unavailable provider: a task blocks and a
+world rhythm consumes its interval. There is no ordered list of models. The
+fallback order is the configured family order and each fallback's model is its
+configured profile, so a per-procedure list would be a second copy of both.
+
+## World rhythms
+
+A rhythm over `input: world` consolidates the world itself, such as a nightly
+sleep over accumulated episodes. It is not a task. Each interval is one ordinary
+world turn in the rhythm's own conversation, `rhythm:<name>`, taking the same
+lease, checkpoint and acceptance as an operator's message. Its text is the
+procedure's instructions, and it runs on the procedure's
+[model preference](#model-preference). Each interval starts a fresh native
+session; the world, not the previous session, carries what earlier runs
+consolidated.
+
+```yaml
+procedures:
+  sleep:
+    instructions: /etc/steward/procedures/sleep.md
+    provider: codex
+    model: {model: configured-sleep-model}
+    access: workspace-write
+rhythms:
+  sleep:
+    schedule: 86400
+    procedure: sleep
+    input: world
+    owner: telegram:3
+```
+
+A world rhythm needs a configured `world`, a `workspace-write` procedure and an
+integer interval or an `after` (below); configuration refuses anything else,
+including a `workdir`.
+The source key `rhythm:<name>:<interval index>` is the whole idempotency: after a
+restart, the key replays an accepted turn rather than repeating cognition. A
+provider failure or crash consumes its interval. At most one run happens in each
+interval, and a missed interval is not made up. `86400` fires once per UTC day
+on the first poll after midnight UTC; `offset: 3600` moves the start of every
+interval an hour later, so the same rhythm fires on the first poll after 01:00
+UTC. The offset must be shorter than the interval, and it works the same way
+for a procedure rhythm's interval.
+
+A world rhythm without `paths` runs every interval. With `paths`, a model call
+needs new input there, as it does for a procedure rhythm:
+
+```yaml
+rhythms:
+  staging:
+    schedule: 3600
+    procedure: staging
+    input: world
+    paths: [episodes/, episodes.md]
+    owner: null
+```
+
+The rhythm is admitted on the first poll in an interval that finds the world
+changed under those paths since its last accepted run, and a poll that finds
+nothing calls no model and records nothing. The rhythm's last accepted turn is
+the cursor, and nothing else is: its captured candidate, the world as that turn
+left it, is compared with the accepted world by `git diff`. The comparison
+starts from the candidate rather than the turn's base, so whatever the rhythm
+wrote under its own paths is on both sides and never makes it fire again, while
+anything another turn wrote after its base still counts. With no accepted run
+yet, it runs. Paths are relative to the world root.
+
+A world rhythm can follow another instead of keeping a clock:
+
+```yaml
+rhythms:
+  sleep: {schedule: 86400, offset: 3600, procedure: sleep, input: world, owner: telegram:3}
+  rem: {after: sleep, procedure: rem, input: world, owner: telegram:3}
+  dream-away: {after: rem, procedure: dream-away, input: world, owner: telegram:3}
+```
+
+`after` takes the place of `schedule`. The dependent shares its predecessor's
+interval index, so its key `rhythm:rem:<index>` still admits at most one run per
+interval and replays after a restart exactly as above. It becomes due once the
+predecessor's turn for that interval has been accepted. If the predecessor
+failed or was interrupted, or a `paths` gate kept it from running, the
+dependent does not run in that interval: the chain stops for the night. A
+predecessor whose run is still going when its interval ends takes the chain
+with it, because the dependent is always asked about the current interval.
+`after` must name a configured world rhythm, and configuration refuses a cycle.
+
+The turn cannot propose or steer tasks, because a rhythm has no transport to
+receive their results; it records suggested work in world files instead. A
+non-empty reply becomes a result receipt for `owner` and goes out through the
+ordinary result lane. An empty reply, or `owner: null`, settles the interval
+silently. `/rhythm list` shows whether the current interval ran. `/rhythm run`
+refuses a world rhythm, because a second run in the same interval is exactly what
+the key exists to prevent.
+
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
-harness never invents a schedule for you. Calendar and dependency schedules are not
-implemented, and there is no hook system or workflow graph.
+harness never invents a schedule for you. A world rhythm is configured like any
+other, and the instance supplies its procedure file. A chain is one predecessor
+per rhythm, not a graph: there are no calendars, fan-in, hooks or conditions
+beyond "the previous one was accepted".
 
 Publication requirements check the final integrated candidate before it can be
 pushed. Target requirements review the complete candidate tree before application

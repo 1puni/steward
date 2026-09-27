@@ -17,6 +17,7 @@ from steward_harness.runtime.contracts import (
     MissingProviderSession,
     RuntimeExecutionError,
     RuntimeRequest,
+    ReadScope,
     RuntimeResult,
     RuntimeInput,
     RuntimeInputResult,
@@ -41,11 +42,16 @@ class CognitionRequest:
     # None means no routine deadline; cancellation still applies.
     timeout_seconds: int | None
     provider_order: tuple[ProviderFamily, ...]
+    # The accepted lineage owns storage, not a turn id or a checkout path.
+    native_owner: str | None = None
+    native_generation: Callable[[ProviderFamily], int] = lambda _provider: 1
+    # Pins the model of the first provider in `provider_order` only.
     model: ModelChoice | None = None
     provider_session_id: str | None = None
     session_provider: ProviderFamily | None = None
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
+    read_scope: ReadScope | None = None
     allow_empty_output: bool = False
     on_session_started: Callable[[ProviderFamily, str], None] = (
         lambda _provider, _session_id: None
@@ -154,6 +160,9 @@ class Cognition:
                 if adapter is None:
                     unavailable.append(f"{provider}: not registered")
                     continue
+                if request.read_scope is not None and not adapter.capabilities.scoped_reads:
+                    unavailable.append(f"{provider}: missing scoped read isolation")
+                    continue
                 if request.images and not adapter.capabilities.images:
                     unavailable.append(f"{provider}: missing images")
                     continue
@@ -168,8 +177,11 @@ class Cognition:
                     if request.session_provider == provider
                     else None
                 )
+                # A pinned model names one provider's model; a fallback runs
+                # its own configured model for the profile.
+                pinned = request.model is not None and provider == request.provider_order[0]
                 resolved = resolve_model(provider, request.profile,
-                    {provider: {request.profile: request.model}} if request.model else self._custom_models)
+                    {provider: {request.profile: request.model}} if pinned else self._custom_models)
                 def execute(provider_session_id: str | None) -> tuple[RuntimeRequest, RuntimeResult]:
                     started_session: str | None = None
 
@@ -181,12 +193,15 @@ class Cognition:
                     runtime_request = RuntimeRequest(
                         execution_id=request.execution_id,
                         resolved=resolved,
+                        native_owner=request.native_owner,
+                        native_generation=request.native_generation(provider),
                         provider_session_id=provider_session_id,
                         prompt=request.prompt,
                         cwd=request.cwd,
                         timeout_seconds=request.timeout_seconds,
                         images=request.images,
                         sandbox_mode=request.sandbox_mode,
+                        read_scope=request.read_scope,
                         allow_empty_output=request.allow_empty_output,
                         writable_roots=self._writable_roots
                         if request.sandbox_mode == "workspace-write" else (),
@@ -243,6 +258,13 @@ class Cognition:
                     )
                 return result
 
+            # The last availability check or runtime refusal can race cancel,
+            # just like an earlier provider can. There is no next iteration to
+            # observe it once every configured provider has declined.
+            if cancelled():
+                raise RuntimeExecutionError(
+                    f"Execution ID {request.execution_id!r} was cancelled"
+                )
             detail = "; ".join(unavailable)
             raise RuntimeUnavailable(f"No provider can satisfy this turn: {detail}")
         finally:

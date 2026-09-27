@@ -37,6 +37,11 @@ The controller is one daemon with a bounded background executor. Native provider
 their tools and their local reasoning loops. The harness owns exactly the authority
 those loops cannot grant themselves, and nothing else.
 
+Mutable work has one writer, and only verified, immutable work crosses an authority
+boundary: a native session writes its checkout under the task lock; the controller
+publishes one fixed candidate SHA that no gate may change. The representation should
+make a second writer or a mutable publication input impossible, not merely detected.
+
 ## Deliberate limits
 
 This is not a generic workflow engine, an event-sourcing framework, a multi-agent role
@@ -54,6 +59,8 @@ Until a concrete production requirement proves otherwise, the kernel has:
 - no persisted publication queue or second scheduling lifecycle;
 - no provider capability that cannot honor its declared sandbox and workspace contract;
 - no dynamically imported local-tool subsystem;
+- no second executor: an external watch alerts while the controller is down, and
+  repairs arrive as ordinary admitted tasks;
 - no configuration field that does not select implemented behavior.
 
 That last one matters most. A field the loader accepts and quietly ignores is a field
@@ -64,6 +71,34 @@ Read this list as a constraint on responsibilities, not a boast about line count
 Moving code between modules, compressing syntax, or handing the same complexity to
 another harness does not satisfy any of it. See the
 [engineering doctrine](engineering-doctrine.md).
+
+## Configuration
+
+YAML is trusted policy. Each block owns one kind of decision:
+
+| Block | Owns |
+| --- | --- |
+| `identity`, `provider` | Steward identity, provider order, model profiles, private native homes, workdir and state database |
+| `execution` | Untrusted execution identity and environment boundary |
+| `controller` | Polling, health listener and one background-worker budget |
+| `tasks` | Optional private remote for accepted `tasks/*` refs |
+| `repositories` | Trusted remotes, default branches, gates and publication requirements; configuring one is the authority to work in it |
+| `pipelines`, `incident_policy` | Probes, failure confirmation and repair allowance |
+| `world` | The Git world for durable knowledge; optional named reconciliation procedure |
+| `procedures` | Accepted instructions, model and access settings |
+| `rhythms` | Non-overlapping interval triggers for procedures; `input: world` runs one world turn per interval |
+| `targets` | Desired refs, installed drivers and required evidence |
+| `telegram`, `desk` | Optional ingress and result transports |
+
+`controller.poll_seconds` bounds only background rechecks — admission, convergence and
+probes. Conversation ingress and running task turns do not wait on it, so raising it
+trades background latency for controller CPU and nothing else.
+
+Each selected built-in provider needs an explicit private `native_homes` entry; see
+[native runtime setup](native-provider-runtime.md). The
+[example configuration](../config/steward.example.yaml) is a provisioning template:
+its accounts, directories, provider logins and remote URLs must already exist on the
+target host.
 
 ## Authority
 
@@ -76,10 +111,25 @@ another harness does not satisfy any of it. See the
 
 All model-controlled commands cross the execution broker. The controller does not run
 repository code under its privileged identity. Native credentials stay private to the
-selected provider; push credentials and release mutation stay controller-side.
+selected provider; the landing credential and release mutation stay controller-side.
 Filesystem scope and ownership of accepted work are distinct: a model may inspect
 granted repositories, but only the owning acceptance path can publish their changes. See
 [execution identities](execution-boundary.md).
+
+Effective permission is the configured grant intersected with what the external system
+actually grants; neither widens the other. Repository content is evidence of how an
+organisation works, never permission. Learning that someone leads a repository is a
+durable fact for the world; giving them controller capabilities or registering a
+remote is a separate, explicit grant. Delegate only effects the delegate can perform:
+a task returns findings and proposals, and the owning conversation or the controller
+applies anything controller-only.
+
+Organisation-specific commands belong in `telegram.adapter_commands` as one declared
+argv and argument shape. They run without a shell through the same untrusted broker. A
+model turn can reach anything that broker runs, so an act only the operator may cause —
+minting a phone pairing link, say — declares `authority: controller` instead: the
+controller runs it as itself, with an empty environment, from an executable the
+boundary audit proves the agent cannot replace.
 
 Controller Git uses the configured remote URL and its private bare store. Candidate
 objects cross by Git's own fetch and push, with the agent side run as the agent identity,
@@ -142,6 +192,11 @@ protocol evidence.
 
 ## Task lifecycle
 
+Only the owning conversation, a rhythm or incident policy admits harness tasks. A task
+session may use its provider's native subagents freely, but it cannot admit further
+tasks; native work becomes a harness task only when it needs its own scope, admission
+or deliverable. A native subtask ID is correlation, not a task ID.
+
 Admission creates the accepted task document. A slice holds the task lock, resumes its
 native session, then commits its findings and a validated closure on the `tasks/<id>`
 branch.
@@ -171,16 +226,27 @@ changes no Definition field, consumes no input, touches no product files and gra
 publication; closure reconciles against the last accepted offer. See
 [live task understanding](live-task-understanding.md).
 
+Accepting understanding, ending native execution and authorizing publication are three
+boundaries, and none implies another. A clock or a poll may observe work but never
+creates a semantic stopping point. Silence means the last accepted account is old, not
+that the task failed.
+
 Notes are pending context. A checkpoint records only inputs actually consumed;
 unacknowledged and later inputs remain in accepted Git for a later slice. Answers
 and retries reuse the task's work. There is no SQL task-input ledger.
 
 ### Task results
 
+A finished task is evidence for its owner to reassess against the broader outcome, not
+closure of that outcome. The owner may close on sufficient evidence without routine
+operator sign-off; it involves the operator when ambiguity would materially change the
+work, or when the operator's judgment is part of what completion means.
+
 Delivery eligibility is derived from configured transport routes before dispatch.
 An unavailable route retains its pending receipt and a diagnostic visible in
 `/status`; restoring the route makes the same result eligible again. A target
-transition without a task owner uses a deterministic operator report in the same
+outcome (live, or persistently failing; never progress) without a task owner uses
+a deterministic operator report in the same
 receipt store. It does not fabricate a task or replay cognition to deliver an
 already retained reply. See [observation feedback](automatic-deployment.md#observation-feedback).
 
@@ -198,9 +264,11 @@ destinations; it is not an allow-list for ordinary conversations or their result
 Assessment uses the ordinary world-turn path and current authority. A typed
 `TASK_ACTION` can answer, retry or note an existing task; prose alone cannot resume it.
 A turn proposes at most one action or one new task. A rhythm explicitly names its
-configured result owner, or null for retained evidence only. Owned rhythm findings
+configured result owner, or null for retained evidence only. Owned rhythm task findings
 use this same assessment path, including world knowledge and authorized follow-up
-admission. An assessment cannot steer tasks owned by another conversation.
+admission. An assessment cannot steer tasks owned by another conversation. A world
+rhythm is itself a world turn: it admits no task, and its reply is a receipt for
+its owner ([world rhythms](rhythms.md#world-rhythms)).
 
 Accepted assessment and external delivery are separate facts. A private task-result
 receipt retains the selected outcome before assessment and remains pending until
@@ -216,6 +284,28 @@ Telegram reuses per-piece receipts across retry and restart. Preserve both adjac
 receipt directories during upgrades. A crash between the transport accepting a send
 and the local receipt write can still duplicate that piece: this is at-least-once
 delivery with receipts, not exactly-once.
+
+### Telegram ingress
+
+Each update is written to its receipt under `<state_db>.telegram-receipts/<chat>/` before
+the poll offset moves past it: the offset is the acknowledgement and the receipt files
+are the spool. Receipts are pruned only after a poll acknowledges them. Delivery is
+at-least-once — an uncertain send can duplicate. Never run two pollers for one bot
+token; when moving a bot, copy the offset only after the old ingress has stopped.
+
+Inputs are deduplicated by source identity, never by content: the same words under a
+different update ID are a new input and get a new reply. An input is marked handled
+only after processing and delivery succeed; caching it earlier turns one transient
+failure into permanent suppression of a valid retry.
+
+In a forum, Telegram sends no thread ID for General, so topic `0` is a valid route in
+both directions. Ingress logs whether the thread field was present, its value and the
+selected route, and never infers a destination from message content. `passive_topics`
+drops declared feed topics at the trust boundary, before commands and replay;
+undeclared topics are still admitted. Group-administrator admission is read at most
+once a minute and fails closed without caching the failure. Unknown and retired
+commands fail honestly; they never become model prompts, and the menu advertises only
+implemented verbs.
 
 ## Publication
 
@@ -281,11 +371,20 @@ duplicate of themselves. The task lock and the repository lease are the exclusio
 unlike an in-memory key they are durable, so they hold across the crash that would
 strand a claim.
 
+Each exclusion answers a different question: the daemon lease says which controller is
+alive, the task lock who runs a task, the repository lease who publishes, the world
+lease who applies a world update.
+
 Repositories run independently. Each task has its own lock. One rhythm dispatch owner
 resumes incomplete scheduled work before choosing another due definition. Desk messages
 have message dispatch keys and retain their inbox/conversation ownership. Result
 assessment is keyed by the owning conversation. No separate repository-observation pool
 exists.
+
+A days-long task turn holds one slot for all of those days; the remedy is operator
+policy, not reservation or preemption. A controller restart interrupts every running
+task turn. Continuity comes from the accepted account, retained work and the native
+session, not from any process surviving.
 
 There is no recovery pass either. A task interrupted by a crash never left the queue and
 its lock died with its worker, so the next pass yields it like any other and the runner
@@ -312,8 +411,12 @@ same native conversation and repository authorization. They may propose work or
 note an owned task; the controller rejects answers and retries from that source.
 Their immutable inbox source and consumption marker prevent repeated samples from
 repeating cognition. Accepted task refs and ordinary result receipts, not inbox
-consumption, establish repair progress. The instance that produces
-the samples owns their source identity and activation procedure.
+consumption, establish repair progress. The instance that produces the samples owns
+their source identity and activation procedure. Keep the inbox's `.source`, `.claimed`,
+`.failed` and `.done` files with desk state across upgrades. Inspect a parked
+`.failed` message's native evidence before retrying it; deleting a source receipt or
+minting a second one is not a repair. See [watching a live steward](watching-a-steward.md)
+for what a watch should measure.
 
 Unexpected worker exceptions propagate to the daemon; shutdown cancels queued owners
 and drains already-running writers while retaining the daemon lease. Queued work

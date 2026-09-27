@@ -6,6 +6,15 @@ Unexpected exceptions must not become fictitious red gates, accepted receipts
 or permission to repeat side effects. A harness that files its own bug as your red
 gate is lying twice: once about your code, once about itself.
 
+Idempotency belongs to the action being repeated. Replaying a source must not admit a
+task twice, recovery must not publish an untested SHA, and Telegram stays
+at-least-once; giving every layer the same identifier removes none of these limits.
+Mark a received item handled only after its processing and delivery succeed.
+
+A deferral that repeats forever at INFO is an outage with a heartbeat. Health stays ok,
+the task stays waiting, and nothing escalates; count repeated identical deferrals the
+way you count errors.
+
 ## Boundaries
 
 | Boundary | Operational handling | What must not be inferred |
@@ -17,7 +26,7 @@ gate is lying twice: once about your code, once about itself.
 | Repository publication | Validation failures block the task; declared transport/runtime failures are logged at the repository boundary | A lost push response proves nothing landed |
 | Incident probe | Declared probe failure becomes an unhealthy sample under incident policy | A controller defect authorizes a repair task |
 | World acceptance | Retain prepared candidates through contention, conflict and failed application | Provider completion or an episode proves accepted edits |
-| Rhythm | Log declared Git transport failures in quiet-activity sampling and skip quiet rhythms until the next poll without changing their quiet state; interval rhythms remain eligible. Retain incomplete unprepared work for retry and prepared work for acceptance | Failure creates a new successful due boundary |
+| Rhythm | Log declared Git transport failures while observing a rhythm's input and skip that rhythm until the next poll without changing its quiet state; other rhythms remain eligible. Retain incomplete unprepared work for retry and prepared work for acceptance | Failure creates a new successful due boundary |
 | Deployment | Report staging/activation failure; failed restart or health attempts rollback | A pointer flip or HTTP success alone proves artifact integrity |
 | Desk ingress | Requeue messages on world contention, pending application or content conflict; log the deferral and retain candidates | One conflicted session requires stopping the controller or replaying accepted cognition |
 | Telegram update reply | Persist confirmed delivery pieces and retry unfinished pieces | Exactly-once network delivery |
@@ -26,13 +35,15 @@ gate is lying twice: once about your code, once about itself.
 Result receipts are selected before assessment starts and stay pending until the
 transport confirms, so a crash mid-assessment cannot silently drop an outcome.
 Invalid routes retain a diagnostic and do not enter the worker queue until the
-configured route is usable. Unowned target transitions use a configured operator
-route and deterministic text without invoking task cognition.
+configured route is usable. Target results are outcomes only (live, or failing
+for five minutes), once per revision; unowned outcomes use a configured operator
+route and plain text without invoking task cognition.
 
 ## Cancellation and shutdown
 
 Live conversation/task cancellation reaches the active native execution through
-`Cognition.cancel`. Durable task withdrawal is a marker checked by the task and
+`Cognition.cancel`. The invocation is registered before workspace preparation, so
+cancelling during a slow setup prevents the provider from ever launching. Durable task withdrawal is a marker checked by the task and
 publisher. The publisher checks it before push; already-landed work remains a
 remote fact. Gates use their own process deadline and currently receive no task
 cancellation callback. Immediate gate termination is therefore not promised.
@@ -44,6 +55,11 @@ deadline, so this interruption is what keeps the drain finite. Worker faults pro
 through `Dispatch.reap`; external service supervision restarts the process. This is not a bounded shutdown deadline or
 proof under forced host death. Linux host-UID invocation ownership
 is distinct from native cooperation; see [execution ownership](execution-boundary.md#execution-ownership).
+
+Expected shutdown effects are not errors. A drain takes in-flight Git children with it,
+and that is logged at info; an ERROR count that rises on every healthy deploy trains
+its readers to ignore it. An external guard treats `deactivating` as a transition and
+polls to a deadline instead of sampling once.
 
 Checkpoints remain in Git and local logs. The owning conversation assesses task
 outcomes through the retained result receipt; no checkpoint broadcast runs inside

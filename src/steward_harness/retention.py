@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import replace
 import hashlib
 import logging
@@ -14,12 +15,17 @@ from steward_harness.kernel import repository_lease
 from steward_harness.state import ConversationId, TaskId
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
+from steward_harness.runtime.native_workspace import retire_native_owner
 
 log = logging.getLogger(__name__)
 
 
 def _head_if_clean(broker, repository: Path, path: Path) -> str:
-    """Validate custody, including ignored files and interrupted Git operations."""
+    """Validate custody: no local changes, untracked files or interrupted Git operations.
+
+    Ignored files do not block. The repository declares them regenerable, and
+    without this rule every venv or dependency cache retains its checkout forever.
+    """
     def git(*args, cwd=path):
         return agent_git(broker, *args, cwd=cwd, timeout=60)
 
@@ -30,8 +36,8 @@ def _head_if_clean(broker, repository: Path, path: Path) -> str:
     common_args = ("rev-parse", "--path-format=absolute", "--git-common-dir")
     if git(*common_args) != git(*common_args, cwd=repository):
         raise ValueError("checkout belongs to another repository")
-    if git("status", "--porcelain", "--untracked-files=all", "--ignored"):
-        raise ValueError("dirty, untracked or ignored files")
+    if git("status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("dirty or untracked files")
     for marker, marker_path in git_operation_paths(git).items():
         if broker.path_exists(marker_path):
             raise ValueError(f"unfinished Git operation: {marker}")
@@ -39,13 +45,14 @@ def _head_if_clean(broker, repository: Path, path: Path) -> str:
 
 
 def _remove(broker, repository: Path, path: Path) -> None:
-    # No force and no filesystem fallback: Git gets the final refusal.
+    # No force and no filesystem fallback: Git gets the final refusal. It
+    # deletes ignored files and refuses modified or untracked ones.
     agent_git(broker, "worktree", "remove", str(path), cwd=repository, timeout=60)
     agent_git(broker, "worktree", "prune", cwd=repository, timeout=60)
     log.info("pruned accepted workspace %s", path)
 
 
-def prune_tasks(runner) -> None:
+def prune_tasks(runner, native_homes: Iterable[Path] = ()) -> None:
     """Use accepted task status, then recheck under repository and task locks."""
     for task in runner.state.tasks.all():
         if task.status.value not in {"done", "cancelled"}:
@@ -69,6 +76,8 @@ def prune_tasks(runner) -> None:
                 head = _head_if_clean(runner.broker, Path(repository.path), path)
                 if not runner.state.tasks.contains(head, current.revision):
                     raise ValueError("HEAD is not retained in accepted task Git")
+                # Before the checkout goes, so a failure leaves both for the next pass.
+                retire_native_owner(runner.broker, native_homes, str(current.session_id))
                 _remove(runner.broker, Path(repository.path), path)
         except Busy:
             continue
@@ -78,7 +87,7 @@ def prune_tasks(runner) -> None:
             lock.release()
 
 
-def prune_world_sessions(checkpoint, idle_seconds: int) -> None:
+def prune_world_sessions(checkpoint, idle_seconds: int, native_homes: Iterable[Path] = ()) -> None:
     """Serialize eligibility with turn admission and world acceptance."""
     state = checkpoint.state
     cutoff = datetime.now(UTC) - timedelta(seconds=idle_seconds)
@@ -115,6 +124,9 @@ def prune_world_sessions(checkpoint, idle_seconds: int) -> None:
                 if checkpoint._git(checkpoint.world.root, "merge-base", "--is-ancestor", head,
                                    checkpoint.world.input_cursor(), check=False).returncode:
                     raise ValueError("HEAD is not in the accepted world")
+                # Native state is cache for this checkout; the originals are in the world.
+                # Retire it first, so a failure leaves both for the next pass.
+                retire_native_owner(checkpoint.broker, native_homes, owner)
                 _remove(checkpoint.broker, checkpoint.world.root, path)
         except Busy:
             continue

@@ -42,6 +42,13 @@ The COMMIT closure line supplies a subject for that harness checkpoint, not an
 instruction to run git commit."""
 
 
+RHYTHM_FINDINGS = """\
+Findings above the closure lines are delivered to this rhythm's owner. When
+nothing material is new since this rhythm's previous run, write no findings:
+end with only the three closure lines and say so in the COMMIT subject. The
+harness retains that checkpoint as evidence and notifies no one."""
+
+
 _TASK_CLOSURE = """\
 ## Close this task execution
 End your final response with exactly these three lines, after your findings:
@@ -121,7 +128,8 @@ def build_turn_prompt(
     delivery_roots: tuple[str, ...] = (),
 ) -> str:
     """Current machine interface, observations, and input for every execution."""
-    interface = [TASK_PROPOSAL_DIRECTIVE, TASK_ACTION_DIRECTIVE]
+    # A rhythm owns no transport, so it cannot receive a task's result.
+    interface = [] if transport == "rhythm" else [TASK_PROPOSAL_DIRECTIVE, TASK_ACTION_DIRECTIVE]
     if transport == "telegram":
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
         if delivery_roots:

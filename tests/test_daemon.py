@@ -14,6 +14,7 @@ import pytest
 from test_world_turn_checkpoint import _git_world as make_world
 from steward_harness.lease import Lease
 from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
+from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from state_fixtures import (
     accept_conversation_turn,
     admit_task,
@@ -498,7 +499,7 @@ def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monke
     assert "Task cancelled" in events.read_text()
 
 
-@pytest.mark.parametrize("busy_error", [Busy, ConversationBusy])
+@pytest.mark.parametrize("busy_error", [Busy, ConversationBusy, WorldUpdatePending, WorldContentConflict])
 def test_daemon_requeues_desk_ingress_when_owner_is_busy(tmp_path, busy_error) -> None:
     config = StewardConfig.model_validate(
         {
@@ -536,6 +537,28 @@ def test_daemon_requeues_desk_ingress_when_owner_is_busy(tmp_path, busy_error) -
     assert attempts == ["busy", "busy"]
     assert not queued.exists()
     assert "Accepted after deferral" in Path(config.desk.events_file).read_text()
+
+
+@pytest.mark.parametrize("refusal", [RuntimeExecutionError, RuntimeUnavailable])
+def test_a_provider_refusing_a_desk_turn_fails_the_message_not_the_controller(tmp_path, refusal) -> None:
+    # 2026-09-25: a Claude session limit on one desk turn exited gg's controller.
+    config = StewardConfig.model_validate({
+        "identity": {"name": "Steward", "slug": "test"},
+        "desk": {"inbox_dir": str(tmp_path / "inbox"), "events_file": str(tmp_path / "events.jsonl")},
+    })
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    (inbox_dir / "1.000000-limit.json").write_text('{"kind":"message","text":"hi","origin":"web","id":"limit"}')
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml", adapters={})
+
+    def refuse(**kwargs):
+        raise refusal("Claude: You've hit your session limit")
+
+    desk = daemon._desk(cast(ConversationService, SimpleNamespace(run_turn=refuse)))
+    assert desk is not None
+    desk.drain()
+    assert list(inbox_dir.glob("*.failed"))
+    assert not list(inbox_dir.glob("*.json"))
 
 
 # 42 is configured, 582 and 4568 are not, and 0 is General — the topic every
@@ -802,29 +825,6 @@ def test_result_delivery_defers_instead_of_killing_the_pass(
     assert calls, "the result lane never ran"
 
 
-def test_native_activity_reads_unpublished_commits_across_repositories(tmp_path):
-    from steward_harness.daemon import _native_git_heads
-    from test_task_runner_kernel import _repository, _git
-
-    roots = {}
-    for name in ("one", "two"):
-        directory = tmp_path / name
-        directory.mkdir()
-        _, roots[name] = _repository(directory)
-    config = SimpleNamespace(repositories={
-        name: SimpleNamespace(path=str(root)) for name, root in roots.items()
-    })
-    broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
-    before = _native_git_heads(config, broker)
-    worktree = tmp_path / "active-task"
-    _git("worktree", "add", "-b", "tasks/native-edit", str(worktree), cwd=roots["two"])
-    _git("commit", "--allow-empty", "-m", "native work before checkpoint", cwd=worktree)
-    after = _native_git_heads(config, broker)
-    assert after["native:one:refs/heads/main"] == before["native:one:refs/heads/main"]
-    assert after["native:two:refs/heads/tasks/native-edit"] != before["native:two:refs/heads/main"]
-    assert after["native:two:refs/heads/tasks/native-edit"] == _git("rev-parse", "HEAD", cwd=worktree)
-
-
 def test_rhythm_list_shows_quiet_policy_and_configured_runs_without_history(tmp_path):
     from steward_harness.config.schema import ProcedureRhythmConfig
 
@@ -957,6 +957,30 @@ def test_unowned_target_waits_for_operator_route_then_delivers_without_task(tmp_
     assert sent == [(1, 43, "External deployment failed", "target_result:external")]
     assert state.result_receipt("target_result:external")["done"]
     assert state.tasks.all() == []
+
+
+def test_owned_live_target_reaches_its_owner_without_a_model_turn(tmp_path):
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42, "work": 44}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    state.save_result_receipt({
+        "owner": "telegram:44", "task_id": "task-1", "target": "app", "sequence": 1,
+        "source_key": "target_result:owned", "result_text": "Target observation",
+        "observation": ["a" * 40, "satisfied"], "reply": "app is live at aaaaaaaaaaaa.",
+    })
+    # The service has no cognition at all: an assessment attempt would raise.
+    daemon, queued, step = _result_pass(tmp_path, config, state)
+    sent = []
+    daemon._telegram = SimpleNamespace(config=config.telegram,
+                                       send_result=lambda *args: sent.append(args))
+    step()
+    for key, work in queued:
+        if key[0] == "result":
+            work()
+    assert sent == [(1, 44, "app is live at aaaaaaaaaaaa.", "target_result:owned")]
+    assert state.result_receipt("target_result:owned")["done"]
 
 
 def test_status_exposes_undeliverable_receipts(tmp_path):

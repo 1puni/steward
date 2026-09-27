@@ -7,6 +7,10 @@ private configuration home. Native tools, subagents and task decomposition stay
 provider-owned. What the harness owns is the boundary around them: which home,
 which identity, which input, and whether the result is accepted into Git.
 
+Keep four things apart: a provider session, an incoming message, an active
+execution and an accepted external effect. None of them maps one-to-one onto
+another.
+
 Production runs these on a Linux host under the separate execution identity.
 There is no container execution backend.
 
@@ -33,7 +37,16 @@ world and managed repositories: they can contain private authentication and live
 databases. The host check includes each as an execution-writable path. Provider
 home variables pass through the provider broker only; repository gates and
 product commands do not inherit them. Adapters discard ambient provider-home
-variables and use the explicit mapping.
+variables and use the explicit mapping. First-party Claude login sets
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` to its configured private seed home, preserving
+one native credential store and refresh-lock location while `CLAUDE_CONFIG_DIR`
+selects each owner's runtime state. Explicitly routed Claude/GLM calls instead
+select a separate `.steward-routed-auth` path within the execution home, so router
+authentication does not fall back to seed OAuth credentials. Do not clone or merge rotating OAuth credentials
+between owner homes. Codex owner homes all link the one seed `auth.json`, so
+concurrent Codex processes share a credential file; Codex's maintainers permit
+bounded refresh-token reuse, so a duplicate refresh submission is not a failure.
+None of this replaces an authenticated refresh or Linux boundary acceptance.
 
 The runtime factory rejects missing homes for built-in providers in the configured
 order. Provision each selected provider or remove unused fallbacks from that order.
@@ -90,7 +103,8 @@ a successful candidate. The broker retains deadlines, cancellation, environment,
 identity, stream bounds, and process cleanup. The adapter requests native terminal
 cleanup for the parent and reported children, then closes stdin after those
 acknowledgements. Native records are written directly into the candidate; execution
-returns after the process exits and its private launch links are removed. A connection can
+returns after the process and owned descendants exit. Owner homes remain durable;
+anonymous launch links are removed. A connection can
 be recreated while resuming the same native thread.
 
 Embedders may supply `CognitionRequest.on_input_ready(send)` and
@@ -228,7 +242,9 @@ one current prompt; replacing a missing session retries that same prompt.
 Claude and GLM always send the initial prompt through the same native command
 queue, including task and read-only executions without an ongoing-input hook.
 The optional hook exposes further source delivery; it does not choose another
-CLI or completion protocol. Session binding occurs once, and every known native
+CLI or completion protocol. Session binding occurs once, from the first native event
+rather than at completion, so a crash mid-turn resumes the session instead of
+starting over. Every known native
 command requires its terminal result and completion before input closes.
 The [native probes](../experiments/native_sessions/README.md) exercise this against
 installed CLIs, including fresh and resumed task calls and a real writer deadline.
@@ -237,7 +253,9 @@ Conversation prompts carry a concise current task/action and transport marker
 interface on every execution. Interface changes do not clear native history.
 Filesystem orientation remains in the turn. Agents read their
 [brief and Git history](provenance-discovery.md) directly; no history map
-or controller task-state snapshot is generated for cognition. This
+or controller task-state snapshot is generated for cognition. The one exception is
+task-result assessment: the world worktree has no Git path to the task record, so the
+assessor receives a bounded copy of the brief as evidence. This
 removes prompt compatibility tracking at the cost of repeating the compact
 interface on resumed turns. Native model behavior with the shorter wording
 still requires validation; local fixtures establish routing and enforcement.
@@ -320,9 +338,24 @@ Keep this directory tracked; repository ignore rules still apply to ordinary
 checkpointing. Consolidated scope truth remains in `docs/`; native memory is
 readable working knowledge, not a replacement authority.
 
-Writable native turns use a private launch directory beneath the configured
-native home. Approved settings, credentials, skills and integrations remain
-linked to that private home. Each launch owns its own links into the candidate:
+Each conversation or task keeps its own provider home between turns, until its
+workspace is retired. Native turns with a retained lineage use a private
+`.steward-owner-<hash>` home beneath the configured native home. The hash covers
+the actual conversation or task session owner, the selected provider and the
+lineage generation. Profile changes and controller restarts keep the same home;
+clearing the conversation, switching provider or invalidating a missing session
+selects a new generation. The home is selected on every adapter attempt,
+fallback and recovery included. A checkout path or a per-turn execution ID is
+never an owner. Anonymous conflict-resolution calls use temporary launch homes.
+
+Only native configuration, authentication and integration entries are linked in
+from the configured seed home. SQLite, caches, queues, goals and jobs stay
+provider-owned inside the owner home. If a configured Codex `auth.json` link is
+replaced locally, the replacement is preserved, but the home refuses re-entry
+until someone inspects it; preparation never copies it back to the seed. With no
+seed credential, an independent native local login is kept. Bundled skills stay
+available without modifying the configured skill links. Writable owners map
+native originals directly into their retained candidate:
 
 - Codex `sessions/` and `archived_sessions/` write native rollouts beneath
   `artefacts/codex/`; `memories/` maps to `memories/codex/`.
@@ -330,14 +363,30 @@ linked to that private home. Each launch owns its own links into the candidate:
   `artefacts/<provider>/projects/`; the memory setting points to `memories/<provider>/`.
 
 The provider writes original files directly; the harness writes no
-`thread/read` snapshots of its own. Native runtime SQLite remains private to the
-launch and is discarded with it. Every invocation starts a new provider process;
-transcript resume does not preserve native queue, goal or background-job state
-held outside those transcripts. Persistent process and database continuity are
-not built yet. Private links are removed after the provider exits; candidate records
-and useful partial work remain. Separate launches never retarget a shared link.
-Directory creation and cleanup use the execution broker. Existing symlinks in
-mapped record directories are rejected, and setup shares the execution deadline.
+`thread/read` snapshots of its own. An existing home cannot silently retarget
+these links to another candidate. Directory creation uses the execution broker,
+existing symlinks in mapped record directories are rejected, and setup shares the
+execution deadline. Success or failure keeps the owned native state; only
+anonymous temporary homes are removed, after the provider process has exited.
+
+The home persists, the process does not. Every invocation starts a new provider
+process, and no provider process is kept between turns. Goals and jobs therefore
+have no process that could admit or publish work on its own outside a harness
+invocation.
+
+Read-only owners keep their records inside their private owner home and create
+nothing in the candidate. For an existing saved lineage, preparation can import
+that session's exact primary original from the seed home once. The copy uses
+checked regular-file descriptors, fsync and an exclusive atomic link, so an
+incomplete copy can never become a resumable original. No other session and no
+seed database is ever imported, and the seed original is left untouched. Child
+records, sidecars and any older leaked launch homes still need explicit
+inspection when upgrading.
+
+Removing an owner's workspace removes all of that owner's homes, under the same
+fence as the workspace itself. A retained workspace keeps its homes. Read-only
+owners without a world are never retired, because their home holds their only
+records.
 
 Conversation/rhythm checkouts use `session-<owner-hash>` while their owner is
 executing. Native originals and memory are committed into the candidate; once
@@ -370,6 +419,11 @@ when native interruption succeeds. Ordinary task turns have no routine deadline;
 a bound-session procedure deadline, or a controller-shutdown interruption,
 retains its ordinary next-tick continuation.
 
+Cognition also checks cancellation after the final provider declines admission.
+A cancellation observed during the last availability check or runtime refusal
+remains a cancellation error, rather than being reported as provider exhaustion.
+This does not alter fallback when no cancellation was requested.
+
 The cleanup endpoint requires App Server's experimental API capability, which
 this adapter declares. A failed/malformed cleanup acknowledgement cannot produce
 a successful candidate. This uses the documented
@@ -378,7 +432,7 @@ a successful candidate. This uses the documented
 Codex will acknowledge an interrupt while a foreground shell it started keeps
 running; native cleanup is what actually stops it, and the probes check both
 cancellation and same-session resume afterwards. This is not proof of arbitrary detached descendants or cleanup after provider/host
-failure. Linux host-UID invocations now use individual systemd services for
+failure. Linux host-UID invocations use individual systemd services for
 descendant containment; macOS process groups retain the escaped-group limitation.
 See [execution ownership](execution-boundary.md#execution-ownership).
 
@@ -394,5 +448,85 @@ acceptance.
 The [native probes](../experiments/native_sessions/README.md) drive installed
 providers through correction during execution, resume, child artifacts and memory
 recall from Git. A passing probe is evidence about that provider version on that
-machine, not proof that a deployed rhythm completed. Before moving real native
-histories between versions, follow the [upgrade procedure](upgrading.md).
+machine, not a suite total and not proof that a deployed rhythm completed. Use
+runtime readiness to accept an installation. Before moving real native histories
+between versions, follow the [upgrade procedure](upgrading.md).
+
+## Trusted desk cognition policy
+
+Optional `desk.provider` and `desk.profile` seed a new desk conversation through
+the ordinary admission path, before its first native call. Omitted values inherit
+`provider.family_order[0]` and `provider.default_profile`. The selected provider
+must belong to the configured family order. An existing conversation keeps its
+lineage: changing these defaults never silently retargets an active session.
+Configured fallback providers still apply when they support the required access
+boundary. Browser visitors cannot set either field. A configured desk profile
+also suppresses the trusted inbox's per-message profile hint; leave it unset to
+keep the phone ingress behavior.
+
+For example, a desk can select `desk.provider: codex` and `desk.profile: fast`,
+with `provider.models.codex.fast: gpt-5.6-luna`, once you have checked the
+installed model catalogue and upgraded safely. That is a per-installation
+override, not a generic model default, and no `gpt-6-luna` alias is supplied.
+
+`desk.access` defaults to `operator`, which keeps full desk and phone authority.
+`read-only` rejects both task proposals and task actions at controller completion
+acceptance, including replay of an unaccepted prepared completion. It applies to
+every desk topic, private bearer ingress included, and no client can override
+it. Telegram conversations keep their configured authority. Public inputs and
+replies are not appended to the shared Git world, and a writable world turn
+prepared earlier cannot be accepted through the read-only desk.
+
+`desk.readable_roots` is the trusted allowlist of public directories or
+individual files. It requires read-only access and defaults to an empty list: no
+product files are implicitly readable. The prompt gives only this public map,
+with no private repository or world orientation. Select public deployed data,
+not a whole checkout: tracked native transcripts, memories, task files, `.git`
+and sibling worktrees can all be private. Symlinks cannot grant reads beyond the
+selected paths. Never put credentials or private data inside a public grant.
+
+The Codex adapter gives each read-only desk conversation a persistent private
+native home under `<native_home>/.steward-read-scopes/<hash>`, with a separate
+empty working directory. Only the provider authentication file is linked from the
+operator home; operator configuration, plugins, skills, memories and session
+histories are not imported. Use a canonical native-home path, because symlinked
+private scope directories are rejected. The native process can keep its own
+conversation, but model tools cannot read that home, another visitor's home or
+the operator's home. Back up and upgrade these homes together with the
+controller's conversation lineage. Native sessions that ran without a scope are
+not imported into them.
+
+The adapter requires the named `steward-public` permission profile on both thread
+start/resume and turn start. It grants minimal system runtime reads plus the
+explicit public paths and the empty working directory, with no writes and no
+network. It disables apps, MCP inheritance, plugins, hooks, memory tools, host
+skill discovery, browser/computer/image tools, delegation and approval
+escalation. Shell children inherit no provider credentials and no host
+environment beyond a fixed system PATH. Before a model turn, the adapter verifies
+the native effective configuration and the confirmed permission profile;
+conflicting managed settings or an unsupported protocol fail closed. Codex
+0.153.4 was exercised with real sandbox reads, a symlink escape, writes and
+loopback denial, plus app-server configuration and profile confirmation, without
+starting model inference.
+Code mode and its host remain enabled: Luna uses `exec` to dispatch even ordinary
+shell reads. The dispatched commands still use the named permission profile;
+disabling the dispatcher prevents permitted reads as well as denied operations.
+
+The opt-in `test_live_luna_dispatches_confined_reads` additionally runs real
+`gpt-5.6-luna` turns through the adapter. It checks native `exec` outputs for an
+unknown public fixture value, then resumes the same session and checks actual
+denials for sibling history, symlink escape, authentication, parent process
+environment, writes and loopback access. Run it with
+`STEWARD_LIVE_CODEX_AUTH_HOME=/absolute/private/codex-home uv run --extra dev python -m pytest -q tests/test_codex_read_scope.py -k live_luna`.
+This consumes provider usage and links the existing login into an isolated test
+home; credentials and unrelated transcripts are never printed. Ordinary source
+gates skip this authenticated test.
+
+Providers that do not declare and implement scoped reads are skipped for this
+access mode; Claude and GLM do not. An unavailable Codex cannot silently fall
+back to an unconstrained provider. Ordinary operator requests keep their normal
+provider behavior. These local tests do not establish the installed Codex
+provider's login, model availability or a real reply journey. Keep a public web
+desk route contained until you have verified the upgraded runtime, the installed
+native policy, two independent visitor conversations and rejected actions, and
+had that reopening reviewed independently.

@@ -38,7 +38,8 @@ reader does not have, stop and ask rather than widening the reader's contract.
 ```
 
 The frontmatter is the controller's. The body is the task's account: it starts
-as the brief, and a running agent can revise it (see
+as the brief, and a running agent can revise it by offering a complete new body
+against the accepted revision it builds on (see
 [live task understanding](live-task-understanding.md)). Every decision about
 the task is a commit on that ref: an answer, a note, a cancellation, a retained
 publication candidate, a repair demand. Nothing about a task's progress is
@@ -48,11 +49,13 @@ stored in SQL. The frontmatter fields are `repository`, `title`, `origin`,
 `procedure` blocks. Nothing else validates.
 
 **The work branch** lives in the product repository's agent-side clone, named
-`tasks/<task-id>`. The native session commits there as it likes. Each slice ends
-with one checkpoint commit the harness makes: its subject is the session's
-`COMMIT:` line, its message body is the session's findings, and its trailers
-record the disposition. There is no task-prose file in the product checkout; the
-accepted account is its one owner, and the prompt carries it.
+`tasks/<task-id>`. The native session commits there as it likes, and its commits
+stay on the branch. Each slice ends with one checkpoint commit the harness
+makes: its subject is the session's `COMMIT:` line, its message body is the
+session's findings, and its `Disposition:` and `Reason:` trailers record the
+disposition. A slice that changed nothing still gets that commit, empty, so its
+findings land in history. There is no task-prose file in the product checkout;
+the accepted account is its one owner, and the prompt carries it.
 
 **Identity.** A task ID looks like `task-9f2c1ab5d4e6470fa1c3b8e7d0925a41`: the
 literal prefix plus 32 hex characters. It is unique across every managed
@@ -90,7 +93,8 @@ proposed the task becomes its `owner`, which is where its result comes back.
 The brief is the whole durable request. Write it as though the session that
 reads it has never seen the conversation, because that is the case: the task
 runs in its own worktree with its own provider session, and what it gets is the
-brief, the accepted account and whatever Git history it can read. State the outcome you want,
+brief, the accepted account and whatever Git history it can read, including the
+work branch's. State the outcome you want,
 the constraint you care about, and what should happen when the work hits
 something you did not anticipate.
 
@@ -98,7 +102,7 @@ something you did not anticipate.
 
 | Route | Origin | How it arrives |
 | --- | --- | --- |
-| Rhythm | `rhythm` | A configured `rhythms:` entry fires and creates a procedure task over an exact input commit |
+| Rhythm | `rhythm` | A configured `rhythms:` entry fires and creates a procedure task over an exact input commit; an `input: world` rhythm runs a world turn instead and creates no task |
 | Publication or target requirement | `rhythm` | A `requires:` procedure is run against a prepared candidate; its verdict gates the push or the deployment |
 | Incident repair | `incident_repair` | A configured pipeline probe stays unhealthy and `incident_policy` still allows a repair |
 | Incident escalation | `incident_escalation` | Repeated repair failure; arrives `proposed`, so it waits for `/task confirm` or `/task reject` |
@@ -150,7 +154,7 @@ and the task simply never left the queue.
 - the work commit, retained in the accepted record's `work` field and kept in
   the accepted graph as a parent, so another machine can restore it;
 - the findings, as the checkpoint commit's message, including for a slice that
-  changed no product file;
+  changed no product file (the checkpoint is then an empty commit);
 - the disposition and any blocking question, as `Disposition:` and `Reason:`
   trailers on that commit.
 
@@ -226,22 +230,27 @@ authority, not content.
 
 ### Interval or quiet
 
-`schedule: 604800` is an **interval in seconds**. Time is divided into fixed
-buckets of that length and at most one run is accepted per bucket. A moving
-input does not fan out extra runs inside a bucket, and an incomplete earlier run
-blocks the next one rather than overlapping it. After downtime, only the current
-bucket is considered; there is no backlog to work through. Reach for this when
-the work is worth doing whether or not anything changed — a weekly audit, a
-dependency sweep, a standing report.
+Either way, a rhythm runs only on **new input**: a commit none of its finished
+runs captured. For a repository rhythm that is the `input:` branch's current
+commit. For a rhythm with a `workdir:`, which reads across the organisation, it
+is also every configured repository's observed remote branch tips and the
+retained work of every ordinary task. Nothing the steward writes as bookkeeping
+counts: task documents and their acceptance commits live in the task store, and
+procedure runs, this rhythm's own included, are never input. A tick with nothing
+new admits nothing and calls no model.
 
-`schedule: {quiet: 900}` waits for **quiet** instead. The controller watches the
-observed tips of every configured repository's remote branches, the retained
-work of every ordinary task, the native branch heads, and the world head. Any
-newly observed commit restarts the window; 900 seconds with nothing new admits
-one run over exactly that snapshot. No activity means no run at all. The
-rhythm's own runs are excluded from the activity it watches, so a review cannot
-retrigger itself. The first observation after startup establishes a baseline
-without running. Reach for this when the work is *about* what changed — a
+`schedule: 604800` is an **interval in seconds**. Time is divided into fixed
+buckets of that length and at most one run is accepted per bucket, on the first
+poll in it that sees new input. A moving input does not fan out extra runs
+inside a bucket, and an incomplete earlier run blocks the next one rather than
+overlapping it. After downtime, only the current bucket is considered; there is
+no backlog to work through. Reach for this when the work should happen at most
+so often — a weekly audit, a dependency sweep, a standing report.
+
+`schedule: {quiet: 900}` waits for **quiet** instead. Any newly observed commit
+in the rhythm's input restarts the window; 900 seconds with nothing new admits
+one run over exactly that input. After a restart, input still unseen waits a
+full window again. Reach for this when the work is *about* what changed — a
 review, a reflection pass, a coherence check — and you want it to fire after the
 dust settles rather than mid-edit.
 
@@ -262,7 +271,9 @@ in that conversation: the owner's session sees the brief and the findings as
 *evidence*, can record what matters in the world, can propose a follow-up task
 within the repository authority it already has, and returns a concise update
 through its transport. It can also decide nothing needs saying and complete
-without a final message, which retains the evidence and sends nothing. Assessment cannot grant
+without a reply, which retains the evidence and sends nothing. A read-only
+rhythm run that finishes without findings never reaches assessment at all: its
+checkpoint names the outcome, and no turn runs and no message is sent. Assessment cannot grant
 itself repository access it did not have, and cannot steer tasks owned by
 another conversation.
 
@@ -321,13 +332,16 @@ tree unchanged on the same base and still red, the task blocks and waits for a
 decision rather than burning attempts.
 
 **A findings-only task still lands a commit.** Every valid slice ends in a
-checkpoint commit, so a workspace-write task that changed no product file is
-still a commit ahead of the base. When it closes `idle`, that work goes through
-the gates and lands on your default branch as a `steward: accept tasks/<id>`
-commit with no file changes, carrying `Steward-Work` and `Steward-Base`
-trailers. If every push to your default branch starts an expensive deployment,
-an investigation will start one too. Know that before you onboard such a
-repository.
+checkpoint commit, empty when nothing changed, so a workspace-write task that
+changed no product file is still a commit ahead of the base. When it closes
+`idle`, that work goes through the gates and lands on your default branch as a
+`steward: accept tasks/<id>` commit with no file changes, carrying
+`Steward-Work` and `Steward-Base` trailers; `Steward-Work` names the checkpoint
+whose message holds the findings. This is deliberate: the findings are the
+product of an investigation, and a record kept only in controller-private
+storage is one nobody on the team can read. If every push to
+your default branch starts an expensive deployment, an investigation will start
+one too. Know that before you onboard such a repository.
 
 Read-only procedure runs are the exception — they retain their evidence and
 verdict in the accepted record and never become a publication candidate.
@@ -356,6 +370,19 @@ the external system actually serves.
 | `/git reconcile <repo>` | Publish whatever that repository owes, now |
 | `/git target <name>` | Converge a configured target and report the external observation |
 | `/pause`, `/resume` | Stop or resume taking on new work |
+| `/status` | Show daemon state |
+| `/model [fast\|balanced\|deep]` | Inspect or change the steward conversation's profile |
+| `/model_family [provider]` | Inspect or switch the steward conversation's provider |
+| `/clear` | Start a fresh ordinary conversation generation |
+| `/cancel` | Request native interruption of the active conversation turn, followed by bounded containment |
+
+From the host, `steward task add --config C --repository R --title T --owner
+telegram:N --brief-file F [--priority P]` files an operator task; see [operator
+CLI admission](git-native-tasks.md#operator-cli-admission).
+
+One conversation can own several tasks. Its model controls and each task's model
+controls address separate sessions, so `/model` never silently retargets work
+you forgot was running.
 
 `/rhythm` accepts `list` and `run <name>`. Schedules are edited in controller
 configuration; there is no second persisted override to drift from the YAML.

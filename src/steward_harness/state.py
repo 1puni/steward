@@ -100,7 +100,7 @@ class ConversationId:
 
     @classmethod
     def for_transport(cls, transport: str, transport_key: str) -> Self:
-        if transport not in {"telegram", "desk"}:
+        if transport not in {"telegram", "desk", "rhythm"}:
             raise ValueError("conversation transport is invalid")
         if not transport_key.strip():
             raise ValueError("conversation transport key must be nonblank")
@@ -120,7 +120,7 @@ class ConversationId:
 
     @property
     def owner_kind(self) -> str:
-        """Current owners plus retained pre-task rhythm history."""
+        """A world rhythm owns its own conversation; it has no transport."""
         return self.kind if self.kind in {"task", "rhythm"} else "conversation"
 
     @property
@@ -134,8 +134,7 @@ class ConversationId:
     @property
     def workspace(self) -> str:
         """The world checkout this conversation's turns run in, said once."""
-        # Historical rhythm turns retain their original workspace identity;
-        # new rhythms execute as tasks and never create this owner kind.
+        # A world rhythm keeps the workspace identity its pre-task turns had.
         return f"rhythm-{self.reference}" if self.kind == "rhythm" else f"conversation-{self.value}"
 
     def __str__(self) -> str:
@@ -958,6 +957,16 @@ class StateDatabase:
             ).fetchone()
         return self._turn(row) if row is not None else None
 
+    def last_world_candidate(self, owner: ConversationId) -> str | None:
+        """The world revision this conversation's latest accepted turn produced."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT candidate_sha FROM turns WHERE conversation_id=? AND state='completed' "
+                "AND candidate_sha IS NOT NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+                (str(owner),),
+            ).fetchone()
+        return row["candidate_sha"] if row is not None else None
+
     def start_turn(
         self,
         conversation_id: ConversationId,
@@ -1250,7 +1259,7 @@ class StateDatabase:
         from steward_harness.task_query import is_task_query
         for task in self.tasks.all():
             status = task.status
-            if (not task.owner or task.dispatchable or status not in {
+            if (not task.owner or task.dispatchable or task.quiet or status not in {
                     TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}
                     or (status is TaskStatus.WAITING and is_task_query(status.value, task.reason))):
                 continue

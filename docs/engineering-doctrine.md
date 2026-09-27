@@ -49,6 +49,14 @@ Existing code is evidence, not truth. If the problem has five meaningful ideas
 and the implementation exposes fifty equally important concepts, assume the
 abstraction is wrong until proven otherwise.
 
+Then derive the architecture from constraints, not from patterns: trust boundaries,
+ownership, lifecycle, information flow, irreversible actions, failure domains,
+persistence and concurrency guarantees. Patterns can help once those are known;
+they are no substitute for knowing them. Before substantial implementation you
+should be able to say what the invariants are, which states are possible and which
+impossible, where authority lives and where trust changes. After that, the
+implementation should be unsurprising.
+
 ### 2. Reduce the state space before handling edge cases
 
 For every branch and edge-case handler, ask: *can this situation physically or
@@ -102,6 +110,11 @@ enforced from outside. Gates, permissions, repository protection and deployment
 controls live outside the model's discretion, and the model does not get to
 weaken them because it can argue convincingly about them. Intelligence works
 inside strong boundaries. It does not replace them.
+
+Make those boundaries obvious: authority, ownership, where data enters, validation,
+persistence, external effects, irreversible operations and trust transitions.
+Centralise each where it can be understood and enforced, rather than spreading it
+through the codebase, and keep things simple inside it.
 
 ### 7. Decompose by meaning, not by file size
 
@@ -241,6 +254,10 @@ it replaced is a number you can read.
 - Never leave half a workflow on the old representation and half on the new,
   joined by a synchroniser. That synchroniser is the bug.
 - Do not polish code that is about to be deleted.
+- A deletion is not finished until everything that described the removed thing is
+  gone too. Prompt text that points at removed machinery is worse than silence: the
+  model reconciles it against the filesystem and guesses. After a removal, re-read
+  the whole prompt surface and every document that names it.
 - Do not take a line budget. A budget is an instruction, and instructions get
   satisfied by compressing syntax, which is not the same as removing a concept.
 
@@ -283,7 +300,15 @@ reporting none.
 Work from the operator journey downward: message in, work retained, candidate
 accepted, exact revision gated and published, release healthy, result
 delivered. Assert those facts at their real boundaries, with focused checks for
-the failure and authority edges that remain.
+the failure and authority edges that remain. Fixture convenience is no reason to
+keep an otherwise unused production admission or completion API alive. A full
+suite is an integration check, not the definition of a working steward.
+
+Evidence is the work product, ceremony is not. Repeated test selection, isolated
+exports, hash ledgers, parallel reviews and per-slice documentation are not the
+default. Isolate a run when concurrent edits would actually invalidate its evidence,
+not as a ritual for every edit, and do not rerun checks on an already verified,
+independent change just to attach another commit hash to it.
 
 ## Challenge the premise
 

@@ -24,7 +24,7 @@ from steward_harness.config.schema import (
 from steward_harness.conversations import ConversationService
 from steward_harness.telegram.api import TelegramAPIError
 from steward_harness.desk import DeskEvents, DeskInbox, DeskMessage
-from steward_harness.git import ISOLATED_GIT_ENV, redact_command_output, run_agent_git
+from steward_harness.git import redact_command_output
 from steward_harness.git_transport import (
     ControllerGitTransport,
     GitTransportError,
@@ -35,10 +35,10 @@ from steward_harness.kernel import Dispatch, Owner, StewardKernel, repository_le
 from steward_harness.git_reconcile import ResolveTurn, ResolverTurn
 from steward_harness.prompts import build_conflict_prompt
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
-from steward_harness.runtime.contracts import CognitionAdapter
+from steward_harness.runtime.contracts import CognitionAdapter, RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.providers import build_runtimes
-from steward_harness.procedures import Procedures, resolve_input
+from steward_harness.procedures import Procedures, interval
 from steward_harness.targets import Targets
 from steward_harness.state import (
     ConversationBusy,
@@ -135,21 +135,6 @@ def _controller_executable_refusal(executable: Path) -> str | None:
     return None
 
 
-def _native_git_heads(config, broker):
-    """Observe native commits through the agent boundary, including active worktrees."""
-    heads = {}
-    for name, repository in config.repositories.items():
-        result = run_agent_git(
-            broker, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/",
-            cwd=repository.path, timeout=30, extra_env=ISOLATED_GIT_ENV,
-        )
-        result.check_returncode()
-        for line in result.stdout.splitlines():
-            ref, sha = line.split()
-            heads[f"native:{name}:{ref}"] = sha
-    return heads
-
-
 class KernelCommands:
     """Small operator surface over current state and the two repository paths."""
 
@@ -171,14 +156,7 @@ class KernelCommands:
         self.reconciler = reconciler
         self.transports = dict(transports)
         self.broker = broker
-        if procedures is None:
-            world = GitWorld(config.world.root, execution_broker=broker) if config.world else None
-            procedures = Procedures(
-                config, state, transports,
-                world=world,
-                native_heads=lambda: _native_git_heads(config, broker),
-            )
-        self.procedures = procedures
+        self.procedures = procedures or Procedures(config, state, transports)
         self.targets = targets or Targets(config, state, transports, self.procedures)
 
     def __call__(
@@ -391,20 +369,28 @@ class KernelCommands:
             lines = []
             runs = [task.procedure for task in self.state.tasks.all()]
             for name, rhythm in self.config.rhythms.items():
-                schedule = (f"every {rhythm.schedule}s" if isinstance(rhythm.schedule, int)
+                schedule = (f"after {rhythm.after}" if rhythm.after is not None
+                            else f"every {rhythm.schedule}s" if isinstance(rhythm.schedule, int)
                             else f"after {rhythm.schedule.quiet}s of quiet Git activity")
                 count = sum(bool(run and run.event.startswith(f"rhythm:{name}:")) for run in runs)
                 history = f"{count} accepted runs" if count else "no accepted run recorded"
+                if rhythm.input == "world":
+                    key = f"rhythm:{name}:{interval(self.config.rhythms, name, time.time())}"
+                    turn = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
+                    history = f"this interval: {turn.state if turn else 'not run yet'}"
                 pause = "; automatic admission paused" if self.state.paused() else ""
                 lines.append(f"{name}: {schedule}, {rhythm.procedure}, {rhythm.input}, "
                              f"owner={rhythm.owner or 'retained only'}; {history}{pause}")
             return "\n".join(lines) or "No rhythms configured."
         if len(parts) == 2 and parts[0] == "run" and parts[1] in self.config.rhythms:
             rhythm = self.config.rhythms[parts[1]]
-            repository, candidate, base = resolve_input(rhythm.input, self.transports)
+            if rhythm.input == "world":
+                return f"{parts[1]} is a world rhythm; it runs once per interval on its schedule."
+            repository, candidate, base, activity = self.procedures.observe(rhythm)
             task = self.procedures.request(rhythm.procedure, repository, candidate, base,
                                           event=f"rhythm:{parts[1]}:manual:{uuid.uuid4().hex}",
-                                          owner=rhythm.owner, workdir=rhythm.workdir)
+                                          owner=rhythm.owner, activity=activity,
+                                          workdir=rhythm.workdir)
             return f"Queued {task}"
         return "Usage: /rhythm list | run <name>. Edit schedules in controller configuration."
 
@@ -585,7 +571,8 @@ class StewardDaemon:
                 profile=self.config.provider.default_profile,
                 prompt=prompt, cwd=turn.worktree,
                 timeout_seconds=self.config.provider.timeout_seconds,
-                provider_order=(procedure.provider,) if procedure else self.config.provider.family_order,
+                provider_order=procedure.provider_order(self.config.provider.family_order)
+                    if procedure else self.config.provider.family_order,
                 model=procedure.model if procedure else None,
                 sandbox_mode="workspace-write"))
 
@@ -602,6 +589,10 @@ class StewardDaemon:
             workspace=checkpoint or Path(self.config.provider.workdir).resolve(),
             timeout_seconds=self.config.provider.timeout_seconds,
 
+            desk_provider=self.config.desk.provider if self.config.desk else None,
+            desk_profile=self.config.desk.profile if self.config.desk else None,
+            desk_access=self.config.desk.access if self.config.desk else "operator",
+            desk_readable_roots=tuple(map(Path, self.config.desk.readable_roots)) if self.config.desk else (),
             telegram_actions=(
                 self.config.telegram.agent_actions
                 if self.config.telegram is not None
@@ -614,11 +605,8 @@ class StewardDaemon:
             ),
         )
 
-        procedures = Procedures(
-            self.config, state, transports,
-            world=checkpoint.world if checkpoint else None,
-            native_heads=lambda: _native_git_heads(self.config, self.broker),
-        )
+        procedures = Procedures(self.config, state, transports,
+                                world=checkpoint.world if checkpoint else None)
         targets = Targets(self.config, state, transports, procedures)
         self._procedures, self._targets = procedures, targets
         reconciler = RepositoryReconciler(
@@ -848,8 +836,12 @@ class StewardDaemon:
                     yield ("desk", message.msg_id), lambda m=message: desk.drain(m)
 
         def rhythm() -> Iterator[Owner]:
-            if not paused() and self.config.rhythms:
-                yield ("rhythms",), self._procedures.advance_rhythms
+            if paused() or not self.config.rhythms:
+                return
+            yield ("rhythms",), self._procedures.advance_rhythms
+            for name, key in self._procedures.due_world_rhythms():
+                yield ("rhythm", name), lambda name=name, key=key: (
+                    self._procedures.run_world_rhythm(conversations, name, key))
 
         def targets() -> Iterator[Owner]:
             for name in self.config.targets:
@@ -926,10 +918,13 @@ class StewardDaemon:
 
         next_retention = 0.0
 
+        native_homes = [Path(path) for path in self.config.provider.native_homes.values()]
+
         def retain_workspaces() -> None:
-            prune_tasks(kernel.tasks)
+            prune_tasks(kernel.tasks, native_homes)
             if checkpoint is not None:
-                prune_world_sessions(checkpoint, self.config.controller.world_session_idle_seconds)
+                prune_world_sessions(checkpoint, self.config.controller.world_session_idle_seconds,
+                                     native_homes)
 
         def step() -> None:
             nonlocal next_retention
@@ -1002,7 +997,7 @@ class StewardDaemon:
             message = inbox.claim(message)
             try:
                 if not events.has_reply(message.msg_id):
-                    if message.profile is not None:
+                    if message.profile is not None and self.config.desk.profile is None:
                         conversation = conversations.conversation_for("desk", str(message.topic_id))
                         if conversation.profile != message.profile:
                             conversations.set_profile(
@@ -1028,9 +1023,15 @@ class StewardDaemon:
                     if reply:
                         events.append("reply", reply, message.msg_id)
                 inbox.done(message)
-            except (Busy, ConversationBusy) as error:
+            except (Busy, ConversationBusy, WorldUpdatePending, WorldContentConflict) as error:
                 log.info("desk message %s deferred: %s", message.msg_id, deferral_cause(error))
                 inbox.requeue(message)
+                return
+            except (RuntimeExecutionError, RuntimeUnavailable) as error:
+                # A provider refusing one turn (a usage limit, a failed run) ends
+                # that turn, not the controller. Telegram treats it the same way.
+                log.warning("desk message %s failed: %s", message.msg_id, error)
+                inbox.park_failed(message)
                 return
             except Exception:
                 inbox.park_failed(message)

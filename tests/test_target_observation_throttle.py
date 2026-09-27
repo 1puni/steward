@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 from steward_harness import targets as targets_module
 from steward_harness.config.schema import StewardConfig, UntrustedExecutionConfig
@@ -119,28 +120,142 @@ def test_reobservation_resumes_on_a_moved_ref_a_demand_and_the_interval(tmp_path
         assert _observations(calls) == 4
 
 
-def test_unowned_target_retains_failure_and_same_revision_recovery_across_restart(tmp_path, monkeypatch):
+class _Script:
+    """A target whose next observation is chosen by the test, on a fake clock."""
+
+    def __init__(self, targets, monkeypatch):
+        self.targets, self.state, self.now = targets, "ready", 0.0
+        monkeypatch.setattr(targets_module, "time", SimpleNamespace(monotonic=lambda: self.now))
+        monkeypatch.setattr(targets, "call", self)
+        # A satisfied observation would otherwise be reused, not re-observed.
+        monkeypatch.setattr(targets_module, "SATISFIED_REOBSERVE_SECONDS", 0.0)
+
+    def __call__(self, name, operation, repository, revision):
+        if self.state == "failed":
+            raise RuntimeError(f"target {name} observe failed (exit 1)")
+        if operation == "apply":
+            return None
+        return Observation(revision=revision, ready=self.state == "ready",
+                           busy=self.state == "busy", blocked=self.state == "blocked",
+                           details=f"{self.state} at t={self.now}")
+
+    def step(self, state, at=None):
+        self.state = state
+        if at is not None:
+            self.now = at
+        return self.targets.advance("production")
+
+    def receipts(self):
+        folder = self.targets.state.result_receipt_path("").parent
+        return sorted((json.loads(p.read_text()) for p in folder.glob("*.json")),
+                      key=lambda receipt: receipt["sequence"])
+
+
+def test_progress_is_never_delivered_and_live_is_delivered_once(tmp_path, monkeypatch):
     with _harness(tmp_path) as (daemon, _clone, _calls):
+        target = _Script(daemon._targets, monkeypatch)
+        assert "not yet observed" in target.step("pending")
+        assert "busy" in target.step("busy")
+        target.step("pending")
+        assert target.receipts() == []
+        for _ in range(3):
+            assert "satisfied" in target.step("ready")
+        [live] = target.receipts()
+        revision = live["observation"][0]
+        assert live["observation"] == [revision, "satisfied"]
+        assert live["reply"] == f"production is live at {revision[:12]}."
+        assert live["owner"] is None and live["task_id"] is None
+
+
+def test_a_failure_that_recovers_before_it_persists_is_never_told(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, _clone, _calls):
+        target = _Script(daemon._targets, monkeypatch)
+        target.step("ready", at=0)
+        # The controller's shutdown drain: observe exits 1 for a pass or two.
+        target.step("failed", at=10)
+        target.step("failed", at=20)
+        target.step("ready", at=30)
+        # Flapping under the window is not a stream of outages.
+        for at in range(40, 1000, 20):
+            target.step("failed" if at % 40 else "ready", at=at)
+        assert [r["observation"][1] for r in target.receipts()] == ["satisfied"]
+
+
+def test_a_persistent_failure_is_told_once_and_its_recovery_once(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, _clone, _calls):
+        target = _Script(daemon._targets, monkeypatch)
+        target.step("ready", at=0)
+        target.step("failed", at=10)
+        # Busy in between does not restart the clock on a failing target.
+        target.step("busy", at=200)
+        target.step("failed", at=299)
+        assert len(target.receipts()) == 1
+        target.step("failed", at=310)
+        # Driver-reported block and an exception are the same outcome.
+        target.step("blocked", at=320)
+        target.step("failed", at=900)
+        live, failed = target.receipts()
+        assert failed["observation"] == [live["observation"][0], "failed"]
+        assert failed["reply"].startswith("production is not reaching ")
+        assert "observe failed (exit 1)" in failed["reply"]
+        target.step("ready", at=910)
+        target.step("ready", at=920)
+        assert len(target.receipts()) == 3
+        assert target.receipts()[-1]["reply"].startswith("production recovered and is live at ")
+
+
+def test_a_told_failure_survives_restart_without_being_told_again(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, _clone, _calls):
+        monkeypatch.setattr(targets_module, "FAILURE_PERSISTS_SECONDS", 0.0)
+        target = _Script(daemon._targets, monkeypatch)
+        target.step("blocked")
+        target.step("blocked")
+        assert len(target.receipts()) == 1
         targets = daemon._targets
-        blocked = True
-        def observe(name, operation, repository, revision):
-            assert operation == "observe"
-            return Observation(revision=revision, ready=not blocked, blocked=blocked,
-                               details="repair needed" if blocked else "repaired")
-        monkeypatch.setattr(targets, "call", observe)
-        targets.advance("production")
-        targets.advance("production")
-        # Repeated failure is one retained transition, even without a task.
-        receipts = targets.state.result_receipt_path("").parent
-        assert len(list(receipts.glob("*.json"))) == 1
-        targets = Targets(targets.config, targets.state, targets.transports, targets.procedures)
-        monkeypatch.setattr(targets, "call", observe)
-        targets.advance("production")
-        assert len(list(receipts.glob("*.json"))) == 1
-        blocked = False
-        targets.advance("production")
-        retained = sorted((json.loads(p.read_text()) for p in receipts.glob("*.json")),
-                          key=lambda receipt: receipt["sequence"])
-        assert [r["observation"][1] for r in retained] == ["blocked", "satisfied"]
-        assert all(r["task_id"] is None and r["owner"] is None and r["reply"] for r in retained)
-        assert retained[0]["observation"][0] == retained[1]["observation"][0]
+        restarted = Targets(targets.config, targets.state, targets.transports, targets.procedures)
+        target = _Script(restarted, monkeypatch)
+        target.step("blocked")
+        assert len(target.receipts()) == 1
+        target.step("ready")
+        failed, recovered = target.receipts()
+        assert [failed["observation"][1], recovered["observation"][1]] == ["failed", "satisfied"]
+        assert failed["observation"][0] == recovered["observation"][0]
+        assert all(r["owner"] is None and r["task_id"] is None for r in (failed, recovered))
+        assert "recovered" in recovered["reply"]
+
+
+def test_receipts_from_before_outcomes_do_not_repeat_a_live_message(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, clone, _calls):
+        revision = _git("rev-parse", "HEAD", cwd=clone)
+        daemon._targets.state.save_result_receipt({
+            "owner": "telegram:1", "task_id": None, "source_key": "target_result:old",
+            "target": "production", "sequence": 3, "done": True, "result_text": "old",
+            "observation": [revision, "satisfied", {"revision": revision, "ready": True,
+                                                    "busy": False, "blocked": False}],
+        })
+        target = _Script(daemon._targets, monkeypatch)
+        target.step("ready")
+        assert len(target.receipts()) == 1
+
+
+def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, clone, _calls):
+        revision = _git("rev-parse", "HEAD", cwd=clone)
+        targets = daemon._targets
+        task = SimpleNamespace(task_id="task-1", landed=revision, definition=SimpleNamespace(
+            repository="app", owner="telegram:42"))
+        monkeypatch.setattr(targets.state.tasks, "all", lambda: [task])
+        target = _Script(targets, monkeypatch)
+        target.step("pending", at=0)
+        target.step("busy", at=1)
+        assert target.receipts() == []
+        target.step("ready", at=2)
+        target.step("failed", at=3)
+        target.step("failed", at=400)
+        live, failed = target.receipts()
+        assert (live["owner"], live["task_id"]) == ("telegram:42", "task-1")
+        # A live observation says everything; no model turn restates it.
+        assert live["reply"] == f"production is live at {revision[:12]}."
+        # A failure is the owner's to assess, so it carries no canned reply.
+        assert (failed["owner"], failed["task_id"]) == ("telegram:42", "task-1")
+        assert "reply" not in failed

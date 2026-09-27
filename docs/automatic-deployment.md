@@ -57,9 +57,20 @@ input. Missing capability or a review question remains visible on its task.
 
 ## Git quiet periods and intervals
 
-An integer `schedule: 86400` is an interval: it can run every day even when
-Git has not changed. A quiet schedule instead collects a batch of observed Git
-work and runs once after that work stops:
+A procedure rhythm runs only on new input. Before admission the controller
+fetches what the rhythm reads and compares it with the commits its finished
+runs captured. A repository rhythm reads its `input` ref: its input is that
+candidate commit. A rhythm with a `workdir` reads the organisation: its input is
+also every observed `refs/steward/remote/*` head of every configured repository
+and the accepted work commit of every ordinary task. If every observed commit
+was captured by a finished run, the poll admits nothing, calls no model and
+logs at debug level. The runs' own `candidate` and `activity` fields are the
+cursor; nothing else records what a rhythm has seen.
+
+An integer `schedule: 86400` is an interval: at most one run per interval
+bucket, admitted on the first poll in the bucket that sees new input. A quiet
+schedule instead waits until the new input has stopped moving, then runs once
+over exactly that input:
 
 ```yaml
 rhythms:
@@ -70,33 +81,37 @@ rhythms:
     owner: telegram:0
 ```
 
-Every newly observed commit in configured repository branches, retained native
-work branches, accepted task work, or the Git world restarts the five-minute
-quiet window. `input` selects the procedure's execution checkout; it does not
-limit which repositories can trigger reflection. The accepted procedure task
-captures the complete source-to-revision map alongside that checkout's candidate
-and base. Its event identity derives from those inputs, so unchanged ticks do
-not create more tasks. A completed failure verdict is still consumed evidence.
-Manual requests remain explicit new work, and unfinished runs prevent overlap.
+Each newly observed commit in the rhythm's input restarts the five-minute quiet
+window. Unchanged ticks, removing a ref and aliases for an already observed
+commit do not. The quiet run's event identity derives from its input, so the
+same input never becomes two tasks. A completed failure verdict is still
+covered input. Manual requests remain explicit new work, and unfinished runs
+prevent overlap. A blocked run is not unfinished in that sense and covers no
+input: nothing retries it, so the rhythm's next admission cancels it as
+superseded. A procedure's `provider` and `model` name a preference, not a pin:
+its run leads with that provider and falls back through `provider.family_order`,
+each fallback using its own configured model for the profile. `fallback: false`
+makes it a pin; see [model preference](rhythms.md#model-preference).
 
 The controller measures elapsed quiet using its monotonic observation clock,
-not author or committer dates. Its first observation establishes a baseline and
-starts no task. After an accepted batch, restart reconstructs consumed inputs
-from task Git and waits a fresh full quiet period for newly observed work. A
-restart before the first accepted batch establishes a fresh baseline; it does
-not attempt to infer activity time from historical commits.
+not author or committer dates. After a restart, input no finished run captured
+waits a fresh full quiet period; input already captured stays covered, because
+coverage is read from accepted task Git. A controller with no finished run has
+covered nothing, so its first quiet period ends in one run over the current input.
 
-Review branches and scheduled task checkpoints do not trigger themselves. The
-Git world's existing application receipts identify an assessment of that
-rhythm's task and exclude the entire integrated assessment, including its native
-commits. That provenance is resolved uniformly for every observed revision,
-whether exposed by the world cursor, a native branch or a remote branch. Raw
-observed revisions remain in the accepted activity map and execution candidate;
-the receipt-derived revisions determine activity identity and quiet timing.
-Later operator or independent world commits still count, including
-commits that only record a conversation exchange. Ref deletion or aliases for already
-observed commits are bookkeeping, not new work. Dirty files without a commit do
-not start the quiet clock.
+Steward bookkeeping is not input. Task documents, `steward: accept task`
+commits, holds and procedure evidence live in the controller's task store, not
+in any repository remote, and every procedure task, the rhythm's own runs
+included, is excluded from task work. A rhythm's result therefore cannot
+trigger the rhythm. A product task's outcome landing on the input branch does
+count: it changes what the rhythm reads. The Git world is not a procedure
+rhythm's input; the world is read by its owner's assessment, not observed for
+admission. A failed fetch skips that rhythm for the poll without changing its
+quiet state; other rhythms remain eligible.
+
+A finished read-only rhythm run without findings is retained evidence only. Its
+checkpoint commit names the outcome, and the result lane never selects it for
+assessment or delivery; see [rhythms](rhythms.md).
 
 ## Driver protocol
 
@@ -139,25 +154,43 @@ serving or has durably received, rather than echo a requested revision.
 
 ## Observation feedback
 
-A target observation returns to an existing conversation only when its desired
+Only outcomes are delivered, never progress. A target has two outcomes at a
+revision: **live** (observed satisfied) and **failing** (`failed`, `blocked` or
+`failed-evidence`). `pending`, `busy`, `awaiting-evidence` and a moved ref are the
+loop at work and produce no receipt. A failure becomes an outcome only after it
+has stood for five minutes (`FAILURE_PERSISTS_SECONDS`), timed from the first
+failure since the target was last live at that revision; busy passes in between
+do not reset it. The controller's shutdown drain fails every observe for a pass
+or two, and those failures, like any that recover within the window, are never
+told. The clock is in memory: a restart looks afresh.
+
+Each outcome is delivered once per revision. A failure that was told and then
+recovers produces one "recovered" message. A failure that recovered before it
+was told stays silent, because no one acted on it and a recovery notice would
+describe a non-event. Transient failures that come and go within the window do
+not add up to messages.
+
+A target outcome returns to an existing conversation only when its desired
 revision is exactly the commit that landed that conversation's task.
 The controller retains the dated driver observation and desired SHA in an ordinary
-result receipt, then uses the same assessment and world-acceptance path as task
-results. Assessment may complete without a final message; failures and changed outcomes can produce a
-concise owner update or an authorized follow-up. Readiness still requires external
-observation and exact evidence; the assessment does not confer deployment authority.
+result receipt. A live outcome carries its plain reply ("`<target>` is live at
+`<sha>`"), because the observation already says everything the owner's model
+could. A failing outcome carries no reply and goes through the same assessment
+and world-acceptance path as task results, where the owner can act or propose an
+authorized follow-up. Readiness still requires external observation and exact
+evidence; the assessment does not confer deployment authority.
 
-Repeated state/revision observations are suppressed even if driver prose contains
-new timestamps. A changed state, including recovery and a later repeat failure,
-gets a new chained receipt. Target locking serializes receipt selection with
-observation. Existing receipt replay retains order and retries transport without
-repeating accepted cognition. Full evidence remains in the receipt and the accepted
-world turn's commit; task completion remains publication, independently of deployment.
+Driver prose and error text vary between polls and are not new outcomes.
+Target locking serializes receipt selection with observation. Existing receipt
+replay retains order and retries transport without repeating accepted cognition.
+Full evidence remains in the receipt and the accepted world turn's commit; task
+completion remains publication, independently of deployment.
 
 The recipient rule deliberately excludes historical ancestor candidates and tasks
 without an owner/publication. Coalesced or skipped intermediate candidates do not
-each receive task feedback. A transition without an exact task recipient is
-retained in the same receipt store with no task ID and a deterministic report.
+each receive task feedback. An outcome without an exact task recipient is
+retained in the same receipt store with no task ID and a plain report: live,
+recovered, or not reaching the revision with the driver's reason.
 The delivery lane assigns the configured `incidents` or `operator` Telegram
 topic, or the operator desk route. Without a configured route it remains pending
 and `/status` explains the delivery problem. No synthetic task or model assessment
@@ -260,6 +293,65 @@ Condemnation survives artifact removal and repeated pruning, so requesting an
 old failed SHA still requires the explicit operator clearance described above.
 Failure markers have no age or count limit tied to artifact retention.
 
+### Operating the installed driver
+
+Four things read the controller configuration, and a deploy advances only one of
+them. The service runs the new release. The driver's environment is pinned to the
+harness it was built from and rejects unknown keys like any other loader. The
+configuration file and the schema-epoch check live outside the release entirely. So a
+new configuration field deploys cleanly to the service and then fails every
+`observe`: self-deploy stops while health stays green. The order that works is push,
+install the configuration, restart, rebuild the driver environment at the new release,
+then verify with `observe`. Where a source constant would do, prefer it to a new key.
+Once accepted records carry a new field, an older strict reader cannot read them, so
+upgrade the driver before you introduce one.
+
+A schema-epoch change cannot self-deploy. The new release refuses the old database,
+health fails, and the driver rolls back. Convert the database deliberately; see
+[upgrading](upgrading.md).
+
+Build the driver environment from a copy of the release source, never by installing
+against the release directory itself. The worker's policy digest covers the
+controller and settings files, not the driver environment, so pause target
+convergence before you replace it.
+
+The driver only recognises release directories named by a full 40-hex SHA that carry
+an integrity receipt. On an installation that predates it there is no previous
+release to fall back to, and a failed first apply removes the pointer and stops the
+service. Stage a verified full-SHA release and point `current` at it before you enable
+self-deployment. The service must import the harness from `<release>/src`, not from a
+per-release environment, or health identity breaks and every deploy rolls back.
+
+The worker starts through plain `systemd-run` and inherits only `PATH`; it has no
+`HOME`. Git and `gh` cannot find the controller's credentials there, and a private
+remote's fetch fails with exit 128, which reads like a network fault. Configure the
+credential helper in `/etc/gitconfig`. The driver's `systemctl` calls carry no client
+timeout on purpose: systemd owns the job and its deadlines, and a timed-out client
+leaves the job running while a rollback races a controller that is still draining.
+
+Anything that must outlive a release lives outside it: configuration in `/etc`,
+backup and monitor units under `/usr/local/libexec` or similar. A companion unit that
+runs a script from inside the release fails at the first cutover, and a monitor
+inside `current/` disappears exactly when a bad deploy is what you need to see.
+
+### Running the driver from the release
+
+Instead of installing the driver as a separate Python package, a protected stable
+wrapper can execute `scripts/systemd-target.py` from the current release. Resolve the
+script to its immutable release path **before** executing it, for example
+`entry=$(readlink -f /opt/INSTANCE/current/scripts/systemd-target.py)`, then
+`exec /usr/bin/python3 -B "$entry" --config /etc/INSTANCE/steward.yaml
+--settings /etc/INSTANCE/target.yaml "$@"` (on one shell line), with your
+controller interpreter and protected configuration paths.
+
+The script prepends that release's `src` and `vendor` to the import path and calls the
+ordinary deployment CLI with its resolved `worker_entry`. The supervised worker
+therefore runs the same immutable script, core and vendored dependencies even if
+`current` moves after dispatch, does not depend on `PYTHONPATH` surviving
+`systemd-run`, and is not a second deployment implementation. Keep that release on
+disk while its workers run. Installing or switching the wrapper is a protected
+operator step; publishing source does not do it.
+
 ## Proving a driver
 
 Run `scripts/linux-boundary-acceptance.sh` on the intended host before trusting the
@@ -272,4 +364,5 @@ driver that cannot roll back.
 Configuration keys from older versions (`repositories.*.deploy`, `executor`,
 `health_reports_sha`, `work_branch`) fail validation; platform settings belong in
 the installed driver's own configuration, bound through a named target. Use
-`/git target <name>` for an immediate convergence attempt.
+`/git target <name>` for an immediate convergence attempt. Moving an instance onto a
+new harness revision is a deliberate migration; see [upgrading](upgrading.md).

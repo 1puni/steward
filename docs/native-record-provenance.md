@@ -3,9 +3,15 @@
 Three kinds of file, three distances from what actually happened. Original
 sessions live in `artefacts/`, in the provider's own format. What was learned from
 them lives in `memories/`. What the owning scope has decided is true lives in
-`docs/`. The provider writes its own files natively; there is no harness
+`docs/`. Each keeps its owning scope, its sources and its most recent editor
+visible. The provider writes its own files natively; there is no harness
 transcript exporter, because an exporter is just a second, worse copy of a file
-that already exists.
+that already exists. This page states that direction and the evidence for it; it
+does not claim the production runtime has adopted every mapping.
+
+Evidence has to outlive its source. An evidence record says what was observed,
+where, when, against which revision or input window, and what the observation
+cannot show. A bare link to a log that will expire is not evidence.
 
 ## Reading from source to interpretation
 

@@ -46,6 +46,14 @@ inspection commands, and explains where its service adapter differs from real sy
 It is the executable tour. It is not your production installation, and a green run is
 not evidence about your host.
 
+Your fork is where you contribute from, not where harness fixes should live. Keep your
+instance in configuration, installed drivers, procedures and instance files, and send
+harness changes upstream as pull requests. A fix carried only on a fork's diverged main
+is stranded there, and every one makes the next upgrade more expensive. A change
+belongs upstream when it fixes a reproducible generic failure or adds a broadly useful
+capability, keeps provider neutrality and the controller/agent credential boundary,
+brings evidence or a regression test, and imports no single organisation's policy.
+
 ## Choose who deploys each repository
 
 Decide this before you write any YAML, because the answer changes what you configure and
@@ -174,8 +182,10 @@ ExecStart=/opt/steward-harness/.venv/bin/steward run --config /etc/steward/stewa
 Restart=on-failure
 RestartSec=5
 UMask=0077
+# The controller drains running turns on SIGTERM. Signal only the main process,
+# and give the drain time to finish.
 KillMode=mixed
-TimeoutStopSec=90
+TimeoutStopSec=1300s
 
 [Install]
 WantedBy=multi-user.target
@@ -192,8 +202,9 @@ propagates out and exits the process, and `Restart=on-failure` is the recovery
 mechanism.
 
 On `SIGTERM` the controller stops taking work and drains what is running, so an
-in-flight turn can reach durable acceptance. `TimeoutStopSec` bounds that wait, and
-a "deactivating" unit for a minute or so is the drain doing its job, not a hang.
+in-flight turn can reach durable acceptance. `TimeoutStopSec` bounds that wait, so
+set it longer than your longest turn, and a unit "deactivating" for several
+minutes is the drain doing its job, not a hang.
 `KillMode=mixed` sends the signal to the controller alone; the default,
 `control-group`, signals every process in the unit at once and defeats the drain.
 Check `KillMode` before you believe any drain.
@@ -203,6 +214,29 @@ self-deploying harness starts through its release pointer and uses the installed
 systemd driver with a separate supervisor unit; see
 [targets and deployment](automatic-deployment.md). A fixed bootstrap path does not
 become self-updating just because its source repository is managed.
+
+A few host facts that are easy to get wrong:
+
+- A long `deactivating` is the drain, not a hang. Restarting to "unstick" it cuts the
+  drain short.
+- A timer can be enabled and active with no next firing: `OnBootSec` plus
+  `OnUnitActiveSec` has nothing to count from until it has run once. Use
+  `OnCalendar`, and check `NextElapse` in `systemctl list-timers`, never
+  `is-enabled`.
+- Anything outside the harness that runs Git as root inside agent-owned storage —
+  a monitor, a guard, an operator shell — can corrupt it. A root `git status`
+  rewrites the index; a root-created `objects/xx` directory makes roughly one object
+  write in 256 fail, which looks like random flakiness. Read as the agent identity,
+  or with `git --no-optional-locks` and plumbing. Repository config can also run
+  code (fsmonitor, hooks, filters), which is one more reason root never opens it.
+- Scope any ownership repair. A `chown` must never reach controller-private paths;
+  afterwards check that the agent still cannot read the state database. Task-lock
+  files are controller-owned by construction.
+- A paused steward looks exactly like a healthy idle one. When nothing is
+  happening, check pause first.
+
+See [automatic deployment](automatic-deployment.md#operating-the-installed-driver) for
+the self-deploying driver.
 
 ## Prove the first useful task
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -478,7 +478,7 @@ class ControllerConfig(BaseModel):
     # keeps the capacity that split gave and drops the reservation.
     workers: int = Field(default=8, ge=1, le=32)
     health_bind: str | None = None  # host:port loopback healthz for self-deploy
-    world_session_idle_seconds: int = Field(default=604800, ge=1)
+    world_session_idle_seconds: int = Field(default=86400, ge=1)
 
 
 class DeskConfig(BaseModel):
@@ -486,11 +486,19 @@ class DeskConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    provider: ProviderFamily | None = None
+    profile: ProviderProfile | None = None
+    access: Literal["operator", "read-only"] = "operator"
+    readable_roots: tuple[str, ...] = ()
     inbox_dir: str = "/var/lib/steward/desk-inbox"
     events_file: str = "/var/lib/steward/desk/events.jsonl"
 
     @model_validator(mode="after")
     def validates_paths(self) -> "DeskConfig":
+        for path in self.readable_roots:
+            _require_bounded_absolute("desk readable root", path)
+        if self.readable_roots and self.access != "read-only":
+            raise ValueError("desk readable_roots require read-only access")
         _require_bounded_absolute("desk inbox_dir", self.inbox_dir)
         _require_bounded_absolute("desk events_file", self.events_file)
         return self
@@ -511,28 +519,52 @@ class TaskIntakeConfig(BaseModel):
 class ProcedureConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     instructions: str
+    # The preference: this provider running this model at this effort. Unless
+    # `fallback` is false, `provider.family_order` follows it, each fallback
+    # running its own configured model for the profile.
     provider: str
     model: ModelChoice
     access: Literal["read-only", "workspace-write"] = "read-only"
+    fallback: bool = True
+
+    def provider_order(self, family_order: tuple[ProviderFamily, ...]) -> tuple[ProviderFamily, ...]:
+        """Its provider first, then the configured order unless it is pinned."""
+        return (self.provider, *(family for family in family_order
+                                 if self.fallback and family != self.provider))
 
 
 class QuietSchedule(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    quiet: int = Field(gt=0, description="Seconds without newly observed Git activity")
+    quiet: int = Field(gt=0, description="Seconds the rhythm's new input must stay unchanged")
 
 
 class ProcedureRhythmConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schedule: Annotated[int, Field(gt=0)] | QuietSchedule
+    # Exactly one of `schedule` or `after`: a world rhythm may run in each
+    # interval of another world rhythm, once that rhythm's run has completed.
+    schedule: Annotated[int, Field(gt=0)] | QuietSchedule | None = None
+    after: str | None = None
+    # Where an interval starts, in seconds past the epoch's interval boundary.
+    offset: int = Field(default=0, ge=0)
     procedure: str
     input: str
     owner: str | None  # Explicit null retains findings without assessment/delivery.
     workdir: str | None = None
+    # World paths whose change since the rhythm's last accepted run is its input.
+    paths: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validates_workdir(self):
         if self.workdir is not None:
             _require_bounded_absolute("rhythm workdir", self.workdir)
+        if (self.schedule is None) == (self.after is None):
+            raise ValueError("rhythm requires exactly one of schedule or after")
+        if self.offset and not (isinstance(self.schedule, int) and self.offset < self.schedule):
+            raise ValueError("rhythm offset requires an interval schedule longer than it")
+        for path in self.paths:
+            parts = PurePosixPath(path).parts
+            if not path.strip() or path.startswith("/") or ".." in parts or ".git" in parts:
+                raise ValueError(f"rhythm path must stay inside the world: {path!r}")
         return self
 
 
@@ -566,6 +598,9 @@ class StewardConfig(BaseModel):
 
     @model_validator(mode="after")
     def validates_cross_references(self) -> "StewardConfig":
+        if (self.desk and self.desk.provider is not None
+                and self.desk.provider not in self.provider.family_order):
+            raise ValueError("desk provider must be in provider.family_order")
         for name in (*self.procedures, *self.rhythms, *self.targets):
             if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", name):
                 raise ValueError(f"invalid procedure, rhythm or target name: {name!r}")
@@ -575,6 +610,8 @@ class StewardConfig(BaseModel):
                 raise ValueError("procedure provider must be nonblank")
         for binding in (*self.rhythms.values(), *self.targets.values()):
             reference = binding.input if isinstance(binding, ProcedureRhythmConfig) else binding.ref
+            if reference == "world" and isinstance(binding, ProcedureRhythmConfig):
+                continue
             parts = reference.split("/", 2)
             if len(parts) != 3 or parts[0] != "repositories" or parts[1] not in self.repositories:
                 raise ValueError(f"unknown configured input {reference!r}")
@@ -584,6 +621,17 @@ class StewardConfig(BaseModel):
                 raise ValueError("rhythm names an unknown procedure")
             if rhythm.workdir is not None and self.procedures[rhythm.procedure].access != "read-only":
                 raise ValueError("organisation rhythm workdir requires a read-only procedure")
+            if rhythm.input == "world":
+                # A world rhythm is an ordinary world turn: it writes the world
+                # through the same checkpoint, so it needs one and needs to write.
+                if self.world is None:
+                    raise ValueError("world rhythm requires a configured world")
+                if self.procedures[rhythm.procedure].access != "workspace-write":
+                    raise ValueError("world rhythm requires a workspace-write procedure")
+                if rhythm.after is None and not isinstance(rhythm.schedule, int):
+                    raise ValueError("world rhythm requires an interval schedule")
+            elif rhythm.after is not None or rhythm.paths:
+                raise ValueError("rhythm after and paths apply only to world rhythms")
             if rhythm.owner is not None:
                 kind, _, reference = rhythm.owner.partition(":")
                 if kind == "telegram":
@@ -591,6 +639,14 @@ class StewardConfig(BaseModel):
                         raise ValueError("rhythm owner must name a configured Telegram topic")
                 elif kind != "desk" or not self.desk or not reference.strip():
                     raise ValueError("rhythm owner must name an enabled desk or Telegram conversation")
+        for name, rhythm in self.rhythms.items():
+            chain = [name]
+            while (predecessor := self.rhythms[chain[-1]].after) is not None:
+                if predecessor not in self.rhythms or self.rhythms[predecessor].input != "world":
+                    raise ValueError(f"rhythm {chain[-1]} must follow a configured world rhythm")
+                if predecessor in chain:
+                    raise ValueError("rhythm after chain is a cycle: " + " > ".join((*chain, predecessor)))
+                chain.append(predecessor)
         if self.world and self.world.reconcile:
             procedure = self.procedures.get(self.world.reconcile)
             if procedure is None or procedure.access != "workspace-write":

@@ -159,6 +159,12 @@ class Task:
         return "pass" if verdicts == ["VERDICT: PASS"] else "fail"
 
     @property
+    def quiet(self) -> bool:
+        """A finished rhythm review that found nothing: its evidence commit is all it owes."""
+        return (self.status is TaskStatus.DONE and self.read_only and self.findings is None
+                and self.procedure.event.startswith("rhythm:"))
+
+    @property
     def dispatchable(self) -> bool:
         """Owes another execution slice."""
         d = self.definition

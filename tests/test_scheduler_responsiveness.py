@@ -134,7 +134,8 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
         release.set()
         owner.join(5)
     assert not owner.is_alive()
-    assert failures == []
+    if failures:
+        raise failures[0]
     assert delivered.is_set()
 
 
@@ -241,7 +242,8 @@ def test_real_observations_admit_work_while_a_task_owns_execution(tmp_path, monk
         release.set()
         owner.join(5)
     assert not owner.is_alive()
-    assert failures == []
+    if failures:
+        raise failures[0]
     # It never left the queue, which is the whole of what used to need a
     # separate recovery list.
     assert task in state.tasks.queued()
@@ -326,4 +328,5 @@ def test_an_operator_desk_message_is_answered_without_waiting_for_a_pass(tmp_pat
         daemon._stop.set()
         owner.join(10)
     assert not owner.is_alive()
-    assert failures == []
+    if failures:
+        raise failures[0]

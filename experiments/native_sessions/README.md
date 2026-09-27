@@ -2,9 +2,11 @@
 
 Manual experiments that drive **real, installed** provider CLIs (Codex and
 Claude Code, including Claude Code pointed at GLM) through Steward's own process
-broker. The unit suite speaks to scripted fake providers; these speak to the
-real thing, spend real tokens, and exist because a fake provider can only ever
-confirm what you already believed about the protocol.
+broker and its bounded ongoing-stdin primitive. The unit suite speaks to scripted
+fake providers; these speak to the real thing, spend real tokens, and exist
+because a fake provider can only ever confirm what you already believed about the
+protocol. The task journey runs the shipped runtime against a locally running
+release.
 
 They run in disposable temporary workspaces, homes, bare remotes and SQLite
 databases, and clean up after themselves. They do not touch any running steward.
@@ -75,7 +77,7 @@ These are the findings worth carrying, stated as rules:
   the native serial command root rather than counting results.
 - **"Interrupted" is not "stopped".** Codex acknowledged an interrupt and reported
   the turn interrupted while the fixture shell kept running in its own process
-  group. The adapter now calls the native terminal cleanup endpoint, and the
+  group. The adapter calls the native terminal cleanup endpoint, and the
   broker's containment remains the backstop. Do not release a workspace on a
   terminal event alone.
 - **Delivered bytes are not accepted input.** `--disconnect-only` drains the

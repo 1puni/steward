@@ -1,39 +1,68 @@
-"""Configured procedures create ordinary accepted tasks over exact Git inputs."""
+"""Configured procedures create ordinary accepted tasks over exact Git inputs.
+
+A rhythm over `input: world` is the one exception: it is an ordinary world turn
+in its own conversation, accepted like an operator's, not a task.
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
 import time
+import unicodedata
 from pathlib import Path
 
 from steward_harness.git_transport import GitTransportError
-from steward_harness.state import TaskId, TaskSpec, TaskStatus
+from steward_harness.lease import Busy
+from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
+from steward_harness.state import ConversationBusy, ConversationId, TaskId, TaskSpec, TaskStatus
 from steward_harness.task_store import ProcedureRun
+from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
 
 log = logging.getLogger(__name__)
 
 
-def resolve_input(reference, transports):
+def resolve_input(reference, transports, *, fetch=True):
     _, repository, branch = reference.split("/", 2)
     transport = transports[repository]
-    transport.fetch()
+    if fetch:
+        transport.fetch()
     candidate = transport._run("rev-parse", "--verify", f"refs/steward/remote/{branch}^{{commit}}")
     parents = transport._run("rev-list", "--parents", "-n", "1", candidate).split()
     return repository, candidate, parents[1] if len(parents) > 1 else candidate
 
 
+def captured(runs):
+    """Every commit a rhythm's finished runs captured: the input it has seen.
+
+    Only a finished run covers its input; a blocked or cancelled one reported
+    nothing about it.
+    """
+    return {sha for task in runs if task.status is TaskStatus.DONE
+            for sha in (task.procedure.candidate, *(task.procedure.activity or {}).values())}
+
+
+def interval(rhythms, name, now):
+    """The interval a rhythm is in; a dependent rhythm is in its predecessor's."""
+    rhythm = rhythms[name]
+    if rhythm.after is not None:
+        return interval(rhythms, rhythm.after, now)
+    return int((now - rhythm.offset) // rhythm.schedule)
+
+
 class Procedures:
-    def __init__(self, config, state, transports, *, world=None, native_heads=None):
+    def __init__(self, config, state, transports, *, world=None):
         self.config, self.state, self.transports = config, state, transports
         self.world = world
-        self.native_heads = native_heads
+        # Per quiet rhythm: the commits seen so far, and when the newest arrived.
         self._quiet = {}
 
     def request(self, name, repository, candidate, base, *, event="", owner=None, activity=None, workdir=None):
         config = self.config.procedures[name]
         instructions = Path(config.instructions).read_text()
-        payload = config.model_dump(mode="json") | {"text": instructions}
+        # A default left unsaid keeps the identity every earlier run was accepted under.
+        payload = config.model_dump(mode="json", exclude=set() if not config.fallback else {"fallback"})
+        payload["text"] = instructions
         if workdir is not None:
             payload["workdir"] = workdir
         identity = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -76,117 +105,170 @@ class Procedures:
                 failures.append(f"{name} ({task_id}): {(task.findings or '')[-4000:]}")
         return "\n\n".join(failures) if failures else (None if pending else "")
 
-    def _activity(self, definitions):
-        """Observe accepted work, never open model-writable checkouts as root."""
-        activity = {}
-        for name, transport in self.transports.items():
-            transport.fetch()
-            refs = transport._run("for-each-ref", "--format=%(refname) %(objectname)",
-                                  "refs/steward/remote/")
-            for line in refs.splitlines():
-                ref, sha = line.split()
-                branch = ref.removeprefix("refs/steward/remote/")
-                activity[f"repositories/{name}/{branch}"] = sha
-        ignored = {task_id for task_id, d in definitions.items() if d.procedure and
-                   (d.procedure.event.startswith("rhythm:") or d.procedure.access == "read-only")}
-        for task_id, definition in definitions.items():
-            if definition.work and task_id not in ignored:
-                activity[f"tasks/{task_id}"] = definition.work
-        if self.native_heads is not None:
-            activity.update({ref: sha for ref, sha in self.native_heads().items()
-                             if ref.rsplit("/", 1)[-1] not in ignored})
-        return activity
+    def observe(self, rhythm, definitions=None, heads=None, *, fetch=True):
+        """(repository, candidate, base, activity): the input a run would capture.
 
-    def _quiet_input(self, name, schedule, activity, definitions, now):
-        prefix = f"rhythm:{name}:"
-        own = {task_id for task_id, d in definitions.items()
-               if d.procedure and d.procedure.event.startswith(prefix)}
-        snapshot = dict(activity)
-        if self.world is not None:
-            snapshot["world"] = self.world.input_cursor()
-        consumed = {definitions[task].procedure.event: definitions[task].procedure.activity
-                    for task in own if definitions[task].procedure.activity is not None}
-        # Provenance belongs to the commit, not the ref that exposed it: a world
-        # commit that closed this rhythm's own result assessment is not new
-        # input, so each observation is projected back through its base.
-        parents, asked = {}, set()
-        pending = set(snapshot.values()) | {sha for saved in consumed.values() for sha in saved.values()}
-        while self.world is not None and pending - asked:
-            batch, asked = pending - asked, asked | pending
-            for sha, (source, base) in self.world.turn_sources(sorted(batch)).items():
-                if source.startswith("task_result:") and source.split(":")[1] in own:
-                    parents[sha] = base
-                    pending.add(base)
+        A repository rhythm's input is its candidate. An organisation rhythm
+        (`workdir`) reads across everything, so its input is also every observed
+        remote head and every ordinary task's accepted work. Task documents,
+        their acceptance commits and procedure runs' evidence are the steward's
+        own bookkeeping and never appear: a run cannot supply its successor's input.
+        """
+        heads = {} if heads is None else heads
 
-        def input_revision(sha):
-            while sha in parents:
-                sha = parents[sha]
-            return sha
+        def remote(name):
+            if name not in heads:
+                transport = self.transports[name]
+                if fetch:
+                    transport.fetch()
+                heads[name] = dict(line.split()[::-1] for line in transport._run(
+                    "for-each-ref", "--format=%(objectname) %(refname:strip=3)",
+                    "refs/steward/remote/").splitlines())
+            return heads[name]
 
-        inputs = {ref: input_revision(sha) for ref, sha in snapshot.items()}
-        digest = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
-        event = f"{prefix}quiet:{digest}"
-        previous = self._quiet.get(name)
-        known = (previous[0] if previous is not None else
-                 {input_revision(sha) for saved in consumed.values() for sha in saved.values()})
-        current = set(inputs.values())
-        if event in consumed:
-            self._quiet[name] = (known | current, None)
-            return None, snapshot
-        if previous is None:
-            # First observation establishes a baseline. After an accepted run,
-            # changed inputs across restart re-arm a full quiet period. Never
-            # trust a commit's timestamp to say when we observed its arrival.
-            changed = bool(consumed) and bool(current - known)
-            self._quiet[name] = (known | current, now if changed else None)
-            return None, snapshot
-        # Removing a ref or adding an alias for an observed commit is not work.
-        since = now if current - known else previous[1]
-        self._quiet[name] = (known | current, since)
-        ready = since is not None and now - since >= schedule.quiet
-        return (event if ready else None), snapshot
+        _, repository, _ = rhythm.input.split("/", 2)
+        remote(repository)
+        repository, candidate, base = resolve_input(rhythm.input, self.transports, fetch=False)
+        if rhythm.workdir is None:
+            return repository, candidate, base, None
+        activity = {f"repositories/{name}/{ref}": sha
+                    for name in self.transports for ref, sha in remote(name).items()}
+        if definitions is None:
+            definitions = {str(task.task_id): task.definition for task in self.state.tasks.all()}
+        activity.update({f"tasks/{task_id}": d.work for task_id, d in definitions.items()
+                         if d.work and not (d.procedure and (d.procedure.access == "read-only"
+                                                             or d.procedure.event.startswith("rhythm:")))})
+        return repository, candidate, base, activity
 
     def advance_rhythms(self, *, now=None):
+        """Admit each rhythm whose input holds a commit none of its finished runs saw.
+
+        An interval rhythm admits at most one run per interval and only then;
+        a quiet rhythm admits once its new input has stopped moving for its
+        quiet period.
+        """
         observed_now = time.monotonic() if now is None else now
         now = time.time() if now is None else now
         tasks = self.state.tasks.all()
         definitions = {str(task.task_id): task.definition for task in tasks}
-        quiet = any(not isinstance(r.schedule, int) for r in self.config.rhythms.values())
-        activity = None
-        if quiet:
-            try:
-                activity = self._activity(definitions)
-            except GitTransportError as error:
-                logging.getLogger(__name__).warning(
-                    "Rhythm activity sample failed; skipping quiet rhythms this poll: %s", error)
+        heads = {}
         for name, rhythm in self.config.rhythms.items():
+            if rhythm.input == "world":
+                continue  # A world turn, not a task: see `due_world_rhythms`.
             prefix = f"rhythm:{name}:"
-            snapshot = None
-            if isinstance(rhythm.schedule, int):
-                event = f"{prefix}{int(now // rhythm.schedule)}"
-            else:
-                if activity is None:
-                    continue
-                event, snapshot = self._quiet_input(name, rhythm.schedule, activity,
-                                                     definitions, observed_now)
-                if event is None:
-                    continue
+            runs = [task for task in tasks if task.procedure and task.procedure.event.startswith(prefix)]
             # Cancellation ends recurrence's obligation once native execution
             # has stopped. Holds and reopened idle slices still prevent overlap.
-            if any(task.procedure and task.procedure.event.startswith(prefix)
-                   and task.status not in {TaskStatus.DONE, TaskStatus.CANCELLED} for task in tasks):
+            # A blocked run is not running, and nothing retries it: the
+            # rhythm's next admission supersedes it rather than waiting forever.
+            open_runs = [task for task in runs if task.status not in {TaskStatus.DONE, TaskStatus.CANCELLED}]
+            if any(task.status is not TaskStatus.BLOCKED for task in open_runs):
                 continue
-            if snapshot is None:
-                repository, candidate, base = resolve_input(rhythm.input, self.transports)
-            else:
-                _, repository, _ = rhythm.input.split("/", 2)
-                candidate = snapshot[rhythm.input]
-                parents = self.transports[repository]._run("rev-list", "--parents", "-n", "1", candidate).split()
-                base = parents[1] if len(parents) > 1 else candidate
+            periodic = isinstance(rhythm.schedule, int)
+            event = f"{prefix}{interval(self.config.rhythms, name, now)}" if periodic else None
+            if periodic and any(task.procedure.event == event for task in runs):
+                continue
+            try:
+                repository, candidate, base, activity = self.observe(rhythm, definitions, heads)
+            except GitTransportError as error:
+                log.warning("Rhythm %s input unavailable this poll: %s", name, error)
+                continue
+            observed = {candidate, *(activity or {}).values()}
+            if observed <= captured(runs):
+                self._quiet.pop(name, None)
+                log.debug("Rhythm %s has no new input since its last run", name)
+                continue
+            if not periodic:
+                known, since = self._quiet.get(name, (set(), observed_now))
+                since = observed_now if observed - known else since
+                self._quiet[name] = (known | observed, since)
+                if observed_now - since < rhythm.schedule.quiet:
+                    continue
+                digest = json.dumps(activity if activity is not None else candidate, sort_keys=True)
+                event = f"{prefix}quiet:{hashlib.sha256(digest.encode()).hexdigest()}"
+                if any(task.procedure.event == event for task in runs):
+                    continue  # This exact input's run blocked or was cancelled.
+            for task in open_runs:
+                self.state.tasks.cancel(task.task_id, f"superseded by {event}")
             try:
                 self.request(rhythm.procedure, repository, candidate, base, event=event,
-                             owner=rhythm.owner, activity=snapshot, workdir=rhythm.workdir)
+                             owner=rhythm.owner, activity=activity, workdir=rhythm.workdir)
             except (OSError, ValueError) as error:
                 # A refused admission consumes no input; keep other rhythms and
                 # operator ingress alive while the operator repairs its policy.
                 log.error("Rhythm %s admission failed: %s", name, error)
+
+    def due_world_rhythms(self, *, now=None):
+        """Each world rhythm whose current interval has no settled run.
+
+        The source key is the whole idempotency: one turn per rhythm and
+        interval, replayed rather than repeated after a restart. A recorded
+        receipt settles the interval; an interrupted turn consumes it. A
+        dependent rhythm shares its predecessor's interval and waits for that
+        interval's accepted turn, so a failed predecessor ends the chain. A
+        rhythm with `paths` starts only when the world changed under them since
+        its last accepted run.
+        """
+        now = time.time() if now is None else now
+        for name, rhythm in self.config.rhythms.items():
+            if rhythm.input != "world":
+                continue
+            index = interval(self.config.rhythms, name, now)
+            key = f"rhythm:{name}:{index}"
+            prior = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
+            if self.state.result_receipt(key) or (prior is not None and prior.state == "interrupted"):
+                continue
+            if rhythm.after is not None:
+                before = self.state.turn_for_source(
+                    ConversationId(f"rhythm:{rhythm.after}"), f"rhythm:{rhythm.after}:{index}")
+                if before is None or before.state != "completed":
+                    continue
+            if rhythm.paths and prior is None and not self._world_changed(name, rhythm.paths):
+                continue
+            yield name, key
+
+    def _world_changed(self, name, paths):
+        """Did the world change under `paths` since this rhythm's last accepted run?
+
+        The cursor is that run's own candidate, not its base: what it wrote is
+        in both sides of the comparison, so its writes never retrigger it,
+        while anything another turn wrote since its base still counts.
+        """
+        last = self.state.last_world_candidate(ConversationId(f"rhythm:{name}"))
+        return last is None or self.world.changed(last, paths)
+
+    def run_world_rhythm(self, conversations, name, key):
+        """Run one interval as a world turn, then hand any reply to its owner."""
+        rhythm = self.config.rhythms[name]
+        procedure = self.config.procedures[rhythm.procedure]
+        owner = ConversationId(f"rhythm:{name}")
+        self.state.open_conversation(owner, provider=procedure.provider,
+                                     profile=self.state.tasks.default_profile)
+        if self.state.turn_for_source(owner, key) is None:
+            # Each interval starts a fresh session on the procedure's provider:
+            # the world, not yesterday's session, carries what was consolidated.
+            self.state.bind_conversation_provider(owner, procedure.provider, None)
+        try:
+            result = conversations.run_turn(
+                transport="rhythm", transport_key=name, source_event_key=key,
+                operator_id="harness:rhythm", text=Path(procedure.instructions).read_text(),
+                episode_input=f"Scheduled {name} rhythm ({key}).",
+                allow_empty_output=True, procedure=procedure,
+            )
+        except (Busy, ConversationBusy, WorldContentConflict, WorldUpdatePending) as error:
+            log.info("world rhythm %s deferred: %s", key, error)
+            return
+        except (RuntimeExecutionError, RuntimeUnavailable, OSError, ValueError) as error:
+            # The interval is consumed: at most one run, never a retry storm.
+            log.error("world rhythm %s failed: %s", key, error)
+            return
+        reply = result.reply_text.strip()
+        # Told to stay silent, a model will sometimes send an invisible
+        # character instead of nothing. A reply with nothing to read is none.
+        if not any(unicodedata.category(c)[0] not in "CZ" for c in reply):
+            reply = ""
+        # The ordinary result lane delivers a pending receipt to its owner.
+        self.state.save_result_receipt({
+            "owner": rhythm.owner, "task_id": None, "source_key": key,
+            "result_text": reply, "reply": reply, "done": not (reply and rhythm.owner),
+        })

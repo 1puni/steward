@@ -175,9 +175,9 @@ protecting them.
 | `tasks` | Optional private remote for accepted `tasks/*` refs |
 | `repositories` | Remotes, default branches, gates and review requirements; configuring one *is* the authority to work in it |
 | `pipelines`, `incident_policy` | Probes, failure confirmation and repair allowance |
-| `world` | The Git world, plus an optional reconciliation procedure |
-| `procedures` | Instructions, model and access settings |
-| `rhythms` | Interval triggers for procedures |
+| `world` | The Git world for durable knowledge; optional named reconciliation procedure |
+| `procedures` | Accepted instructions, access, and a preferred provider, model and effort that falls back through the provider order unless `fallback: false` |
+| `rhythms` | Non-overlapping interval (with optional `offset`) or quiet triggers for procedures, admitted only on new input; `input: world` runs one world turn per interval, optionally only on change under `paths`, or `after` another world rhythm |
 | `targets` | Desired refs, installed drivers and required evidence |
 | `telegram`, `desk` | Optional conversation and result transports |
 

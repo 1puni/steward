@@ -44,7 +44,8 @@ constant.
 
 ## Substrate members
 
-Seven surfaces, and where each one stands:
+Seven surfaces, and where each one stands. The status describes the local
+implementation; deployment is a separate acceptance boundary.
 
 | # | Surface | Status |
 | --- | --- | --- |
@@ -218,7 +219,9 @@ observe a clean drain while systemd kills its subagents. Check the unit's
 
 Owning each invocation as its own transient service, entered before the workload
 can fork, removes the three code-path defects at once: systemd cleans descendants
-on success, cancellation and controller death alike.
+on success, cancellation and controller death alike. Invocation units run as
+their own services in `system.slice`, outside the controller's cgroup, which is
+what keeps provider work out of reach of the controller's `KillMode` reap.
 
 ## Not established
 
@@ -229,9 +232,10 @@ exist — `_stop_process_group`'s `SIGKILL`, systemd's cgroup reap under
 `KillMode=mixed`, and cgroup-OOM where a memory limit is set. They leave
 different traces: a journal restart, a `dmesg` OOM record, or neither. Until one
 incident is attributed, it is unknown whether a grace window would have changed
-any observed outcome, or whether the fix belongs entirely in unit policy. See
-[failure boundaries](failure-boundaries.md) for what a shutdown observation can
-establish.
+any observed outcome, or whether the fix belongs entirely in unit policy.
+Shutdown observations are easy to over-read; attribute an exit before building
+on it. See [failure boundaries](failure-boundaries.md) for what a shutdown
+observation can establish.
 
 **The native grace has not been established as a checkpoint-time guarantee.**
 The ten-second policy bounds interruption before containment; real providers
