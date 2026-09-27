@@ -222,6 +222,12 @@ Pre-1.0 and MIT licensed, with real work behind it and unfinished business in pl
 sight. It has run real organisational work, and those instances found real defects,
 which is the point: real worlds find the gaps, and Git carries the lessons home.
 
+It was built for its first month in a private repository, alongside the instances
+that ran it, and that repository keeps the complete history. The first commits here
+are clean snapshots of it. From September 27, 2026 the harness is developed in the
+open, in this repository; the instances keep private copies that follow it, and
+their fixes come back as pull requests.
+
 What that does **not** mean:
 
 - **Linux-first.** Production authority needs a Linux host with a separate
