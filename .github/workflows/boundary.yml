@@ -1,0 +1,28 @@
+# Instances keep private copies of this repository that carry their own
+# installation files, task documents and native transcripts. Those paths never
+# belong here, whichever copy a change was cut from. The private copies carry
+# this file too, so the job runs only in the public repository.
+name: boundary
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  private-paths:
+    if: github.repository == '1puni/steward'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse private-copy paths
+        run: |
+          found=$(git ls-files -- instances tasks artefacts memories output \
+            | grep -v '^output/stewardship-flow/stewardship-flow.html$' || true)
+          if [ -n "$found" ]; then
+            echo "These paths belong to an instance's private copy:"
+            echo "$found"
+            exit 1
+          fi
