@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import time
+import unicodedata
 from pathlib import Path
 
 from steward_harness.git_transport import GitTransportError
@@ -262,6 +263,10 @@ class Procedures:
             log.error("world rhythm %s failed: %s", key, error)
             return
         reply = result.reply_text.strip()
+        # Told to stay silent, a model will sometimes send an invisible
+        # character instead of nothing. A reply with nothing to read is none.
+        if not any(unicodedata.category(c)[0] not in "CZ" for c in reply):
+            reply = ""
         # The ordinary result lane delivers a pending receipt to its owner.
         self.state.save_result_receipt({
             "owner": rhythm.owner, "task_id": None, "source_key": key,
