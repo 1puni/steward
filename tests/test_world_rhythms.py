@@ -109,10 +109,12 @@ def test_failed_interval_is_consumed_rather_than_retried(tmp_path):
     assert not (checkpoint.world.root / "decision.md").exists()
 
 
-def test_silent_world_rhythm_settles_without_a_delivery(tmp_path):
+# Staging's first night on GLM replied with a lone word joiner.
+@pytest.mark.parametrize("output", ["", " \n", "\u2060", "\u200b\ufeff "])
+def test_silent_world_rhythm_settles_without_a_delivery(tmp_path, output):
     class Silent(EditingCognition):
         def run(self, request, *, execution_id=None):
-            return replace(super().run(request, execution_id=execution_id), output="")
+            return replace(super().run(request, execution_id=execution_id), output=output)
 
     config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, Silent())
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
