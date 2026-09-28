@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from steward_harness.notify import DIRECTIVE as NOTIFY_DIRECTIVE
+from steward_harness.notify import DIRECTIVE as NOTIFY_DIRECTIVE, MARKER as NOTIFY_MARKER
 
 
 TASK_PROPOSAL_DIRECTIVE = """\
@@ -44,11 +44,14 @@ The COMMIT closure line supplies a subject for that harness checkpoint, not an
 instruction to run git commit."""
 
 
-RHYTHM_FINDINGS = """\
-Findings above the closure lines are delivered to this rhythm's owner. When
-nothing material is new since this rhythm's previous run, write no findings:
-end with only the three closure lines and say so in the COMMIT subject. The
-harness retains that checkpoint as evidence and notifies no one."""
+RHYTHM_FINDINGS = f"""\
+Findings above the closure lines are retained as this run's evidence and sent
+to no one by default. Only a line starting `{NOTIFY_MARKER}` notifies this
+rhythm's owner: everything from that line up to the closure lines is the
+message. Notify only about a material new finding, a changed outcome, or a
+decision the operator must make. When nothing material is new since this
+rhythm's previous run, write no findings: end with only the three closure
+lines and say so in the COMMIT subject."""
 
 
 _TASK_CLOSURE = """\
@@ -253,9 +256,19 @@ def _bounded_brief(brief: str) -> str:
             + f"\n\n[The task record continues for {rest} more characters on the task's branch.]")
 
 
-def build_result_assessment_request(brief: str, result_text: str, *, quiet: bool) -> str:
-    """Compose the controller observation consumed by the ordinary world turn."""
+def build_result_assessment_request(brief: str, result_text: str, *, quiet: bool,
+                                    notice: str = "") -> str:
+    """Compose the controller observation consumed by the ordinary world turn.
+
+    A scheduled run reaches this only when it asked to notify; `notice` is
+    what it asked to send, and it is sent unless this turn sends its own.
+    """
     delivery_instruction = (
+        f"The run asked to tell the operator:\n{notice}\n\n"
+        "That message is sent as written. To send your own message in its place, "
+        f"start a line with `{NOTIFY_MARKER}`: everything from that line on is sent instead. "
+        "Anything else you write is recorded, not sent. "
+        if notice else
         "This is an automatic observation. Its full evidence is retained. "
         "Notify only about a material new finding, changed outcome, or needed operator decision. "
         "Already-owned unchanged findings need no notification. Complete without a final "
