@@ -129,18 +129,8 @@ class WorldTurnCheckpoint:
         for git_path in git_operation_paths(lambda *args: self._git(path, *args).stdout).values():
             if self.broker.path_exists(git_path):
                 return
-        # Only completed acceptance for this world authorizes retiring the
-        # original candidate history after a rebase. Trailers alone can also
-        # appear in unaccepted native commits.
-        local = set(self._git(path, "rev-list", "HEAD", f"^{head}").stdout.splitlines())
-        with self.state.connect() as connection:
-            accepted = local & {row[0] for row in connection.execute(
-                "SELECT candidate_sha FROM turns WHERE state='completed' AND world_root=? "
-                "AND candidate_sha IS NOT NULL", (str(self.world.root),),
-            )}
-        consumed = accepted and not self._git(
-            path, "rev-list", "HEAD", "--not", head, *sorted(accepted),
-        ).stdout.strip()
+        accepted = self._accepted_candidates(path, head)
+        consumed = accepted and not self.unaccepted(path, head, accepted)
         command = (
             ("checkout", "--detach", "--no-overwrite-ignore", head)
             if consumed else
@@ -165,6 +155,37 @@ class WorldTurnCheckpoint:
             raise WorldContentConflict(
                 f"accepted world conflicts with retained workspace: {path}: {detail}"
             )
+
+    def _accepted_candidates(self, path: Path, head: str, connection=None) -> set[str]:
+        """Local commits of `path` that completed acceptance into this world consumed.
+
+        Only completed acceptance for this world authorizes retiring the
+        original candidate history after a rebase. Trailers alone can also
+        appear in unaccepted native commits.
+        """
+        local = set(self._git(path, "rev-list", "HEAD", f"^{head}").stdout.splitlines())
+        if not local:
+            return set()
+        query = ("SELECT candidate_sha FROM turns WHERE state='completed' AND world_root=? "
+                 "AND candidate_sha IS NOT NULL", (str(self.world.root),))
+        if connection is not None:
+            return local & {row[0] for row in connection.execute(*query)}
+        with self.state.connect() as connection:
+            return local & {row[0] for row in connection.execute(*query)}
+
+    def unaccepted(self, path: Path, head: str, accepted: set[str] | None = None,
+                   *, connection=None) -> list[str]:
+        """Commits of `path` that neither `head` nor a completed acceptance holds.
+
+        A candidate the world rebased past a concurrent writer lands as a new
+        commit, so its original is never an ancestor of the world. Its turn's
+        completed receipt is what says the work was accepted.
+        """
+        if accepted is None:
+            accepted = self._accepted_candidates(path, head, connection)
+        return self._git(
+            path, "rev-list", "HEAD", "--not", head, *sorted(accepted),
+        ).stdout.split()
 
     def retain(
         self,
