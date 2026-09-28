@@ -872,7 +872,18 @@ class StewardDaemon:
                 state.save_result_receipt(receipt)
                 log.warning("result %s deferred: %s", receipt["source_key"], error)
 
+        reminded = [None]
+
         def result_owners() -> Iterator[Owner]:
+            # A stuck task is named again at most daily; reading every task
+            # to decide that is worth doing once an hour, not every pass.
+            hour = int(time.time() // 3600)
+            if reminded[0] != hour:
+                reminded[0] = hour
+                try:
+                    state.remind_open_tasks()
+                except (GitTransportError, OSError, ValueError) as error:
+                    log.warning("open task reminder deferred: %s", error)
             # External target transitions have no task owner. Assign a real
             # configured operator route; never invent a topic or a task.
             for receipt in state.pending_result_receipts():
