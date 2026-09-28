@@ -159,6 +159,61 @@ def test_a_world_rhythm_sends_what_follows_its_notify_line(tmp_path, output, mes
     assert receipt["result_text"] == output.strip()
 
 
+def _delivering(tmp_path, cognition):
+    config, state, checkpoint, service, cognition, _ = _rhythm(tmp_path, cognition)
+    data = config.model_dump(mode="json")
+    data["rhythms"]["sleep"]["deliver"] = "morning_brief.md"
+    config = StewardConfig.model_validate(data)
+    return config, state, checkpoint, service, Procedures(config, state, {}, world=checkpoint.world)
+
+
+def test_a_rhythm_that_rewrote_its_deliver_file_sends_the_file(tmp_path):
+    brief = "Good morning, V.\n\nTwo days to Wednesday.\n"
+    config, state, checkpoint, service, procedures = _delivering(
+        tmp_path, _replying("<br>", write={"morning_brief.md": brief}))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    receipt = state.result_receipt("rhythm:sleep:20")
+    assert receipt["reply"] == brief.strip() and not receipt["done"]
+    # The file is the message whatever the reply says, a NOTIFY line included.
+    state, checkpoint, service, _ = runtime(
+        tmp_path, _replying("NOTIFY: See the brief.", write={"morning_brief.md": brief + "More.\n"}))
+    procedures = Procedures(config, state, {}, world=checkpoint.world)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
+    assert state.result_receipt("rhythm:sleep:21")["reply"] == (brief + "More.").strip()
+
+
+def test_an_unchanged_deliver_file_is_not_resent(tmp_path):
+    brief = "Good morning, V.\n"
+    config, state, checkpoint, service, procedures = _delivering(
+        tmp_path, _replying("", write={"morning_brief.md": brief}))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert state.result_receipt("rhythm:sleep:20")["reply"] == brief.strip()
+    # The next night leaves it as it was: only an explicit notification is sent.
+    state, checkpoint, service, _ = runtime(
+        tmp_path, _replying("NOTIFY: Sleep did not complete.", write={"morning_brief.md": brief}))
+    procedures = Procedures(config, state, {}, world=checkpoint.world)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
+    assert state.result_receipt("rhythm:sleep:21")["reply"] == "Sleep did not complete."
+
+
+def test_a_long_deliver_file_is_cut_with_a_pointer(tmp_path):
+    from steward_harness.procedures import DELIVERY_LIMIT
+    config, state, checkpoint, service, procedures = _delivering(
+        tmp_path, _replying("", write={"morning_brief.md": "x" * (DELIVERY_LIMIT + 50)}))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    reply = state.result_receipt("rhythm:sleep:20")["reply"]
+    assert reply.startswith("x" * DELIVERY_LIMIT)
+    assert reply.endswith("[morning_brief.md continues in the world.]")
+
+
+def test_deliver_names_a_file_inside_the_world(tmp_path):
+    (tmp_path / "world").mkdir()
+    data = _config(tmp_path, tmp_path / "world").model_dump(mode="json")
+    data["rhythms"]["sleep"]["deliver"] = "../outside.md"
+    with pytest.raises(ValueError, match="inside the world"):
+        StewardConfig.model_validate(data)
+
+
 def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path):
     config, state, checkpoint, service, cognition, procedures = _rhythm(
         tmp_path, _replying("Investigation saved.\nNOTIFY: Investigation saved for the morning."))
