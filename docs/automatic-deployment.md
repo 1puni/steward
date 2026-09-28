@@ -58,7 +58,8 @@ input. Missing capability or a review question remains visible on its task.
 ## Git quiet periods and intervals
 
 A procedure rhythm runs only on new input. Before admission the controller
-fetches what the rhythm reads and compares it with the commits its finished
+reads the observed refs of what the rhythm reads, [fetched by targets or once
+per bucket](rhythms.md), and compares them with the commits its finished
 runs captured. A repository rhythm reads its `input` ref: its input is that
 candidate commit. A rhythm with a `workdir` reads the organisation: its input is
 also every observed `refs/steward/remote/*` head of every configured repository
