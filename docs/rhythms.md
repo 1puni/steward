@@ -40,6 +40,20 @@ commits (`candidate`, and `activity` for an organisation run), so the rhythm's
 own finished runs are the cursor; there is no second record of what it has seen.
 Deleting a branch or naming an already seen commit again is not new input.
 
+Admission reads observed refs; it is not a second fetcher. The pass that asks
+runs every few seconds, and fetching every repository on each one kept an idle
+controller busy doing network round trips that found nothing. A repository
+some configured target follows is fetched by that target's own observation,
+at least once a minute, and a rhythm reads its refs as that fetch left them. The
+rhythm's `input` repository, and every repository no target follows, are
+fetched once, on the rhythm's first observation in each bucket: its interval,
+or for a quiet schedule its quiet period. An idle bucket then costs local ref
+reads and no network. The price is latency for input nothing else fetches: a
+commit on such a repository is seen at the next bucket, never missed. The
+input repository's once-per-bucket fetch also keeps a rhythm current when its
+input's target is stopped or failing. `/rhythm run` still fetches everything
+the rhythm reads before it captures input.
+
 Reading everything is not the same as being for everything. An organisation
 rhythm can set `paths` to the activity it exists to follow, as prefixes of its
 activity keys, `repositories/<name>/<branch>` and `tasks/<id>`:
