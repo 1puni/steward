@@ -164,7 +164,7 @@ configured owner affects future runs; an already accepted bucket keeps its owner
 
 ## Model preference
 
-A procedure's `provider` and `model` are a preference: this provider, running
+A procedure's `provider` and `model` (or its [ordered model list](#ordered-model-list)) are a preference: this provider, running
 this model at this effort. `effort` is part of the choice and reaches Codex as
 its reasoning effort and Claude as `--effort`; leave it out and the provider
 decides. If the preferred provider cannot take the run, for whatever reason, the
@@ -186,9 +186,47 @@ procedures:
 
 A pinned run tries its provider and nothing else. When that provider cannot
 take it, the run fails like any other unavailable provider: a task blocks and a
-world rhythm consumes its interval. There is no ordered list of models. The
-fallback order is the configured family order and each fallback's model is its
-configured profile, so a per-procedure list would be a second copy of both.
+world rhythm consumes its interval.
+
+### Ordered model list
+
+A procedure may instead carry an ordered `models` list, each entry a provider,
+its model and its effort:
+
+```yaml
+procedures:
+  light-review:
+    instructions: /etc/steward/procedures/light-review.md
+    models:
+      - {provider: codex, model: configured-model-a, effort: high}
+      - {provider: claude, model: configured-model-b, effort: medium}
+      - {provider: glm, model: configured-model-c}
+```
+
+The list is walked in order until an entry takes the run. An entry is passed over
+for any reason the provider cannot take it: not installed or unavailable, a usage
+limit, a refusal of the turn, or a scoped read the provider cannot isolate. An
+entry runs its own provider, model and effort exactly and never borrows another
+entry's model; a missing `effort` means that provider decides. Effort reaches
+Codex as reasoning effort and Claude as `--effort`, as for a single preference.
+When every entry has declined, the run fails like any unavailable provider,
+naming each entry's reason: a task blocks, a world rhythm consumes its interval.
+Nothing else changes: the change guard, blocked-run supersession, read-only rules
+and the rule that public desk cognition never falls back to unrestricted
+cognition apply as before.
+
+Precedence and validation, all at config load:
+
+- `models` replaces `provider` and `model`; naming both is refused, and one of
+  the two forms is required.
+- The list is the whole order. `provider.family_order` is not appended, so a
+  provider absent from the list is never tried.
+- `fallback: false` keeps only the first entry: a pin to that entry.
+- The list must be non-empty, name each provider once, and name only providers
+  in `provider.family_order` (the provisioned ones). Effort must be one of
+  `low`, `medium`, `high`, `xhigh`, `max`; the vocabulary is shared, and a
+  gateway family such as `glm` is not promised to accept it.
+- Without `models`, behaviour is exactly the single preference above.
 
 ## World rhythms
 

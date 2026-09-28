@@ -29,3 +29,22 @@ class ModelChoice(BaseModel):
 
     model: str
     effort: ReasoningEffort | None = None
+
+
+class ModelEntry(BaseModel):
+    """One step of a procedure's ordered model list: a provider, its model and effort.
+
+    An entry is exact. It never borrows another entry's model, and it never
+    falls back to the provider's configured profile: an absent effort means the
+    provider decides, as it does for `ModelChoice`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str
+    model: str
+    effort: ReasoningEffort | None = None
+
+    @property
+    def choice(self) -> ModelChoice:
+        return ModelChoice(model=self.model, effort=self.effort)
