@@ -844,8 +844,14 @@ class StewardDaemon:
             if paused() or not self.config.rhythms:
                 return
             yield ("rhythms",), self._procedures.advance_rhythms
-            for name, key in self._procedures.due_world_rhythms():
-                yield ("rhythm", name), lambda name=name, key=key: (
+            # World rhythms are one owner. Each writes the same world, and two
+            # started together make the later one's candidate a replay of a
+            # world that moved under it; the lease keeps that correct, not
+            # cheap. While one runs the owner is in flight, so the next due
+            # rhythm, in configured order, starts on the first poll after it.
+            due = next(iter(self._procedures.due_world_rhythms()), None)
+            if due is not None:
+                yield ("rhythm", "world"), lambda name=due[0], key=due[1]: (
                     self._procedures.run_world_rhythm(conversations, name, key))
 
         def targets() -> Iterator[Owner]:

@@ -302,6 +302,35 @@ def _chain(tmp_path, cognition=None, rhythms=CHAIN):
         config, state, {}, world=checkpoint.world)
 
 
+def test_the_pass_starts_one_world_rhythm_at_a_time_in_configured_order(tmp_path):
+    # Staging and REM both came due the moment Sleep finished, and started in
+    # the same second. They are one owner now: REM runs, then Staging.
+    staging = {"schedule": 3600, "procedure": "sleep", "input": "world", "owner": None}
+    rhythms = {"sleep": CHAIN["sleep"] | {"owner": None}, "rem": CHAIN["rem"], "staging": staging}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml")
+    daemon._procedures = procedures
+    ran = []
+    run = procedures.run_world_rhythm
+    procedures.run_world_rhythm = lambda service, name, key: (ran.append(name), run(service, name, key))
+    queued = []
+    kernel = SimpleNamespace(
+        dispatch=SimpleNamespace(submit=lambda key, work: queued.append((key, work)),
+                                 reap=lambda: None),
+        owners=lambda: (), tasks=SimpleNamespace(flush_inputs=lambda: None),
+    )
+    step = daemon._pass(state, service, kernel, SimpleNamespace(), None)
+    for _ in range(4):
+        queued.clear()
+        step()
+        world = [work for key, work in queued if key[0] == "rhythm"]
+        assert [key for key, _ in queued if key[0] == "rhythm"] == ([("rhythm", "world")] if world else [])
+        for work in world:
+            work()
+    assert ran == ["sleep", "rem", "staging"]
+    assert cognition.calls == 3
+
+
 def test_a_chain_runs_each_rhythm_after_its_predecessor_completes(tmp_path):
     config, state, checkpoint, service, cognition, procedures = _chain(tmp_path)
     ran = []
