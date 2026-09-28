@@ -4,20 +4,144 @@
 
 # Steward Harness
 
-**Somebody has to finish the job.**
+**Git is a filesystem with infinite history.**
 
-"I'll get back to it" is not an operating system. Steward Harness is an
-organisation pipeline for moving *anything* forward: a codebase, a company's
-paperwork, a research thread, a website, the harness itself. A request comes in.
-A model does the thinking in a real checkout, with real tools. Nothing becomes
-real until the harness has checked the exact revision it is about to publish.
+You can put code in it. You can put knowledge in it. You can branch reality, let an
+intelligence mess around in a private possible future, inspect exactly what changed,
+test that exact universe, and then decide whether it deserves to become real.
 
-> The model proposes. The harness disposes.
+Steward is what happens when you take that seriously.
 
-It is built on Git, it is provider-neutral, and it is deliberately small in the
-places most agent frameworks are large. There is no workflow engine, no agent
-graph, no memory palace and no scheduler. There are files, commits, processes
-and a controller that holds the keys.
+It is not another agent framework. It is a tiny deterministic harness around
+autonomous intelligence: the model gets somewhere durable to think, work, remember,
+wander, sleep, wake up, and propose changes. The harness keeps the keys.
+
+| Steward is | Steward is not |
+| --- | --- |
+| A controller around native agent CLIs (Claude Code, Codex, GLM) that bring their own reasoning loops, tools and subagents | An agent framework: no agent graph, role system or tool catalogue of its own |
+| Git as the durable world: tasks, decisions, findings and knowledge are files and commits | A memory service, vector store or proprietary session format |
+| One daemon with one worker budget, first asked, first served | A workflow engine, scheduler or message bus |
+| Exact-revision gates: the commit that was tested is the commit that is pushed | A CI system: gates are your repository's own test and build commands |
+| Target drivers that observe what a destination actually serves | A deployment platform: your release system still deploys, and Steward checks that it did |
+| A separate Unix identity for everything the model runs, with credentials kept by the controller | A sandbox product: the boundary is OS permissions, or it isn't there |
+| Operated from Telegram and the host CLI | A dashboard: the task board browses and changes nothing |
+
+## What is this?
+
+### Private possible futures
+
+A task is one admitted intention attached to one retained Git world.
+
+The agent does not "run a workflow". It gets a private possible future to inhabit: a
+checkout of its own, where it can think, edit, commit, change its mind and try again.
+Its files and commits retain what happened. When it believes the work is finished,
+Steward tests the exact candidate revision, applies the required reviews and policy,
+and publishes exactly that revision—or refuses to.
+
+Git gives you what exists now, everything that existed before, and cheap alternate
+futures branching from any point in that history. That is most of the primitives an
+autonomous system actually needs:
+
+- **files** are human- and model-readable current truth;
+- **commits** are immutable snapshots with provenance;
+- **diffs** say precisely what changed;
+- **branches** are possible futures;
+- **merges and rebases** reconcile those futures;
+- **remotes** transport accepted reality;
+- **checkout and revert** make recovery ordinary.
+
+Durable knowledge lives beside the thing that owns it instead of inside a proprietary
+memory palace. Repository knowledge lives in the repository. Organisation knowledge
+lives in the organisation world. A future model from a provider that does not exist yet
+can wake up, read the files, read the history, and understand what we currently believe
+and how we got there.
+
+### Executive function for non-executive fucks
+
+Models are remarkably good at reasoning, language, invention, association, and
+recognising that something is deeply fucked.
+
+They are less reliably good at:
+
+- choosing one bounded thing;
+- not quietly turning it into twelve things;
+- remembering exactly where they got to;
+- distinguishing “I tried” from “it happened”;
+- checking the exact thing they intend to ship;
+- resuming honestly after interruption.
+
+Humans, regrettably, are not universally excellent at these either.
+
+Steward externalises that boring machinery. The intelligence gets a world in which it
+can be intelligent. The harness remembers the sequence, owns authority, and refuses to
+hallucinate completion.
+
+## The trick
+
+> **The model proposes; the harness disposes.**
+
+A model's proposal is a branch. Only the harness turns an exact, tested revision into
+reality.
+
+> **The harness refuses to invent a story.**
+
+If the process dies, another controller looks at Git, the evidence, and the outside
+world, and continues. Crash recovery, exact-SHA publication, target observation, task
+state and provenance are all the same refusal: nothing is true because someone said it
+happened, only because the retained branch, the checkpoint, the test evidence, the
+remote refs and the live release say so.
+
+> **One fact, one representation.**
+
+If the accepted outcome is commit `abc123`, we do not also maintain a database field,
+provider session state, adapter object and workflow node all claiming to describe the
+same reality. The alternative appears to be databases full of task state, proprietary
+memory systems, agent graphs, message buses, orchestration fabrics, synchronisation
+layers, and adapters translating between six different representations of what was
+supposedly one fact. We would rather have one. Usually a Git commit.
+
+That is why Steward deletes machinery so aggressively. It is not minimalism for sport:
+every second representation is a translation layer, and every translation layer is a
+place for two descriptions of reality to disagree.
+
+> **Imagination is broad. Authority is narrow.**
+
+Models can be given extraordinary freedom precisely because the boundary around reality
+is tiny and deterministic. Providers, model-controlled Git, gates, probes and adapters
+run as an untrusted identity. The landing credential, tokens, release mutation and service
+control stay with the controller. The model may create a brilliant future or a terrible
+one. Either way, it created a branch.
+
+## Sixty-second architecture
+
+Underneath the philosophy, Steward is an organisation pipeline built on Git.
+
+Native agents reason in retained task checkouts. Accepted Git refs and their committed
+task documents own requests, decisions, findings, and work. A fresh controller can
+execute them without prior native sessions or a database pretending to be the canonical
+task. The controller owns admission, exact-input gates, publication, credentials, and
+target policy.
+
+```text
+operator / rhythm / incident → accepted Git task → native work and checkpoint
+                                        │
+                             one integrated outcome commit
+                                        │
+                              gates / required reviews → push
+                                        │
+                     named targets observe refs → apply exact revision → observe
+```
+
+Product tasks finish when their exact accepted outcome is observed on the remote.
+Read-only procedure tasks finish as retained evidence. Targets converge independently;
+one repository can feed several targets following different refs. Conversation edits
+cross their [world acceptance boundary](docs/world-turn-durability.md).
+
+That sounds almost insultingly simple.
+
+It is.
+
+Everything else should justify its existence.
 
 ## What's in the workshop
 
@@ -44,16 +168,6 @@ and a controller that holds the keys.
   exact revision and report whether it actually came up healthy. The included
   systemd driver can deploy the harness to itself, with rollback.
 
-```text
-operator / rhythm / incident → accepted Git task → native work and checkpoint
-                                        │
-                             one integrated outcome commit
-                                        │
-                              gates / required reviews → push
-                                        │
-                     named targets observe refs → apply exact revision → observe
-```
-
 ## Who it's for
 
 People who want AI to *finish* things, not just generate them. An individual with
@@ -66,23 +180,6 @@ host, you log in to your providers, you decide what it may touch. It is also not
 personality. The harness has no voice of its own; whatever voice you give your
 steward lives in its world, not here. ([GuruGee](https://1puni.com) is one such
 voice, built on top. GG is the voice. Steward is the workshop.)
-
-## The doctrine, in a few lines
-
-- Do not model the mess. Model the structure that generated the mess.
-- If 90% of a system is translating the same data into different shapes, the
-  ratio itself tells you the system is broken.
-- One representation per fact, usually a Git commit. Delete the adapter that would
-  have hidden the disagreement.
-- Prefer an invariant the representation holds for free over a check someone has
-  to remember.
-- Separate intelligence from authority. Models reason broadly; they act narrowly.
-- Demolish, then fill. Never take a line budget.
-- A green test suite says what it tested, and nothing more.
-
-The long version, with the arguments: [engineering doctrine](docs/engineering-doctrine.md).
-The why, with swearing: [Git, Sleep, and Executive Function for Non-Executive
-Fucks](docs/git-sleep-and-executive-function.md).
 
 ## Five minutes, then an afternoon
 
@@ -279,6 +376,9 @@ version:
   harness will not do for you.
 - [Kernel contract](docs/kernel-contract.md): authority, sources of truth, crash rules.
 - [Engineering doctrine](docs/engineering-doctrine.md): how to think about all of it.
+- [Git, Sleep, and Executive Function for Non-Executive
+  Fucks](docs/git-sleep-and-executive-function.md): why it is built like this, and
+  why live systems rather than feature lists write the roadmap.
 
 ## Development
 
