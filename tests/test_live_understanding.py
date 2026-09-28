@@ -253,6 +253,10 @@ def test_running_parent_offers_understanding_while_child_works(tmp_path):
             state.tasks.note(task_id, "check the archive consumer too")
             runner.flush_inputs()
             assert adapter.delivered[-1].text == "note: check the archive consumer too"
+            # An offer's reply is a receipt, so the session's answer to it
+            # never becomes the task's closure; a note is work and can be.
+            assert [m.receipt for m in adapter.delivered if m.author == "steward"] == [True]
+            assert adapter.delivered[-1].receipt is False
             stale = offer(cwd, task_id, accepted, "## Understanding\n\nStale second offer.")
             refused = replies(adapter, 2)[-1]
             noted = tip(state, task_id)
