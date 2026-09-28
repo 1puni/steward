@@ -40,6 +40,45 @@ commits (`candidate`, and `activity` for an organisation run), so the rhythm's
 own finished runs are the cursor; there is no second record of what it has seen.
 Deleting a branch or naming an already seen commit again is not new input.
 
+Admission reads observed refs; it is not a second fetcher. The pass that asks
+runs every few seconds, and fetching every repository on each one kept an idle
+controller busy doing network round trips that found nothing. A repository
+some configured target follows is fetched by that target's own observation,
+at least once a minute, and a rhythm reads its refs as that fetch left them. The
+rhythm's `input` repository, and every repository no target follows, are
+fetched once, on the rhythm's first observation in each bucket: its interval,
+or for a quiet schedule its quiet period. An idle bucket then costs local ref
+reads and no network. The price is latency for input nothing else fetches: a
+commit on such a repository is seen at the next bucket, never missed. The
+input repository's once-per-bucket fetch also keeps a rhythm current when its
+input's target is stopped or failing. `/rhythm run` still fetches everything
+the rhythm reads before it captures input.
+
+Reading everything is not the same as being for everything. An organisation
+rhythm can set `paths` to the activity it exists to follow, as prefixes of its
+activity keys, `repositories/<name>/<branch>` and `tasks/<id>`:
+
+```yaml
+rhythms:
+  launch-reflection:
+    workdir: /srv/organisation
+    schedule: 10800
+    procedure: launch-reflection
+    input: repositories/company/main
+    paths: [repositories/landing/main, repositories/app/main]
+    owner: telegram:3
+```
+
+Its runs then capture only those keys and its `input` candidate, so only a
+new commit on those lines, or on the input ref, admits a run. The procedure can
+still read every repository and task; the paths decide what wakes it, not what
+it may see. Before admission only the input repository and the repositories
+the paths name are fetched. A launch reflection is for launch progress, so a harness redeploy or
+a repair task's work in progress should not call a model. `repositories/app/`
+follows every branch of `app`, and `tasks/` every ordinary task's work.
+Configuration refuses a prefix that names neither `tasks/` nor a configured
+repository, because it would match nothing and silence the rhythm.
+
 The steward's own bookkeeping cannot appear in that input. Task documents,
 their `steward: accept task` commits and holds live in the controller's task
 store, never in a repository remote. Procedure runs, a rhythm's own included,
@@ -212,6 +251,13 @@ wrote under its own paths is on both sides and never makes it fire again, while
 anything another turn wrote after its base still counts. With no accepted run
 yet, it runs. Paths are relative to the world root.
 
+Only something new to read counts: a file added or modified under the paths.
+A deletion, a move out of the paths and a move within them are not input, so
+Sleep archiving `episodes/<day>.md` into `episodes/archive/` does not wake a
+Staging gated on `episodes/`, while an episode appended to after archiving
+does. The comparison is `git diff --find-renames --diff-filter=AMT`; a move
+that also rewrites most of a file is no longer a rename and counts as new.
+
 A world rhythm can follow another instead of keeping a clock:
 
 ```yaml
@@ -231,13 +277,71 @@ predecessor whose run is still going when its interval ends takes the chain
 with it, because the dependent is always asked about the current interval.
 `after` must name a configured world rhythm, and configuration refuses a cycle.
 
+World rhythms run one at a time. They all write the same world, and two
+started together make the later one's candidate a replay over a world that
+moved under it: correct, because acceptance holds the world lease, but wasted.
+The controller schedules them as a single owner. While one runs, the others
+wait, and on the first poll after it finishes the first due rhythm in configured
+order starts. No interval is lost by waiting, because a rhythm stays due until
+its interval ends. A night of Sleep, REM and Dream Away with an hourly Staging
+therefore runs Sleep, REM, Dream Away and then Staging, never Staging beside REM.
+
 The turn cannot propose or steer tasks, because a rhythm has no transport to
-receive their results; it records suggested work in world files instead. A
-non-empty reply becomes a result receipt for `owner` and goes out through the
-ordinary result lane. An empty reply, or `owner: null`, settles the interval
-silently. `/rhythm list` shows whether the current interval ran. `/rhythm run`
-refuses a world rhythm, because a second run in the same interval is exactly what
-the key exists to prevent.
+receive their results; it records suggested work in world files instead.
+`/rhythm list` shows whether the current interval ran. `/rhythm run` refuses a
+world rhythm, because a second run in the same interval is exactly what the key
+exists to prevent.
+
+## What a rhythm sends
+
+A rhythm is silent unless it asks. Its reply reaches `owner` only from a line
+that starts with `NOTIFY:`: everything from that line to the end is the message.
+The marker is forgiving to write, in any case and behind Markdown emphasis, a
+bullet or a quote, and `NOTIFY: NONE` asks for nothing. A reply without the
+marker is recorded and sent to no one, and so is any reply when `owner` is null.
+Nothing blocks on a missing or malformed marker; the reply is still kept.
+
+Silence had to become the default. When any reply that was not blank was sent,
+models told to stay silent answered `SILENT`, `(empty)`, `<br>`, a lone word
+joiner, or a sentence saying there was nothing to say, and each of those reached
+the owner's topic. A filter can drop one of these, but a model finds the next.
+With an explicit marker, sending is something the model does, and an evasion
+only fails to send.
+
+A world rhythm can name a file as its message:
+
+```yaml
+rhythms:
+  rem: {after: sleep, procedure: rem, input: world, owner: telegram:5,
+        deliver: morning_brief.md}
+```
+
+When the accepted turn changed `deliver`, the owner receives the file as that
+turn left it, whatever the reply says. The accepted commit is found by its
+`Steward-Turn` trailer, so a turn that was replayed behind another still counts.
+A file the turn did not change is not sent again; that night's reply falls back
+to the ordinary `NOTIFY:` rule. The file is cut at 12,000 characters with a note
+that it continues in the world, and Telegram splits it into pieces as it does any
+long reply.
+
+Every reply is kept. The turn keeps it in state and the world commit keeps its
+text. Its result receipt keeps it as `result_text` and marks the interval
+`recorded_only` when nothing was sent. `/status` counts what rhythms recorded
+without sending in the last 24 hours, rhythm reviews below included, so an absent
+message can be told apart from a run that never happened. The controller also logs
+`world rhythm <key>: reply recorded, not delivered`.
+
+A procedure rhythm's findings follow the same rule. Findings above the closure
+lines are the run's evidence commit, and they notify no one unless they contain a
+`NOTIFY:` line. Until then the result costs no model turn: no assessment runs and
+nothing is sent. A flagged result is assessed by its owning conversation as
+before. The run's own message is what gets sent, unless the assessment writes a
+`NOTIFY:` line of its own to say it differently, and a follow-up task the
+assessment admitted is named after it. The assessment cannot silence a flagged
+result. An explicit request, a question and a failure still report as they
+always did, and so does a harness-prepared result that already carries its reply.
+A refused proposal or action in any automatic turn (`harness:*`) is kept on the
+turn and logged, not appended to the owner's message.
 
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
 harness never invents a schedule for you. A world rhythm is configured like any

@@ -57,12 +57,14 @@ def test_world_rhythm_runs_once_per_interval_as_a_world_turn(tmp_path):
     assert request.model.model == "night-model" and request.provider_order == ("codex",)
     assert request.sandbox_mode == "workspace-write"
     assert "Consolidate the world." in request.prompt and "TASK_PROPOSAL" not in request.prompt
+    # It is told that nothing is sent unless it asks.
+    assert "start a line with `NOTIFY:`" in request.prompt
     # A rhythm owns no transport, so its turn cannot admit the task it proposed.
     assert state.tasks.all() == []
+    # Its reply asked to notify no one: recorded, not sent.
     receipt = state.result_receipt("rhythm:sleep:20")
-    assert receipt["owner"] == "telegram:3" and not receipt["done"]
-    assert receipt["reply"].startswith("Investigation saved.")
-    assert "cannot admit" in receipt["reply"]
+    assert receipt["owner"] == "telegram:3" and receipt["done"] and receipt["recorded_only"]
+    assert receipt["reply"] == "" and receipt["result_text"].startswith("Investigation saved.")
 
     assert list(procedures.due_world_rhythms(now=NOW + 600)) == []
     # A restarted controller reads the same settled interval.
@@ -92,7 +94,7 @@ def test_crash_after_acceptance_replays_the_turn_without_repeating_cognition(tmp
     assert list(procedures.due_world_rhythms(now=NOW)) == [("sleep", "rhythm:sleep:20")]
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
     assert cognition.calls == 1
-    assert state.result_receipt("rhythm:sleep:20")["reply"].startswith("Investigation saved.")
+    assert state.result_receipt("rhythm:sleep:20")["result_text"].startswith("Investigation saved.")
 
 
 def test_failed_interval_is_consumed_rather_than_retried(tmp_path):
@@ -109,23 +111,112 @@ def test_failed_interval_is_consumed_rather_than_retried(tmp_path):
     assert not (checkpoint.world.root / "decision.md").exists()
 
 
-# Staging's first night on GLM replied with a lone word joiner.
-@pytest.mark.parametrize("output", ["", " \n", "\u2060", "\u200b\ufeff "])
-def test_silent_world_rhythm_settles_without_a_delivery(tmp_path, output):
-    class Silent(EditingCognition):
+def _replying(output, *, write=None):
+    def edit(request):
+        for path, text in (write or {}).items():
+            (request.cwd / path).write_text(text)
+
+    class Replying(EditingCognition):
         def run(self, request, *, execution_id=None):
             return replace(super().run(request, execution_id=execution_id), output=output)
+    return Replying(before_return=edit)
 
-    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, Silent())
+
+# Every reply here reached gg's World topic under the old rule, which sent any
+# reply that was not blank: the word joiner and the parenthetical before
+# ac3a18b9, and "SILENT", "(empty)", "<br>" and the staging sentence after it.
+@pytest.mark.parametrize("output", [
+    "", " \n", "\u2060", "\u200b\ufeff ", "SILENT", "(empty)", "<br>",
+    "*(Empty reply \u2014 the brief carries the morning.)*",
+    "Staging pass complete. No new episodes since the last deep sleep.",
+    "NOTIFY: NONE", "NOTIFY:\n\u2060",
+])
+def test_a_world_rhythm_that_does_not_ask_to_notify_sends_nothing(tmp_path, output):
+    import time
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, _replying(output))
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
     assert (checkpoint.world.root / "decision.md").exists()
-    assert state.result_receipt("rhythm:sleep:20")["done"]
+    receipt = state.result_receipt("rhythm:sleep:20")
+    assert receipt["done"] and receipt["reply"] == ""
     assert state.pending_result_receipts() == []
     assert list(procedures.due_world_rhythms(now=NOW)) == []
+    # Silence is recorded where it can be counted, never lost.
+    recorded = bool(output.strip())
+    assert receipt["recorded_only"] is recorded
+    assert state.recorded_not_sent(time.time() - 60) == (["rhythm:sleep:20"] if recorded else [])
+
+
+@pytest.mark.parametrize("output,message", [
+    ("Filed the night.\nNOTIFY: The calendar write failed again.", "The calendar write failed again."),
+    ("**NOTIFY:** Sleep did not complete.\nREM wrote no brief.", "Sleep did not complete.\nREM wrote no brief."),
+    ("- notify: One thing needs you.", "One thing needs you."),
+])
+def test_a_world_rhythm_sends_what_follows_its_notify_line(tmp_path, output, message):
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, _replying(output))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    receipt = state.result_receipt("rhythm:sleep:20")
+    assert receipt["reply"] == message and not receipt["done"] and not receipt["recorded_only"]
+    assert receipt["result_text"] == output.strip()
+
+
+def _delivering(tmp_path, cognition):
+    config, state, checkpoint, service, cognition, _ = _rhythm(tmp_path, cognition)
+    data = config.model_dump(mode="json")
+    data["rhythms"]["sleep"]["deliver"] = "morning_brief.md"
+    config = StewardConfig.model_validate(data)
+    return config, state, checkpoint, service, Procedures(config, state, {}, world=checkpoint.world)
+
+
+def test_a_rhythm_that_rewrote_its_deliver_file_sends_the_file(tmp_path):
+    brief = "Good morning, V.\n\nTwo days to Wednesday.\n"
+    config, state, checkpoint, service, procedures = _delivering(
+        tmp_path, _replying("<br>", write={"morning_brief.md": brief}))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    receipt = state.result_receipt("rhythm:sleep:20")
+    assert receipt["reply"] == brief.strip() and not receipt["done"]
+    # The file is the message whatever the reply says, a NOTIFY line included.
+    state, checkpoint, service, _ = runtime(
+        tmp_path, _replying("NOTIFY: See the brief.", write={"morning_brief.md": brief + "More.\n"}))
+    procedures = Procedures(config, state, {}, world=checkpoint.world)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
+    assert state.result_receipt("rhythm:sleep:21")["reply"] == (brief + "More.").strip()
+
+
+def test_an_unchanged_deliver_file_is_not_resent(tmp_path):
+    brief = "Good morning, V.\n"
+    config, state, checkpoint, service, procedures = _delivering(
+        tmp_path, _replying("", write={"morning_brief.md": brief}))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert state.result_receipt("rhythm:sleep:20")["reply"] == brief.strip()
+    # The next night leaves it as it was: only an explicit notification is sent.
+    state, checkpoint, service, _ = runtime(
+        tmp_path, _replying("NOTIFY: Sleep did not complete.", write={"morning_brief.md": brief}))
+    procedures = Procedures(config, state, {}, world=checkpoint.world)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
+    assert state.result_receipt("rhythm:sleep:21")["reply"] == "Sleep did not complete."
+
+
+def test_a_long_deliver_file_is_cut_with_a_pointer(tmp_path):
+    from steward_harness.procedures import DELIVERY_LIMIT
+    config, state, checkpoint, service, procedures = _delivering(
+        tmp_path, _replying("", write={"morning_brief.md": "x" * (DELIVERY_LIMIT + 50)}))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    reply = state.result_receipt("rhythm:sleep:20")["reply"]
+    assert reply.startswith("x" * DELIVERY_LIMIT)
+    assert reply.endswith("[morning_brief.md continues in the world.]")
+
+
+def test_deliver_names_a_file_inside_the_world(tmp_path):
+    (tmp_path / "world").mkdir()
+    data = _config(tmp_path, tmp_path / "world").model_dump(mode="json")
+    data["rhythms"]["sleep"]["deliver"] = "../outside.md"
+    with pytest.raises(ValueError, match="inside the world"):
+        StewardConfig.model_validate(data)
 
 
 def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path):
-    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path)
+    config, state, checkpoint, service, cognition, procedures = _rhythm(
+        tmp_path, _replying("Investigation saved.\nNOTIFY: Investigation saved for the morning."))
     daemon = StewardDaemon(config, tmp_path / "steward.yaml")
     daemon._procedures = procedures
     sent = []
@@ -149,7 +240,7 @@ def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path
     assert len(sent) == 1
     chat, topic, text, source = sent[0]
     assert (chat, topic) == (1, 3) and source.startswith("rhythm:sleep:")
-    assert text.startswith("Investigation saved.")
+    assert text == "Investigation saved for the morning."
     assert state.lineage(ConversationId("rhythm:sleep")).provider == "codex"
 
 
@@ -209,6 +300,35 @@ def _chain(tmp_path, cognition=None, rhythms=CHAIN):
     config = _night(tmp_path, checkpoint.world.root, rhythms)
     return config, state, checkpoint, service, cognition, Procedures(
         config, state, {}, world=checkpoint.world)
+
+
+def test_the_pass_starts_one_world_rhythm_at_a_time_in_configured_order(tmp_path):
+    # Staging and REM both came due the moment Sleep finished, and started in
+    # the same second. They are one owner now: REM runs, then Staging.
+    staging = {"schedule": 3600, "procedure": "sleep", "input": "world", "owner": None}
+    rhythms = {"sleep": CHAIN["sleep"] | {"owner": None}, "rem": CHAIN["rem"], "staging": staging}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml")
+    daemon._procedures = procedures
+    ran = []
+    run = procedures.run_world_rhythm
+    procedures.run_world_rhythm = lambda service, name, key: (ran.append(name), run(service, name, key))
+    queued = []
+    kernel = SimpleNamespace(
+        dispatch=SimpleNamespace(submit=lambda key, work: queued.append((key, work)),
+                                 reap=lambda: None),
+        owners=lambda: (), tasks=SimpleNamespace(flush_inputs=lambda: None),
+    )
+    step = daemon._pass(state, service, kernel, SimpleNamespace(), None)
+    for _ in range(4):
+        queued.clear()
+        step()
+        world = [work for key, work in queued if key[0] == "rhythm"]
+        assert [key for key, _ in queued if key[0] == "rhythm"] == ([("rhythm", "world")] if world else [])
+        for work in world:
+            work()
+    assert ran == ["sleep", "rem", "staging"]
+    assert cognition.calls == 3
 
 
 def test_a_chain_runs_each_rhythm_after_its_predecessor_completes(tmp_path):
@@ -356,6 +476,40 @@ def test_paths_gate_calls_no_model_without_new_episodes(tmp_path):
     assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == [("sleep", "rhythm:sleep:22")]
     # A cursor Git can no longer read admits the run rather than silencing it.
     assert checkpoint.world.changed("0" * 40, ("episodes/",))
+
+
+def _world_git(world_root, *args):
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=world_root, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=t@x", "commit", "-q", "-m",
+                    " ".join(args)], cwd=world_root, check=True)
+
+
+def test_paths_gate_ignores_archiving_and_deletion_but_not_new_content(tmp_path):
+    # Staging's cursor is its own last run. Sleep then archives what it
+    # consolidated and deletes nothing new into the paths: nothing to stage.
+    rhythms = {"staging": CHAIN["sleep"] | {"paths": ["episodes/", "episodes.md"]}}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    root = checkpoint.world.root
+    _world_commit(root, "episodes/2026-09-27.md")
+    _world_commit(root, "episodes/2026-09-26.md")
+    _world_commit(root, "episodes.md")
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:20")
+
+    (root / "episodes" / "archive").mkdir()
+    _world_git(root, "mv", "episodes/2026-09-27.md", "episodes/archive/2026-09-27.md")
+    _world_git(root, "rm", "-q", "episodes/2026-09-26.md")
+    _world_git(root, "mv", "episodes.md", "index.md")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
+
+    # An appended episode is new content, and so is a new one.
+    (root / "episodes" / "archive" / "2026-09-27.md").write_text("more\n")
+    _world_git(root, "add", "episodes/archive/2026-09-27.md")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("staging", "rhythm:staging:21")]
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:21")
+    _world_commit(root, "episodes/2026-09-28.md")
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == [("staging", "rhythm:staging:22")]
 
 
 def test_a_gated_predecessor_that_did_not_run_does_not_start_its_dependent(tmp_path):

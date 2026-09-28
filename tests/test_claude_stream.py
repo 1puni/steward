@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeInput, RuntimeRequest, resolve_model
+from steward_harness.runtime.contracts import (
+    NativeInputClosed, RuntimeExecutionError, RuntimeInput, RuntimeRequest, resolve_model,
+)
 from steward_harness.runtime.providers.claude import ClaudeInputStream, _ClaudeLifecycle
 
 SESSION = "11111111-1111-4111-8111-111111111111"
@@ -180,6 +182,57 @@ def test_completion_race_is_rejected_before_any_bytes_are_offered(tmp_path):
     assert [(r.source_id, r.disposition) for r in receipts] == [("late", "rejected")]
 
 
+def notice(stream, task="a6f4db4b8a5408eb"):
+    emit(stream, type="system", subtype="task_notification", task_id=task, status="completed")
+
+
+def unattributed(stream, text):
+    emit(stream, type="result", subtype="success", terminal_reason="completed", result=text, usage={})
+
+
+def test_background_notice_turn_after_the_offered_result_continues_the_execution(tmp_path):
+    # gg, 2026-09-27: the parent's turn ended while its background agent ran.
+    # The queue closed, a late offer reply was refused, and the agent's notice
+    # opened a native turn whose result named nothing the controller offered.
+    stream, wire, root, receipts = start(tmp_path)
+    result(stream, root, text="first account")
+    command(stream, root, "completed")
+    assert wire.closed
+    with pytest.raises(NativeInputClosed):
+        stream.send(RuntimeInput("late", "reply to a late offer"))
+    notice(stream)
+    emit(stream, type="assistant", message={"content": [{"type": "text", "text": "Folding in the agent."}]})
+    unattributed(stream, "final account")
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == "final account"
+    assert [(r.source_id, r.disposition) for r in receipts] == [("late", "rejected")]
+
+
+def test_second_result_needs_a_background_notice_since_the_last(tmp_path):
+    stream, _, root, _ = start(tmp_path)
+    notice(stream)  # during the parent's own turn: its result consumes it
+    result(stream, root)
+    command(stream, root, "completed")
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        unattributed(stream, "stray")
+
+
+def test_background_notice_cannot_repeat_an_offered_result(tmp_path):
+    stream, _, root, _ = start(tmp_path)
+    result(stream, root)
+    command(stream, root, "completed")
+    notice(stream)
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        result(stream, root, text="again")
+
+
+def test_background_notice_cannot_complete_an_unfinished_offered_command(tmp_path):
+    stream, _, _, _ = start(tmp_path)
+    notice(stream)
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        result(stream, "33333333-3333-4333-8333-333333333333")
+
+
 def test_result_without_optional_timing_uuid_is_fenced_by_native_root(tmp_path):
     stream, wire, root, _ = start(tmp_path)
     emit(stream, type="result", subtype="success", terminal_reason="completed", result="native agents finished")
@@ -312,3 +365,62 @@ def test_pre_init_dev_intent_does_not_open_input_or_complete_command(tmp_path, p
     stream.finish()
     assert wire.closed
     assert lifecycle.finish() == ("findings", SESSION, "synthetic-model")
+
+
+CLOSURE = "done\nCOMMIT: map the landscape\nDISPOSITION: idle\nQUESTION: NONE"
+
+
+@pytest.mark.parametrize("provider", ["claude", "glm"])
+def test_answer_to_a_receipt_after_the_closure_keeps_the_closure(tmp_path, provider):
+    # gg, 2026-09-25, task-d2b1703a: the session closed with valid lines, the
+    # understanding acceptance queued behind that result, and the session's
+    # "Acknowledged" became the output. Five retries repeated it exactly.
+    stream, wire, root, _ = start(tmp_path, provider)
+    result(stream, root, text=CLOSURE)
+    stream.send(RuntimeInput("understanding-abc-0", "Steward accepted understanding offer abc",
+                             origin="controller", author="steward", receipt=True))
+    ack = wire.messages[-1]["uuid"]
+    command(stream, root, "completed")
+    for state in ("queued", "started"):
+        command(stream, ack, state)
+    result(stream, ack, text="Acknowledged: offer abc is accepted. Nothing further is owed.")
+    command(stream, ack, "completed")
+    assert wire.closed
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == CLOSURE
+
+
+def test_empty_answer_to_a_receipt_is_not_a_missing_response(tmp_path):
+    stream, wire, root, _ = start(tmp_path)
+    result(stream, root, text=CLOSURE)
+    stream.send(RuntimeInput("understanding-abc-0", "accepted", origin="controller",
+                             author="steward", receipt=True))
+    ack = wire.messages[-1]["uuid"]
+    command(stream, root, "completed")
+    for state in ("queued", "started"):
+        command(stream, ack, state)
+    result(stream, ack, text="")
+    command(stream, ack, "completed")
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == CLOSURE
+
+
+def test_an_ordinary_late_input_still_owns_the_final_word(tmp_path):
+    # Only a receipt keeps the earlier word: a note or correction the session
+    # acted on is the execution going on, and its result is the latest.
+    stream, wire, root, _ = start(tmp_path)
+    result(stream, root, text=CLOSURE)
+    stream.send(RuntimeInput("note:1", "also check the tests", origin="controller", author="harness"))
+    late = wire.messages[-1]["uuid"]
+    command(stream, root, "completed")
+    for state in ("queued", "started"):
+        command(stream, late, state)
+    result(stream, late, text="checked\nCOMMIT: check tests\nDISPOSITION: idle\nQUESTION: NONE")
+    command(stream, late, "completed")
+    stream.finish()
+    assert stream.lifecycle.finish()[0].startswith("checked")
+
+
+def test_only_a_controller_notice_can_be_a_receipt():
+    with pytest.raises(ValueError, match="receipt"):
+        RuntimeInput("x", "y", receipt=True)

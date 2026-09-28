@@ -58,11 +58,13 @@ input. Missing capability or a review question remains visible on its task.
 ## Git quiet periods and intervals
 
 A procedure rhythm runs only on new input. Before admission the controller
-fetches what the rhythm reads and compares it with the commits its finished
+reads the observed refs of what the rhythm reads, [fetched by targets or once
+per bucket](rhythms.md), and compares them with the commits its finished
 runs captured. A repository rhythm reads its `input` ref: its input is that
 candidate commit. A rhythm with a `workdir` reads the organisation: its input is
 also every observed `refs/steward/remote/*` head of every configured repository
-and the accepted work commit of every ordinary task. If every observed commit
+and the accepted work commit of every ordinary task, narrowed to its
+[`paths`](rhythms.md) when it sets them. If every observed commit
 was captured by a finished run, the poll admits nothing, calls no model and
 logs at debug level. The runs' own `candidate` and `activity` fields are the
 cursor; nothing else records what a rhythm has seen.

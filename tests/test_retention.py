@@ -90,14 +90,23 @@ def test_task_retention(tmp_path, boundary, caplog):
 
 @pytest.mark.parametrize("boundary", [
     "old", "recent", "running", "interrupted", "pending", "completion",
-    "dirty", "ignored", "unaccepted", "merge",
+    "dirty", "ignored", "unaccepted", "merge", "replayed", "replayed_then_unaccepted",
 ])
 def test_world_retention(tmp_path, boundary, caplog):
     checkpoint = _checkpoint(_git_world(tmp_path / "world"), tmp_path)
     state = checkpoint.state
     owner = state.get_or_create_conversation("telegram", "owner", provider="codex", profile="balanced")
     turn = checkpoint.checkout(workspace_id=owner.conversation_id.workspace)
+    if boundary.startswith("replayed"):
+        # A concurrent writer lands first, so acceptance rebases the candidate
+        # and the workspace keeps an original the world never contains.
+        (checkpoint.world.root / "other.md").write_text("concurrent writer\n")
+        _commit_all(checkpoint.world.root, "concurrent world change")
+        (turn.path / "note.md").write_text("session work\n")
     _finish(checkpoint, turn, "owner", "input", "reply")
+    if boundary.startswith("replayed"):
+        assert checkpoint._git(turn.path, "merge-base", "--is-ancestor", "HEAD",
+                               checkpoint.world.input_cursor(), check=False).returncode == 1
     old = (datetime.now(UTC) - timedelta(days=10)).isoformat()
     if boundary != "recent":
         with state.connect(write=True) as connection:
@@ -119,20 +128,20 @@ def test_world_retention(tmp_path, boundary, caplog):
     elif boundary == "ignored":
         _git_path(turn.path, "info/exclude").write_text("cache\n")
         (turn.path / "cache").write_text("local")
-    elif boundary == "unaccepted":
+    elif boundary in {"unaccepted", "replayed_then_unaccepted"}:
         (turn.path / "extra").write_text("local")
         _commit_all(turn.path, "unaccepted world work")
     elif boundary == "merge":
         _git_path(turn.path, "MERGE_HEAD").write_text(turn.base_sha)
     home, ours, other = _owner_homes(tmp_path, str(owner.conversation_id))
     prune_world_sessions(checkpoint, 7 * 86400, [home])
-    assert turn.path.exists() == (boundary not in {"old", "ignored"})
+    assert turn.path.exists() == (boundary not in {"old", "ignored", "replayed"})
     assert ours.exists() == turn.path.exists() and other.exists()
-    if boundary in {"old", "ignored"}:
+    if boundary in {"old", "ignored", "replayed"}:
         assert str(turn.path) not in _git("worktree", "list", "--porcelain", cwd=checkpoint.world.root)
         prune_world_sessions(checkpoint, 7 * 86400)
         assert checkpoint.checkout(workspace_id=owner.conversation_id.workspace).path.exists()
-    if boundary in {"dirty", "unaccepted", "merge", "completion"}:
+    if boundary in {"dirty", "unaccepted", "merge", "completion", "replayed_then_unaccepted"}:
         assert "retained world workspace" in caplog.text
 
 

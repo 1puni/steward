@@ -993,6 +993,21 @@ def test_status_exposes_undeliverable_receipts(tmp_path):
     assert "Undeliverable results: telegram:99: route is not a configured Telegram topic" in reply
 
 
+def test_status_counts_what_rhythms_recorded_without_sending(tmp_path):
+    """A silent rhythm and a broken one look alike unless silence is counted."""
+    import time
+    commands = _status_commands(tmp_path)
+    assert "Recorded, not sent" not in commands("status", None, 1, 42, 7)
+    for key, at in (("rhythm:staging:1", time.time()), ("rhythm:staging:2", time.time()),
+                    ("rhythm:rem:1", time.time()), ("rhythm:rem:0", time.time() - 2 * 86_400)):
+        commands.state.save_result_receipt({
+            "owner": "telegram:5", "task_id": None, "source_key": key, "result_text": "SILENT",
+            "reply": "", "done": True, "recorded_only": True, "recorded_at": at,
+        })
+    reply = commands("status", None, 1, 42, 7)
+    assert "Recorded, not sent (24h): 3: rhythm:rem, rhythm:staging" in reply
+
+
 def test_result_diagnostic_write_failure_defers_discovery(tmp_path, monkeypatch):
     config = _config(tmp_path)
     state = StateDatabase(config.provider.state_db)

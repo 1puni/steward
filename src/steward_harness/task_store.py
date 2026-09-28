@@ -25,6 +25,7 @@ from steward_harness.state import (
 from steward_harness.task_lock import locked_tasks, task_lock
 from steward_harness.config.schema import ProcedureConfig, _require_bounded_absolute
 from steward_harness.lease import Busy, Lease
+from steward_harness.notify import notification
 
 PREFIX = "refs/heads/tasks/"
 ZERO = "0" * 40
@@ -160,9 +161,13 @@ class Task:
 
     @property
     def quiet(self) -> bool:
-        """A finished rhythm review that found nothing: its evidence commit is all it owes."""
-        return (self.status is TaskStatus.DONE and self.read_only and self.findings is None
-                and self.procedure.event.startswith("rhythm:"))
+        """A finished rhythm review that notifies no one: its evidence commit is all it owes.
+
+        Its findings are that commit's message, so they are kept either way;
+        only a `NOTIFY:` line in them asks for the owner's attention.
+        """
+        return (self.status is TaskStatus.DONE and self.read_only
+                and self.procedure.event.startswith("rhythm:") and not notification(self.findings))
 
     @property
     def dispatchable(self) -> bool:

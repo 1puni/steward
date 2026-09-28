@@ -425,9 +425,22 @@ def test_an_automated_result_review_cannot_steer_the_task_it_reviews(
 
     result = _turn(service, "steer-1", operator_id="harness:task-result")
 
-    assert "only an operator turn may steer rhythm work" in result.reply_text
+    assert "only an operator turn may steer rhythm work" in result.task_rejection
+    # The refusal is the steward's own bookkeeping: the turn keeps it, and the
+    # operator, who asked for nothing, is not handed it as news.
+    assert "rejected" not in result.reply_text
     assert "Task answered" not in result.reply_text
     assert service._state.tasks.get(task_id).status is TaskStatus.WAITING
+
+
+def test_an_operator_turn_still_sees_its_own_rejected_action(tmp_path: Path) -> None:
+    cognition = FakeCognition([])
+    service = _service(tmp_path, cognition)
+    cognition.replies.append(_reply(_answer("task-" + "0" * 32, "Resume it.")))
+
+    result = _turn(service, "steer-2")
+
+    assert "Task action rejected" in result.reply_text
 
 
 def test_native_owner_generation_survives_restart_fallback_and_clear(tmp_path):
