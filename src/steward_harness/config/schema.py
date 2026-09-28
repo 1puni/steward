@@ -550,7 +550,9 @@ class ProcedureRhythmConfig(BaseModel):
     input: str
     owner: str | None  # Explicit null retains findings without assessment/delivery.
     workdir: str | None = None
-    # World paths whose change since the rhythm's last accepted run is its input.
+    # What counts as input. For a world rhythm, world paths whose change since
+    # its last accepted run is its input; for an organisation (`workdir`)
+    # rhythm, the prefixes of its activity keys, such as `repositories/app/main`.
     paths: tuple[str, ...] = ()
     # A world file that is the message: when a run changes it, its content is
     # sent to the owner in place of the reply.
@@ -633,8 +635,18 @@ class StewardConfig(BaseModel):
                     raise ValueError("world rhythm requires a workspace-write procedure")
                 if rhythm.after is None and not isinstance(rhythm.schedule, int):
                     raise ValueError("world rhythm requires an interval schedule")
-            elif rhythm.after is not None or rhythm.paths or rhythm.deliver is not None:
-                raise ValueError("rhythm after, paths and deliver apply only to world rhythms")
+            elif rhythm.after is not None or rhythm.deliver is not None or (rhythm.paths and rhythm.workdir is None):
+                raise ValueError("rhythm after and deliver apply only to world rhythms, "
+                                 "and paths only to world or organisation rhythms")
+            else:
+                for path in rhythm.paths:
+                    # An organisation rhythm's input is keyed by repository
+                    # ref or task; a prefix naming neither would silence it.
+                    root, _, rest = path.partition("/")
+                    repository = rest.partition("/")[0]
+                    if not (root == "tasks" or (root == "repositories" and repository in self.repositories)):
+                        raise ValueError(f"organisation rhythm path must name tasks/ or a "
+                                         f"configured repositories/<name>: {path!r}")
             if rhythm.owner is not None:
                 kind, _, reference = rhythm.owner.partition(":")
                 if kind == "telegram":
