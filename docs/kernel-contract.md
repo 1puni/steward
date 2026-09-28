@@ -265,16 +265,18 @@ Assessment uses the ordinary world-turn path and current authority. A typed
 `TASK_ACTION` can answer, retry or note an existing task; prose alone cannot resume it.
 A turn proposes at most one action or one new task. A rhythm explicitly names its
 configured result owner, or null for retained evidence only. Owned rhythm task findings
-use this same assessment path, including world knowledge and authorized follow-up
-admission. An assessment cannot steer tasks owned by another conversation. A world
-rhythm is itself a world turn: it admits no task, and its reply is a receipt for
-its owner ([world rhythms](rhythms.md#world-rhythms)).
+that ask to notify (`NOTIFY:`) use this same assessment path, including world
+knowledge and authorized follow-up admission; findings that do not are evidence only
+and cost no turn. An assessment cannot steer tasks owned by another conversation. A
+world rhythm is itself a world turn: it admits no task, and its reply is a receipt for
+its owner that sends only what it asked to send
+([what a rhythm sends](rhythms.md#what-a-rhythm-sends)).
 
 Accepted assessment and external delivery are separate facts. A private task-result
 receipt retains the selected outcome before assessment and remains pending until
-transport succeeds or accepted assessment chooses silence for a completed scheduled
-read-only review. Such reviews send only their owner's material update; completion
-without a final message records an empty reply and performs no transport call. Full evidence remains in the
+transport succeeds. A completed scheduled read-only review reaches assessment only
+when its findings asked to notify, and it then sends the run's message, or the
+assessment's own `NOTIFY:` replacement; assessment cannot silence it. Full evidence remains in the
 task ref and receipt. Explicitly requested runs, questions, blocked/cancelled work,
 and assessment failures retain their outcome reports. Transport retries replay the
 saved reply, including silence, without repeating assessment. Checkpoints are local

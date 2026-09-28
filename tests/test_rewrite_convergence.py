@@ -363,7 +363,7 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
         procedure="security-one", input="repositories/app/main")
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        "The private consumer handoff is still outstanding.\nVERDICT: FAIL\n"
+        "VERDICT: FAIL\nNOTIFY: The private consumer handoff is still outstanding.\n"
         "COMMIT: reflection findings\nDISPOSITION: idle\nQUESTION: NONE"))
     procedures.advance_rhythms(now=100)
     reflection = state.tasks.queued()[0]
@@ -374,7 +374,9 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
     service._state.tasks.transports = runner.transports
     assert world_state.pending_task_result_conversations() == (owner,)
     def unavailable(text, key):
-        assert "Investigation saved." in text and "Task admitted:" in text
+        # The run's own message, and the follow-up the assessment admitted.
+        assert text.startswith("The private consumer handoff is still outstanding.")
+        assert "Investigation saved." not in text and "Task admitted:" in text
         assert "Task done:" not in text
         receipt = world_state.result_receipt(key)
         assert "Evidence SHA:" in receipt["result_text"] and "Landed SHA:" not in receipt["result_text"]
@@ -419,40 +421,60 @@ def test_quiet_rhythm_result_is_retained_evidence_and_sends_nothing(tmp_path):
     sent = []
     assert service.deliver_task_result(owner, send=lambda text, key: sent.append(text)) is None
     assert sent == [] and cognition.calls == 0
-    # The same owner still hears a finding.
+    # Findings that do not ask to notify are evidence too, not a message.
     adapter.execute = lambda request: replace(execute(request), output=(
-        "A new consumer depends on the unpublished handoff.\n"
-        "COMMIT: reflection findings\nDISPOSITION: idle\nQUESTION: NONE"))
-    (clone / "handoff.txt").write_text("changed\n")
-    _git("add", ".", cwd=clone)
-    _git("commit", "-m", "handoff", cwd=clone)
-    _git("push", "origin", "main", cwd=clone)
-    procedures.advance_rhythms(now=200)
-    runner.prepare(state.tasks.queued()[0])
+        "Nothing material has changed, so I'm reporting no findings.\n"
+        "COMMIT: reflection with no material change\nDISPOSITION: idle\nQUESTION: NONE"))
+    for number, name in ((1, "handoff.txt"), (2, "handoff.txt")):
+        (clone / name).write_text(f"changed {number}\n")
+        _git("add", ".", cwd=clone)
+        _git("commit", "-m", f"handoff {number}", cwd=clone)
+        _git("push", "origin", "main", cwd=clone)
+        procedures.advance_rhythms(now=100 * (number + 1))
+        runner.prepare(state.tasks.queued()[0])
+        if number == 1:
+            assert world_state.pending_task_result_conversations() == ()
+            assert service.deliver_task_result(owner, send=lambda text, key: sent.append(text)) is None
+            assert sent == [] and cognition.calls == 0
+            # The same owner still hears a finding it is asked to hear.
+            adapter.execute = lambda request: replace(execute(request), output=(
+                "NOTIFY: A new consumer depends on the unpublished handoff.\n"
+                "COMMIT: reflection findings\nDISPOSITION: idle\nQUESTION: NONE"))
     assert world_state.pending_task_result_conversations() == (owner,)
     service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
     assert cognition.calls == 1 and len(sent) == 1
+    assert sent[0].startswith("A new consumer depends on the unpublished handoff.")
 
 
 def test_rhythm_result_assessment_cannot_expand_repository_authority(tmp_path):
     from test_world_durability import runtime, EditingCognition
     from steward_harness.state import ConversationId
     bare, clone = _repository(tmp_path)
-    state, runner, statuses, _ = harness(tmp_path, bare, clone, InvestigationAdapter())
+    adapter = InvestigationAdapter()
+    state, runner, statuses, _ = harness(tmp_path, bare, clone, adapter)
     config, procedures = setup_procedures(tmp_path, state, runner)
     owner = ConversationId("desk:steward")
     config.rhythms["reflection"] = ProcedureRhythmConfig(owner=str(owner), schedule=100,
         procedure="security-one", input="repositories/app/main")
+    execute = adapter.execute
+    adapter.execute = lambda request: replace(execute(request), output=(
+        "NOTIFY: The public consumer still reads the old feed.\n"
+        "COMMIT: steward: inspect consumer\nDISPOSITION: idle\nQUESTION: NONE"))
     procedures.advance_rhythms(now=100)
     runner.prepare(state.tasks.queued()[0])
-    _, checkpoint, service, _ = runtime(tmp_path, EditingCognition(repository="unconfigured"),
-                                        repositories={"app"})
+    world_state, checkpoint, service, _ = runtime(
+        tmp_path, EditingCognition(repository="unconfigured"), repositories={"app"})
     service._state.tasks.transports = runner.transports
     sent=[]
     service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
     assert (checkpoint.world.root / "decision.md").is_file()
     assert len(state.tasks.all()) == 1
-    assert "not authorized" in sent[0]
+    # The refusal stays with the automatic turn; the owner gets the finding.
+    assert sent == ["The public consumer still reads the old feed."]
+    with world_state.connect() as connection:
+        rejection, reply = connection.execute(
+            "SELECT rejection, reply_text FROM turns WHERE operator_id='harness:task-result'").fetchone()
+    assert "not authorized" in rejection and "not authorized" not in reply
 
 
 
