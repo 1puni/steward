@@ -150,6 +150,12 @@ class Procedures:
         activity.update({f"tasks/{task_id}": d.work for task_id, d in definitions.items()
                          if d.work and not (d.procedure and (d.procedure.access == "read-only"
                                                              or d.procedure.event.startswith("rhythm:")))})
+        if rhythm.paths:
+            # What the rhythm is for, not everything it can read: its runs
+            # capture only these keys, so nothing outside them is ever new.
+            prefixes = tuple(path.rstrip("/") for path in rhythm.paths)
+            activity = {key: sha for key, sha in activity.items()
+                        if any(key == prefix or key.startswith(prefix + "/") for prefix in prefixes)}
         return repository, candidate, base, activity
 
     def advance_rhythms(self, *, now=None):
