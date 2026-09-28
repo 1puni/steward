@@ -212,6 +212,13 @@ wrote under its own paths is on both sides and never makes it fire again, while
 anything another turn wrote after its base still counts. With no accepted run
 yet, it runs. Paths are relative to the world root.
 
+Only something new to read counts: a file added or modified under the paths.
+A deletion, a move out of the paths and a move within them are not input, so
+Sleep archiving `episodes/<day>.md` into `episodes/archive/` does not wake a
+Staging gated on `episodes/`, while an episode appended to after archiving
+does. The comparison is `git diff --find-renames --diff-filter=AMT`; a move
+that also rewrites most of a file is no longer a rename and counts as new.
+
 A world rhythm can follow another instead of keeping a clock:
 
 ```yaml
