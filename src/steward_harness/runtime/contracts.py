@@ -60,6 +60,14 @@ class MissingProviderSession(RuntimeExecutionError):
     """Raised when a provider explicitly reports a missing saved session."""
 
 
+class NativeInputClosed(RuntimeExecutionError):
+    """Raised by a live send once the native turn takes no more input.
+
+    Nothing was offered. It is the end of the input channel, not a failure of
+    the turn: the turn goes on to its own result, or has already reached it.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedModel:
     provider: ProviderFamily

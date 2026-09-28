@@ -25,7 +25,7 @@ from steward_harness.landing.worktree import WorktreeError, WorktreeManager
 from steward_harness.prompts import RHYTHM_FINDINGS, build_task_prompt, build_procedure_scope
 from steward_harness.provider_types import ProviderFamily
 from steward_harness.runtime.contracts import (
-    RuntimeExecutionError, RuntimeInput, RuntimeInputResult, RuntimeUnavailable,
+    NativeInputClosed, RuntimeExecutionError, RuntimeInput, RuntimeInputResult, RuntimeUnavailable,
 )
 from steward_harness.runtime.execution import ExecutionBoundaryUnavailable, UntrustedExecutionBroker
 from steward_harness.runtime.process import ProcessTimeout
@@ -103,6 +103,9 @@ class _LiveTask:
     sent: dict[str, tuple[str, str, bool]] = field(default_factory=dict)
     acknowledgements: set[str] = field(default_factory=set)
     ended: threading.Event = field(default_factory=threading.Event)
+    # The native turn takes no more input, though it may still be working:
+    # offers are still decided, and their replies wait in the outbox.
+    closed: bool = False
 
 
 def _task_input(commit: str, kind: str, text: str, source: str) -> RuntimeInput:
@@ -210,6 +213,9 @@ class TaskRunner:
                     live.attempted.add(source_id)
                 try:
                     live.send(_task_input(source_id, kind, text, source))
+                except NativeInputClosed:
+                    log.info("live task input for %s waits for the next slice: native input closed",
+                             task_id)
                 except Exception:
                     # A disappearing native turn is not proof of consumption.
                     # Leave its persisted message for the next task slice.
@@ -226,6 +232,13 @@ class TaskRunner:
                 continue
             try:
                 self._accept_offer(task_id, live)
+            except NativeInputClosed:
+                # The end of the input channel, not of the turn. Keep deciding
+                # what the native parent offers; its replies have nowhere to go.
+                if not live.closed:
+                    log.info("task %s native input closed; offer replies are no longer delivered",
+                             task_id)
+                live.closed = True
             except Exception:
                 log.exception("understanding offer check failed for %s", task_id)
 
@@ -245,8 +258,18 @@ class TaskRunner:
                     offer == sent for sent, _, _ in live.sent.values()):
                 return
             pending = live.outbox.pop(offer, None)
+            if live.closed:
+                # Only a decision is kept; an undecided offer is evaluated again.
+                if pending and pending[1]:
+                    live.outbox[offer] = pending
+                    return
+                pending = None
         reply, decided = pending or self._decide_offer(task_id, live, offer)
         with self._input_lock:
+            if live.closed:
+                if decided:
+                    live.outbox[offer] = (reply, decided)
+                return
             if not decided and offer in live.reported:
                 return
             # Each reply is its own source: adapters refuse a repeated source ID.
