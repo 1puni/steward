@@ -27,6 +27,7 @@ from steward_harness.daemon import KernelCommands
 from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.runtime.contracts import (
     SESSION_WORKSPACE_CAPABILITIES,
+    NativeInputClosed,
     RuntimeInputResult,
 )
 from steward_harness.runtime.execution import UntrustedExecutionBroker
@@ -464,6 +465,40 @@ def test_reply_is_delivered_only_when_the_provider_accepts_it(tmp_path):
     state, runner, task_id, _ = make_runner(tmp_path, adapter)
     seen = {"task": task_id}
     runner.prepare(task_id)
+
+
+def test_closed_native_input_still_decides_offers_without_failing(tmp_path, caplog):
+    # gg, 2026-09-27: the native queue closed while the parent went on working
+    # and offered its account; the reply raised on every poll until the turn ended.
+    class Closed(ParentAdapter):
+        def execute(self, request):
+            def send(message):
+                raise NativeInputClosed("native command queue is no longer accepting input")
+            request.on_input_ready(send)
+            request.on_session_started("claude-session")
+            self.during(request)
+            return EditingAdapter.execute(self, request)
+
+    def accepted():
+        return state.tasks.git("log", "--format=%s", tip(state, seen["task"])).count("accept understanding")
+
+    def during(request):
+        task_id = seen["task"]
+        offer(request.cwd, task_id, tip(state, task_id), "## Understanding\n\nBefore the notice.")
+        eventually(lambda: accepted() == 1)
+        offer(request.cwd, task_id, tip(state, task_id), "## Understanding\n\nAfter the queue closed.")
+        eventually(lambda: accepted() == 2)
+        time.sleep(0.2)
+
+    adapter = Closed(during)
+    state, runner, task_id, _ = make_runner(tmp_path, adapter)
+    seen = {"task": task_id}
+    with caplog.at_level("INFO", logger="steward_harness.task_runner"):
+        runner.prepare(task_id)
+    assert accepted() == 2
+    assert state.tasks.read(task_id)[2] == "## Understanding\n\nAfter the queue closed."
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+    assert sum("native input closed" in r.getMessage() for r in caplog.records) == 1
 
 
 def test_procedure_product_history_is_not_accepted_task_history(tmp_path):
