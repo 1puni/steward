@@ -68,6 +68,8 @@ class Procedures:
         self.world = world
         # Per quiet rhythm: the commits seen so far, and when the newest arrived.
         self._quiet = {}
+        # Per procedure rhythm: the bucket whose fetch it has already made.
+        self._observed_bucket = {}
 
     def request(self, name, repository, candidate, base, *, event="", owner=None, activity=None, workdir=None):
         config = self.config.procedures[name]
@@ -117,7 +119,7 @@ class Procedures:
                 failures.append(f"{name} ({task_id}): {(task.findings or '')[-4000:]}")
         return "\n\n".join(failures) if failures else (None if pending else "")
 
-    def observe(self, rhythm, definitions=None, heads=None, *, fetch=True):
+    def observe(self, rhythm, definitions=None, heads=None, *, fetch=True, fetched=None):
         """(repository, candidate, base, activity): the input a run would capture.
 
         A repository rhythm's input is its candidate. An organisation rhythm
@@ -128,15 +130,22 @@ class Procedures:
         With `paths`, only the keys under them count, and only the repositories
         they name are fetched: a repository that cannot wake the rhythm is not
         worth a network round trip on every poll.
+
+        `fetch` is True (fetch what it reads), False (read the refs as the last
+        fetch left them) or the repository names to fetch. `heads` and
+        `fetched` let one pass share what it has already read and fetched.
         """
         heads = {} if heads is None else heads
+        fetched = set() if fetched is None else fetched
         prefixes = tuple(path.rstrip("/") for path in rhythm.paths)
 
         def remote(name):
-            if name not in heads:
+            wanted = fetch is True or (bool(fetch) and name in fetch)
+            if name not in heads or (wanted and name not in fetched):
                 transport = self.transports[name]
-                if fetch:
+                if wanted:
                     transport.fetch()
+                    fetched.add(name)
                 heads[name] = dict(line.split()[::-1] for line in transport._run(
                     "for-each-ref", "--format=%(objectname) %(refname:strip=3)",
                     "refs/steward/remote/").splitlines())
@@ -170,12 +179,21 @@ class Procedures:
         An interval rhythm admits at most one run per interval and only then;
         a quiet rhythm admits once its new input has stopped moving for its
         quiet period.
+
+        Rhythms are not a second fetcher. A repository some target follows is
+        fetched by that target's own observation, at least once a minute, and
+        a rhythm reads its refs as that fetch left them. The rest, and the
+        rhythm's own input repository, are fetched on the rhythm's first
+        observation in each bucket: its interval, or its quiet period. An
+        idle bucket therefore costs local ref reads and no network, and no
+        repository goes unfetched for longer than a bucket.
         """
         observed_now = time.monotonic() if now is None else now
         now = time.time() if now is None else now
         tasks = self.state.tasks.all()
         definitions = {str(task.task_id): task.definition for task in tasks}
-        heads = {}
+        heads, fetched = {}, set()
+        refreshed = {target.ref.split("/", 2)[1] for target in self.config.targets.values()}
         for name, rhythm in self.config.rhythms.items():
             if rhythm.input == "world":
                 continue  # A world turn, not a task: see `due_world_rhythms`.
@@ -192,11 +210,18 @@ class Procedures:
             event = f"{prefix}{interval(self.config.rhythms, name, now)}" if periodic else None
             if periodic and any(task.procedure.event == event for task in runs):
                 continue
+            bucket = (interval(self.config.rhythms, name, now) if periodic
+                      else int(now // rhythm.schedule.quiet))
+            fetch = set()
+            if self._observed_bucket.get(name) != bucket:
+                fetch = {rhythm.input.split("/", 2)[1], *(set(self.transports) - refreshed)}
             try:
-                repository, candidate, base, activity = self.observe(rhythm, definitions, heads)
+                repository, candidate, base, activity = self.observe(
+                    rhythm, definitions, heads, fetch=fetch, fetched=fetched)
             except GitTransportError as error:
                 log.warning("Rhythm %s input unavailable this poll: %s", name, error)
                 continue
+            self._observed_bucket[name] = bucket
             observed = {candidate, *(activity or {}).values()}
             if observed <= captured(runs):
                 self._quiet.pop(name, None)
