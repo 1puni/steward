@@ -125,8 +125,12 @@ class Procedures:
         remote head and every ordinary task's accepted work. Task documents,
         their acceptance commits and procedure runs' evidence are the steward's
         own bookkeeping and never appear: a run cannot supply its successor's input.
+        With `paths`, only the keys under them count, and only the repositories
+        they name are fetched: a repository that cannot wake the rhythm is not
+        worth a network round trip on every poll.
         """
         heads = {} if heads is None else heads
+        prefixes = tuple(path.rstrip("/") for path in rhythm.paths)
 
         def remote(name):
             if name not in heads:
@@ -143,17 +147,19 @@ class Procedures:
         repository, candidate, base = resolve_input(rhythm.input, self.transports, fetch=False)
         if rhythm.workdir is None:
             return repository, candidate, base, None
+        watched = [name for name in self.transports if not prefixes or any(
+            prefix == f"repositories/{name}" or prefix.startswith(f"repositories/{name}/")
+            for prefix in prefixes)]
         activity = {f"repositories/{name}/{ref}": sha
-                    for name in self.transports for ref, sha in remote(name).items()}
+                    for name in watched for ref, sha in remote(name).items()}
         if definitions is None:
             definitions = {str(task.task_id): task.definition for task in self.state.tasks.all()}
         activity.update({f"tasks/{task_id}": d.work for task_id, d in definitions.items()
                          if d.work and not (d.procedure and (d.procedure.access == "read-only"
                                                              or d.procedure.event.startswith("rhythm:")))})
-        if rhythm.paths:
+        if prefixes:
             # What the rhythm is for, not everything it can read: its runs
             # capture only these keys, so nothing outside them is ever new.
-            prefixes = tuple(path.rstrip("/") for path in rhythm.paths)
             activity = {key: sha for key, sha in activity.items()
                         if any(key == prefix or key.startswith(prefix + "/") for prefix in prefixes)}
         return repository, candidate, base, activity
