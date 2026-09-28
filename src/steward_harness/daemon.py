@@ -175,12 +175,17 @@ class KernelCommands:
                 f"{r.get('owner') or r.get('target', 'unowned')}: {r['delivery_error']}"
                 for r in blocked[:10]
             )
+            # Rhythms are silent unless they ask, so their silence is counted.
+            silent = self.state.recorded_not_sent(time.time() - 86_400)
+            recorded = "" if not silent else (
+                f"\nRecorded, not sent (24h): {len(silent)}: "
+                + ", ".join(sorted({key.rsplit(":", 1)[0] for key in silent})))
             return (
                 f"Steward {self.config.identity.slug}"
                 f"{' [PAUSED]' if self.state.paused() else ''}: "
                 f"{len(self.config.repositories)} repositories; "
                 f"{len(owners)} active owners: {', '.join(map(str, owners[:10])) or 'idle'}"
-                f"{' …' if len(owners) > 10 else ''}.{delivery}"
+                f"{' …' if len(owners) > 10 else ''}.{delivery}{recorded}"
             )
         if name == "tasks":
             tasks = self.state.tasks.all()[:20]

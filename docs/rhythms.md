@@ -232,12 +232,33 @@ with it, because the dependent is always asked about the current interval.
 `after` must name a configured world rhythm, and configuration refuses a cycle.
 
 The turn cannot propose or steer tasks, because a rhythm has no transport to
-receive their results; it records suggested work in world files instead. A
-non-empty reply becomes a result receipt for `owner` and goes out through the
-ordinary result lane. An empty reply, or `owner: null`, settles the interval
-silently. `/rhythm list` shows whether the current interval ran. `/rhythm run`
-refuses a world rhythm, because a second run in the same interval is exactly what
-the key exists to prevent.
+receive their results; it records suggested work in world files instead.
+`/rhythm list` shows whether the current interval ran. `/rhythm run` refuses a
+world rhythm, because a second run in the same interval is exactly what the key
+exists to prevent.
+
+## What a rhythm sends
+
+A rhythm is silent unless it asks. Its reply reaches `owner` only from a line
+that starts with `NOTIFY:`: everything from that line to the end is the message.
+The marker is forgiving to write, in any case and behind Markdown emphasis, a
+bullet or a quote, and `NOTIFY: NONE` asks for nothing. A reply without the
+marker is recorded and sent to no one, and so is any reply when `owner` is null.
+Nothing blocks on a missing or malformed marker; the reply is still kept.
+
+Silence had to become the default. When any reply that was not blank was sent,
+models told to stay silent answered `SILENT`, `(empty)`, `<br>`, a lone word
+joiner, or a sentence saying there was nothing to say, and each of those reached
+the owner's topic. A filter can drop one of these, but a model finds the next.
+With an explicit marker, sending is something the model does, and an evasion
+only fails to send.
+
+Every reply is kept. The turn keeps it in state and the world commit keeps its
+text. Its result receipt keeps it as `result_text` and marks the interval
+`recorded_only` when nothing was sent. `/status` counts what rhythms recorded
+without sending in the last 24 hours, so an absent message can be told apart from
+a run that never happened. The controller also logs
+`world rhythm <key>: reply recorded, not delivered`.
 
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
 harness never invents a schedule for you. A world rhythm is configured like any
