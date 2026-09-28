@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from steward_harness.git import validate_git_branch, validate_git_remote_url
 from steward_harness.provider_types import (
     ModelChoice,
+    ModelEntry,
     ProviderFamily,
     ProviderProfile,
 )
@@ -522,15 +523,56 @@ class ProcedureConfig(BaseModel):
     # The preference: this provider running this model at this effort. Unless
     # `fallback` is false, `provider.family_order` follows it, each fallback
     # running its own configured model for the profile.
-    provider: str
-    model: ModelChoice
+    provider: str | None = None
+    model: ModelChoice | None = None
+    # Alternative to `provider` and `model`: an ordered list walked until an
+    # entry can take the run. Each entry runs its own provider, model and
+    # effort exactly. Absent, the single preference above applies unchanged.
+    models: tuple[ModelEntry, ...] | None = None
     access: Literal["read-only", "workspace-write"] = "read-only"
     fallback: bool = True
 
+    @model_validator(mode="after")
+    def validates_preference(self) -> "ProcedureConfig":
+        if self.models is None:
+            if self.provider is None or self.model is None:
+                raise ValueError("procedure requires provider and model, or a models list")
+            return self
+        if self.provider is not None or self.model is not None:
+            raise ValueError("procedure models list conflicts with provider and model")
+        if not self.models:
+            raise ValueError("procedure models list must not be empty")
+        providers = [entry.provider for entry in self.models]
+        if len(set(providers)) != len(providers):
+            raise ValueError("procedure models list must name each provider once")
+        return self
+
+    @property
+    def lead_provider(self) -> str:
+        """The provider its run leads with."""
+        return self.models[0].provider if self.models else self.provider
+
+    def _entries(self) -> tuple[ModelEntry, ...]:
+        # `fallback: false` keeps only the first entry: a pin.
+        return (self.models or ())[:None if self.fallback else 1]
+
     def provider_order(self, family_order: tuple[ProviderFamily, ...]) -> tuple[ProviderFamily, ...]:
-        """Its provider first, then the configured order unless it is pinned."""
+        """Its provider first, then the configured order unless it is pinned.
+
+        A models list is the whole order: `family_order` is not appended.
+        """
+        if self.models:
+            return tuple(entry.provider for entry in self._entries())
         return (self.provider, *(family for family in family_order
                                  if self.fallback and family != self.provider))
+
+    def routing(self, family_order: tuple[ProviderFamily, ...]) -> dict:
+        """The cognition request fields that carry this procedure's preference."""
+        return dict(
+            provider_order=self.provider_order(family_order),
+            model=self.model,
+            entry_models=tuple((entry.provider, entry.choice) for entry in self._entries()),
+        )
 
 
 class QuietSchedule(BaseModel):
@@ -611,8 +653,13 @@ class StewardConfig(BaseModel):
                 raise ValueError(f"invalid procedure, rhythm or target name: {name!r}")
         for name, procedure in self.procedures.items():
             _require_bounded_absolute(f"procedure {name} instructions", procedure.instructions)
-            if not procedure.provider.strip():
-                raise ValueError("procedure provider must be nonblank")
+            for provider in ([procedure.provider] if procedure.models is None
+                             else [entry.provider for entry in procedure.models]):
+                if not provider.strip():
+                    raise ValueError("procedure provider must be nonblank")
+                if procedure.models is not None and provider not in self.provider.family_order:
+                    raise ValueError(
+                        f"procedure {name} models list names unprovisioned provider {provider!r}")
         for binding in (*self.rhythms.values(), *self.targets.values()):
             reference = binding.input if isinstance(binding, ProcedureRhythmConfig) else binding.ref
             if reference == "world" and isinstance(binding, ProcedureRhythmConfig):

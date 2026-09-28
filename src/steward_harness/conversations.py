@@ -399,9 +399,8 @@ class ConversationService:
                      if isinstance(self._workspace, WorldTurnCheckpoint) else self._workspace),
                 timeout_seconds=self._timeout_seconds,
                 # A procedure's model pins only its own provider; fallbacks run their own.
-                provider_order=procedure.provider_order(self._provider_order) if procedure
-                    else self._order_from(conversation.provider),
-                model=procedure.model if procedure else None,
+                **(procedure.routing(self._provider_order) if procedure
+                   else dict(provider_order=self._order_from(conversation.provider))),
                 provider_session_id=conversation.provider_session_id,
                 session_provider=cast(ProviderFamily, conversation.provider)
                 if conversation.provider_session_id
