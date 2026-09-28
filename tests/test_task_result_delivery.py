@@ -325,3 +325,48 @@ def test_a_long_task_record_cannot_push_its_result_past_the_prompt_bound():
     assert "more characters on the task's branch" in request
     short = build_result_assessment_request(admitted, "done", quiet=True)
     assert "task's branch" not in short
+
+
+def _day_after(state, task_id, days=1):
+    from datetime import datetime
+    return datetime.fromisoformat(state.tasks.get(task_id).updated_at).timestamp() + days * 86_400 + 60
+
+
+def test_open_ask_is_named_again_once_a_day_without_a_model_turn(tmp_path):
+    # gg, 2026-09-25: the light rhythm's grant ask reached its owner once and
+    # then sat for three days where only desk turns mentioned it.
+    service, facts, cognition, owner, task_id = admitted(tmp_path)
+    state = service._state
+    close_task_slice(state, task_id, 'ask', detail='May light read the repository clones?')
+    cognition.replies.append(_reply(''))
+    assert 'May light read' in service.deliver_task_result(owner, send=lambda *_: None)
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 0) - 120) == 0
+    requests = len(cognition.requests)
+
+    assert state.remind_open_tasks(now=_day_after(state, task_id)) == 1
+    assert state.remind_open_tasks(now=_day_after(state, task_id)) == 0, "one digest per day"
+    sent = []
+    service.deliver_task_result(owner, send=lambda text, key: sent.append((text, key)))
+    [(text, key)] = sent
+    assert key.startswith(f"task_open:{owner}:")
+    assert "Waiting on you for 1 day: Fix the receipt" in text
+    assert "May light read the repository clones?" in text
+    assert f"/task answer {task_id}" in text and f"/task cancel {task_id}" in text
+    assert len(cognition.requests) == requests, "a reminder is not assessed by a model"
+
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 2)) == 1
+    state.tasks.answer(task_id, 'Yes, read-only.')
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 3)) == 0, "answered is not open"
+
+
+def test_blocked_task_owned_off_telegram_goes_to_the_operator_route(tmp_path):
+    service, facts, cognition, owner, task_id = admitted(tmp_path)
+    state = service._state
+    state.tasks.hold(task_id, "blocked", 'No space left on device')
+    state.tasks.change(task_id, lambda d: d.model_copy(update={"owner": "desk:0"}),
+                       message="reassign to the desk")
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 3)) == 1
+    [receipt] = [r for r in state.pending_result_receipts() if r["source_key"].startswith("task_open:")]
+    assert receipt["owner"] is None and receipt["source_key"].startswith("task_open:operator:")
+    assert "Blocked for 3 days" in receipt["reply"] and "No space left on device" in receipt["reply"]
+    assert f"/task retry {task_id}" in receipt["reply"]
