@@ -262,6 +262,15 @@ predecessor whose run is still going when its interval ends takes the chain
 with it, because the dependent is always asked about the current interval.
 `after` must name a configured world rhythm, and configuration refuses a cycle.
 
+World rhythms run one at a time. They all write the same world, and two
+started together make the later one's candidate a replay over a world that
+moved under it: correct, because acceptance holds the world lease, but wasted.
+The controller schedules them as a single owner. While one runs, the others
+wait, and on the first poll after it finishes the first due rhythm in configured
+order starts. No interval is lost by waiting, because a rhythm stays due until
+its interval ends. A night of Sleep, REM and Dream Away with an hourly Staging
+therefore runs Sleep, REM, Dream Away and then Staging, never Staging beside REM.
+
 The turn cannot propose or steer tasks, because a rhythm has no transport to
 receive their results; it records suggested work in world files instead.
 `/rhythm list` shows whether the current interval ran. `/rhythm run` refuses a
