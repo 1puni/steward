@@ -8,12 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import subprocess
 import time
-import unicodedata
 from pathlib import Path
 
 from steward_harness.git_transport import GitTransportError
 from steward_harness.lease import Busy
+from steward_harness.notify import notification
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.state import ConversationBusy, ConversationId, TaskId, TaskSpec, TaskStatus
 from steward_harness.task_store import ProcedureRun
@@ -42,6 +43,17 @@ def captured(runs):
             for sha in (task.procedure.candidate, *(task.procedure.activity or {}).values())}
 
 
+#: A delivered world file is a message, not an attachment: past this it is
+#: cut, and the rest stays in the world.
+DELIVERY_LIMIT = 12_000
+
+
+def _bounded_delivery(text, path):
+    if len(text) <= DELIVERY_LIMIT:
+        return text
+    return text[:DELIVERY_LIMIT] + f"\n\n[{path} continues in the world.]"
+
+
 def interval(rhythms, name, now):
     """The interval a rhythm is in; a dependent rhythm is in its predecessor's."""
     rhythm = rhythms[name]
@@ -56,6 +68,8 @@ class Procedures:
         self.world = world
         # Per quiet rhythm: the commits seen so far, and when the newest arrived.
         self._quiet = {}
+        # Per procedure rhythm: the bucket whose fetch it has already made.
+        self._observed_bucket = {}
 
     def request(self, name, repository, candidate, base, *, event="", owner=None, activity=None, workdir=None):
         config = self.config.procedures[name]
@@ -105,7 +119,7 @@ class Procedures:
                 failures.append(f"{name} ({task_id}): {(task.findings or '')[-4000:]}")
         return "\n\n".join(failures) if failures else (None if pending else "")
 
-    def observe(self, rhythm, definitions=None, heads=None, *, fetch=True):
+    def observe(self, rhythm, definitions=None, heads=None, *, fetch=True, fetched=None):
         """(repository, candidate, base, activity): the input a run would capture.
 
         A repository rhythm's input is its candidate. An organisation rhythm
@@ -113,14 +127,25 @@ class Procedures:
         remote head and every ordinary task's accepted work. Task documents,
         their acceptance commits and procedure runs' evidence are the steward's
         own bookkeeping and never appear: a run cannot supply its successor's input.
+        With `paths`, only the keys under them count, and only the repositories
+        they name are fetched: a repository that cannot wake the rhythm is not
+        worth a network round trip on every poll.
+
+        `fetch` is True (fetch what it reads), False (read the refs as the last
+        fetch left them) or the repository names to fetch. `heads` and
+        `fetched` let one pass share what it has already read and fetched.
         """
         heads = {} if heads is None else heads
+        fetched = set() if fetched is None else fetched
+        prefixes = tuple(path.rstrip("/") for path in rhythm.paths)
 
         def remote(name):
-            if name not in heads:
+            wanted = fetch is True or (bool(fetch) and name in fetch)
+            if name not in heads or (wanted and name not in fetched):
                 transport = self.transports[name]
-                if fetch:
+                if wanted:
                     transport.fetch()
+                    fetched.add(name)
                 heads[name] = dict(line.split()[::-1] for line in transport._run(
                     "for-each-ref", "--format=%(objectname) %(refname:strip=3)",
                     "refs/steward/remote/").splitlines())
@@ -131,13 +156,21 @@ class Procedures:
         repository, candidate, base = resolve_input(rhythm.input, self.transports, fetch=False)
         if rhythm.workdir is None:
             return repository, candidate, base, None
+        watched = [name for name in self.transports if not prefixes or any(
+            prefix == f"repositories/{name}" or prefix.startswith(f"repositories/{name}/")
+            for prefix in prefixes)]
         activity = {f"repositories/{name}/{ref}": sha
-                    for name in self.transports for ref, sha in remote(name).items()}
+                    for name in watched for ref, sha in remote(name).items()}
         if definitions is None:
             definitions = {str(task.task_id): task.definition for task in self.state.tasks.all()}
         activity.update({f"tasks/{task_id}": d.work for task_id, d in definitions.items()
                          if d.work and not (d.procedure and (d.procedure.access == "read-only"
                                                              or d.procedure.event.startswith("rhythm:")))})
+        if prefixes:
+            # What the rhythm is for, not everything it can read: its runs
+            # capture only these keys, so nothing outside them is ever new.
+            activity = {key: sha for key, sha in activity.items()
+                        if any(key == prefix or key.startswith(prefix + "/") for prefix in prefixes)}
         return repository, candidate, base, activity
 
     def advance_rhythms(self, *, now=None):
@@ -146,12 +179,21 @@ class Procedures:
         An interval rhythm admits at most one run per interval and only then;
         a quiet rhythm admits once its new input has stopped moving for its
         quiet period.
+
+        Rhythms are not a second fetcher. A repository some target follows is
+        fetched by that target's own observation, at least once a minute, and
+        a rhythm reads its refs as that fetch left them. The rest, and the
+        rhythm's own input repository, are fetched on the rhythm's first
+        observation in each bucket: its interval, or its quiet period. An
+        idle bucket therefore costs local ref reads and no network, and no
+        repository goes unfetched for longer than a bucket.
         """
         observed_now = time.monotonic() if now is None else now
         now = time.time() if now is None else now
         tasks = self.state.tasks.all()
         definitions = {str(task.task_id): task.definition for task in tasks}
-        heads = {}
+        heads, fetched = {}, set()
+        refreshed = {target.ref.split("/", 2)[1] for target in self.config.targets.values()}
         for name, rhythm in self.config.rhythms.items():
             if rhythm.input == "world":
                 continue  # A world turn, not a task: see `due_world_rhythms`.
@@ -168,11 +210,18 @@ class Procedures:
             event = f"{prefix}{interval(self.config.rhythms, name, now)}" if periodic else None
             if periodic and any(task.procedure.event == event for task in runs):
                 continue
+            bucket = (interval(self.config.rhythms, name, now) if periodic
+                      else int(now // rhythm.schedule.quiet))
+            fetch = set()
+            if self._observed_bucket.get(name) != bucket:
+                fetch = {rhythm.input.split("/", 2)[1], *(set(self.transports) - refreshed)}
             try:
-                repository, candidate, base, activity = self.observe(rhythm, definitions, heads)
+                repository, candidate, base, activity = self.observe(
+                    rhythm, definitions, heads, fetch=fetch, fetched=fetched)
             except GitTransportError as error:
                 log.warning("Rhythm %s input unavailable this poll: %s", name, error)
                 continue
+            self._observed_bucket[name] = bucket
             observed = {candidate, *(activity or {}).values()}
             if observed <= captured(runs):
                 self._quiet.pop(name, None)
@@ -262,13 +311,24 @@ class Procedures:
             # The interval is consumed: at most one run, never a retry storm.
             log.error("world rhythm %s failed: %s", key, error)
             return
-        reply = result.reply_text.strip()
-        # Told to stay silent, a model will sometimes send an invisible
-        # character instead of nothing. A reply with nothing to read is none.
-        if not any(unicodedata.category(c)[0] not in "CZ" for c in reply):
-            reply = ""
+        recorded = result.reply_text.strip()
+        # Silence is the default: a run sends only what it asked to send.
+        message = notification(recorded)
+        if rhythm.deliver is not None and self.world is not None:
+            try:
+                changed = self.world.turn_file(str(result.turn_id), rhythm.deliver)
+            except (OSError, subprocess.SubprocessError, ValueError) as error:
+                # The reply and the world both keep the file; an unreadable
+                # one costs this delivery, never the run.
+                log.warning("world rhythm %s: %s unreadable: %s", key, rhythm.deliver, error)
+                changed = None
+            if changed and changed.strip():
+                message = _bounded_delivery(changed.strip(), rhythm.deliver)
+        if recorded and not message:
+            log.info("world rhythm %s: reply recorded, not delivered", key)
         # The ordinary result lane delivers a pending receipt to its owner.
         self.state.save_result_receipt({
             "owner": rhythm.owner, "task_id": None, "source_key": key,
-            "result_text": reply, "reply": reply, "done": not (reply and rhythm.owner),
+            "result_text": recorded, "reply": message, "done": not (message and rhythm.owner),
+            "recorded_only": bool(recorded and not message), "recorded_at": time.time(),
         })

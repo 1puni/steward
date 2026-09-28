@@ -21,6 +21,12 @@ is also what a broken monitor produces.
 - Count repeated identical lines at INFO too. A deferral that never clears is an
   outage with a heartbeat.
 - Count restarts.
+- Count what rhythms recorded without sending. Rhythms are silent unless they
+  write `NOTIFY:` ([what a rhythm sends](rhythms.md#what-a-rhythm-sends)), so a
+  quiet topic proves nothing either way. `/status` gives the 24-hour count, and each
+  silent world-rhythm reply logs `reply recorded, not delivered`. A rhythm that ran
+  and recorded is healthy. One that shows up in neither the count nor the sent
+  messages did not run.
 
 ## Build a monitor that cannot lie quietly
 

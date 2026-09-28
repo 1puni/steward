@@ -11,6 +11,7 @@ from threading import RLock
 from steward_harness.runtime.contracts import (
     Availability,
     MissingProviderSession,
+    NativeInputClosed,
     ProviderCapabilities,
     ProviderFamily,
     RuntimeExecutionError,
@@ -211,7 +212,7 @@ class _AppServerTurn:
                 )
             if self.closed or self.completed or self.stopping or self.failure is not None or self.turn_id is None:
                 self.request.on_input_result(RuntimeInputResult(message.source_id, "rejected"))
-                raise RuntimeExecutionError(
+                raise NativeInputClosed(
                     "native turn is no longer accepting input",
                     session_id=self.thread_id,
                 )

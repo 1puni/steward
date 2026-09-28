@@ -43,6 +43,12 @@ def commit(clone, name, *, push=True):
     return _git("rev-parse", "HEAD", cwd=clone)
 
 
+def refresh(runner):
+    """What the daemon's target observations do between rhythm buckets."""
+    for transport in runner.transports.values():
+        transport.fetch()
+
+
 def peer(tmp_path, state, runner):
     root = tmp_path / "peer"
     root.mkdir()
@@ -57,6 +63,7 @@ def test_quiet_rhythm_runs_once_its_input_settles_and_never_again_while_unchange
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
     procedures.advance_rhythms(now=0)
     sha = commit(clone, "changed.txt")
+    refresh(runner)
     procedures.advance_rhythms(now=100)
     procedures.advance_rhythms(now=399)
     assert not state.tasks.all()
@@ -75,6 +82,7 @@ def test_quiet_rhythm_runs_once_its_input_settles_and_never_again_while_unchange
     assert len(reopened.tasks.all()) == len(adapter.requests) == 1
     # A new commit is new input: it runs once it has been quiet for the period.
     newer = commit(clone, "newer.txt")
+    refresh(runner)
     restarted.advance_rhythms(now=14100)
     restarted.advance_rhythms(now=14399)
     assert len(reopened.tasks.all()) == 1
@@ -96,6 +104,7 @@ def test_interval_rhythm_admits_only_when_its_input_changed(tmp_path):
         procedures.advance_rhythms(now=now)
     assert len(state.tasks.all()) == len(adapter.requests) == 1
     sha = commit(clone, "changed.txt")
+    refresh(runner)
     procedures.advance_rhythms(now=460)
     second = state.tasks.queued()[0]
     assert state.tasks.read(second)[1].procedure.event == "rhythm:hourly:4"
@@ -169,6 +178,150 @@ def test_org_rhythm_input_is_every_remote_head_and_ordinary_task_work(tmp_path):
     assert len(state.tasks.all()) == 4
 
 
+def test_org_rhythm_paths_narrow_its_input_to_what_it_is_for(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer_clone = peer(tmp_path, state, runner)
+    config.rhythms = {"org": ProcedureRhythmConfig(owner=None, schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",))}
+    procedures.advance_rhythms(now=100)
+    first = state.tasks.queued()[0]
+    assert state.tasks.read(first)[1].procedure.activity == {
+        "repositories/peer/main": _git("rev-parse", "HEAD", cwd=peer_clone)}
+    runner.prepare(first)
+    # Accepted task work and a branch outside the paths are readable, not input.
+    product, _ = state.tasks.create(TaskSpec("app", "Investigate", "Investigate a real obligation."))
+    runner.prepare(product)
+    sha = commit(peer_clone, "feature.txt", push=False)
+    _git("push", "origin", f"{sha}:refs/heads/feature", cwd=peer_clone)
+    procedures.advance_rhythms(now=200)
+    procedures.advance_rhythms(now=300)
+    assert len(state.tasks.all()) == 2
+    # The line it watches moving is.
+    moved = commit(peer_clone, "release.txt")
+    procedures.advance_rhythms(now=400)
+    second = state.tasks.queued()[0]
+    assert state.tasks.read(second)[1].procedure.activity == {"repositories/peer/main": moved}
+
+
+def test_org_rhythm_paths_fetch_only_the_repositories_they_name(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer(tmp_path, state, runner)
+    fetched = []
+    for name, transport in runner.transports.items():
+        fetch = transport.fetch
+        transport.fetch = lambda name=name, fetch=fetch: (fetched.append(name), fetch())[1]
+    rhythm = ProcedureRhythmConfig(owner=None, schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main")
+    procedures.observe(rhythm)
+    assert sorted(fetched) == ["app", "peer"]
+    # The input repository is always read; a repository no path names is not.
+    fetched.clear()
+    _, candidate, _, activity = procedures.observe(rhythm.model_copy(update={"paths": ("tasks/",)}))
+    assert fetched == ["app"] and activity == {}
+    assert candidate == _git("rev-parse", "HEAD", cwd=clone)
+    fetched.clear()
+    procedures.observe(rhythm.model_copy(update={"paths": ("repositories/peer/",)}))
+    assert sorted(fetched) == ["app", "peer"]
+
+
+def _spy_fetches(runner):
+    fetched = []
+    for name, transport in runner.transports.items():
+        fetch = transport.fetch
+        transport.fetch = lambda name=name, fetch=fetch: (fetched.append(name), fetch())[1]
+    return fetched
+
+
+def _followed_by_a_target(config, repository):
+    from steward_harness.config.schema import TargetConfig
+
+    config.targets["site"] = TargetConfig(ref=f"repositories/{repository}/main", driver="/bin/true")
+
+
+def test_an_idle_bucket_fetches_nothing_across_many_passes(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    _followed_by_a_target(config, "app")
+    config.rhythms = {"hourly": ProcedureRhythmConfig(owner=None, schedule=3600,
+        procedure="security-one", input="repositories/app/main")}
+    procedures.advance_rhythms(now=3600)
+    runner.prepare(state.tasks.queued()[0])
+    fetched = _spy_fetches(runner)
+    # The pass runs every few seconds; one bucket's first observation fetches
+    # the input once, and the target's own observation refreshes it after that.
+    for now in range(7200, 10800, 60):
+        procedures.advance_rhythms(now=now)
+    assert fetched == ["app"]
+    assert len(state.tasks.all()) == 1
+
+
+def test_new_input_the_daemon_fetched_admits_a_run_without_a_rhythm_fetch(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    _followed_by_a_target(config, "app")
+    config.rhythms = {"hourly": ProcedureRhythmConfig(owner=None, schedule=3600,
+        procedure="security-one", input="repositories/app/main")}
+    procedures.advance_rhythms(now=3600)
+    runner.prepare(state.tasks.queued()[0])
+    procedures.advance_rhythms(now=7200)
+    sha = commit(clone, "shipped.txt")
+    procedures.advance_rhythms(now=7300)
+    assert len(state.tasks.all()) == 1  # Pushed, but nothing has fetched it yet.
+    runner.transports["app"].fetch()  # The target's observation.
+    fetched = _spy_fetches(runner)
+    procedures.advance_rhythms(now=7400)
+    run = state.tasks.read(state.tasks.queued()[0])[1].procedure
+    assert run.candidate == sha and run.event == "rhythm:hourly:2"
+    assert fetched == []
+
+
+def test_a_repository_no_target_follows_is_fetched_once_per_bucket(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer_clone = peer(tmp_path, state, runner)
+    _followed_by_a_target(config, "app")
+    config.rhythms = {"org": ProcedureRhythmConfig(owner=None, schedule=3600, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",))}
+    procedures.advance_rhythms(now=3600)
+    runner.prepare(state.tasks.queued()[0])
+    fetched = _spy_fetches(runner)
+    procedures.advance_rhythms(now=7200)
+    moved = commit(peer_clone, "release.txt")
+    for now in range(7260, 10800, 60):
+        procedures.advance_rhythms(now=now)
+    # Nothing else fetches peer, so the rhythm did, once, and saw the old tip.
+    assert sorted(fetched) == ["app", "peer"] and len(state.tasks.all()) == 1
+    # The next bucket's fetch sees the move: the rhythm is late, never blind.
+    procedures.advance_rhythms(now=10800)
+    run = state.tasks.read(state.tasks.queued()[0])[1].procedure
+    assert run.activity == {"repositories/peer/main": moved}
+    assert sorted(fetched) == ["app", "app", "peer", "peer"]
+
+
+def _org_config(tmp_path, paths):
+    from test_world_rhythms import _config
+
+    config = _config(tmp_path, tmp_path / "world").model_dump()
+    config["repositories"] = {"app": {"path": str(tmp_path / "app"),
+                                      "remote_url": "https://example.com/app.git"}}
+    config["procedures"]["review"] = config["procedures"]["sleep"] | {"access": "read-only"}
+    config["rhythms"] = {"org": {"schedule": 100, "procedure": "review", "input": "repositories/app/main",
+                                 "workdir": str(tmp_path), "owner": None, "paths": paths}}
+    return config
+
+
+@pytest.mark.parametrize("paths", [["repositories/app/main"], ["repositories/app/"], ["tasks/"]])
+def test_org_rhythm_paths_accept_configured_repositories_and_tasks(tmp_path, paths):
+    from steward_harness.config.schema import StewardConfig
+
+    StewardConfig.model_validate(_org_config(tmp_path, paths))
+
+
+@pytest.mark.parametrize("paths", [["repositories/typo/main"], ["episodes/"]])
+def test_org_rhythm_paths_refuse_a_prefix_that_would_silence_it(tmp_path, paths):
+    from steward_harness.config.schema import StewardConfig
+
+    with pytest.raises(ValidationError, match="must name tasks/ or a configured"):
+        StewardConfig.model_validate(_org_config(tmp_path, paths))
+
+
 def test_org_reflection_refreshes_sibling_refs_without_moving_local_work(tmp_path):
     from steward_harness.config.schema import RepositoryConfig
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
@@ -186,6 +339,7 @@ def test_org_reflection_refreshes_sibling_refs_without_moving_local_work(tmp_pat
     config.rhythms["light"] = config.rhythms["light"].model_copy(update={"workdir": str(tmp_path)})
     procedures.advance_rhythms(now=0)
     commit(clone, "changed.txt")
+    refresh(runner)
     procedures.advance_rhythms(now=10)
     procedures.advance_rhythms(now=310)
     task = state.tasks.queued()[0]
@@ -212,6 +366,7 @@ def test_restart_with_changed_work_waits_full_quiet_and_daily_recurs_on_new_inpu
     daily = state.tasks.queued()[0]
     runner.prepare(daily)
     commit(clone, "first.txt")
+    refresh(runner)
     procedures.advance_rhythms(now=100)
     procedures.advance_rhythms(now=400)
     light = state.tasks.queued()[0]
@@ -243,6 +398,7 @@ def test_large_activity_stays_in_git_metadata_and_reflection_starts_at_org_root(
     sha = commit(clone, "new-evidence.txt")
     # A real organisation's many branches exceed the old brief limit.
     _git("push", "origin", *(f"{sha}:refs/heads/feature-{i}" for i in range(200)), cwd=clone)
+    refresh(runner)
     procedures.advance_rhythms(now=10)
     procedures.advance_rhythms(now=310)
     task = state.tasks.queued()[0]
@@ -328,6 +484,7 @@ def test_failed_input_fetch_skips_the_poll_and_retries_next_poll(tmp_path, caplo
     clone, state, runner, _, procedures, _ = quiet_harness(tmp_path)
     procedures.advance_rhythms(now=0)
     sha = commit(clone, "pending.txt")
+    refresh(runner)
     procedures.advance_rhythms(now=10)
     previous = dict(procedures._quiet)
     # Remove the actual remote: exercise fetch and its Git stderr, not a stub

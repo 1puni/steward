@@ -175,12 +175,17 @@ class KernelCommands:
                 f"{r.get('owner') or r.get('target', 'unowned')}: {r['delivery_error']}"
                 for r in blocked[:10]
             )
+            # Rhythms are silent unless they ask, so their silence is counted.
+            silent = self.state.recorded_not_sent(time.time() - 86_400)
+            recorded = "" if not silent else (
+                f"\nRecorded, not sent (24h): {len(silent)}: "
+                + ", ".join(sorted({key.rsplit(":", 1)[0] for key in silent})))
             return (
                 f"Steward {self.config.identity.slug}"
                 f"{' [PAUSED]' if self.state.paused() else ''}: "
                 f"{len(self.config.repositories)} repositories; "
                 f"{len(owners)} active owners: {', '.join(map(str, owners[:10])) or 'idle'}"
-                f"{' …' if len(owners) > 10 else ''}.{delivery}"
+                f"{' …' if len(owners) > 10 else ''}.{delivery}{recorded}"
             )
         if name == "tasks":
             tasks = self.state.tasks.all()[:20]
@@ -839,8 +844,14 @@ class StewardDaemon:
             if paused() or not self.config.rhythms:
                 return
             yield ("rhythms",), self._procedures.advance_rhythms
-            for name, key in self._procedures.due_world_rhythms():
-                yield ("rhythm", name), lambda name=name, key=key: (
+            # World rhythms are one owner. Each writes the same world, and two
+            # started together make the later one's candidate a replay of a
+            # world that moved under it; the lease keeps that correct, not
+            # cheap. While one runs the owner is in flight, so the next due
+            # rhythm, in configured order, starts on the first poll after it.
+            due = next(iter(self._procedures.due_world_rhythms()), None)
+            if due is not None:
+                yield ("rhythm", "world"), lambda name=due[0], key=due[1]: (
                     self._procedures.run_world_rhythm(conversations, name, key))
 
         def targets() -> Iterator[Owner]:
@@ -872,7 +883,18 @@ class StewardDaemon:
                 state.save_result_receipt(receipt)
                 log.warning("result %s deferred: %s", receipt["source_key"], error)
 
+        reminded = [None]
+
         def result_owners() -> Iterator[Owner]:
+            # A stuck task is named again at most daily; reading every task
+            # to decide that is worth doing once an hour, not every pass.
+            hour = int(time.time() // 3600)
+            if reminded[0] != hour:
+                reminded[0] = hour
+                try:
+                    state.remind_open_tasks()
+                except (GitTransportError, OSError, ValueError) as error:
+                    log.warning("open task reminder deferred: %s", error)
             # External target transitions have no task owner. Assign a real
             # configured operator route; never invent a topic or a task.
             for receipt in state.pending_result_receipts():

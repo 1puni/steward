@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import hashlib
 import os
 import re
@@ -18,6 +19,8 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 
 from steward_harness.receipts import write_receipt
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from steward_harness.config.schema import IncidentPolicy
@@ -689,6 +692,12 @@ class StateDatabase:
                 notice = rejection or notice
             else:
                 notice = rejection
+            if rejection is not None and row["operator_id"].startswith("harness:"):
+                # An automatic turn's refused proposal or action is the
+                # steward's own bookkeeping. The turn keeps it and the log
+                # names it; the operator did not ask, so it is not news to them.
+                log.warning("turn %s (%s): %s", event_id, row["operator_id"], rejection)
+                notice = None
             reply = (
                 f"{visible_reply}\n\n{notice}"
                 if notice and visible_reply
@@ -1278,6 +1287,59 @@ class StateDatabase:
             *(ConversationId(task.owner) for task, _ in self._undelivered_task_results()),
         ]))
 
+    #: How long a task may wait on the operator before it is named again.
+    OPEN_TASK_REMINDER_SECONDS = 86_400
+
+    def remind_open_tasks(self, *, now: float | None = None) -> int:
+        """Name every task stuck on the operator for over a day, once a day.
+
+        A task that asks, blocks or awaits confirmation reports once, through
+        its owner. After that nothing re-queues it, and an owner that is a
+        desk or a rhythm is not somewhere the operator reads. So each UTC day
+        the tasks stuck longer than a day are listed, without a model turn:
+        one digest to each Telegram owner, and one to the configured operator
+        route for everything else. The day is the idempotency key, so a
+        restart or a second pass sends nothing new. Returns digests recorded.
+        """
+        from steward_harness.task_query import is_task_query
+        now = datetime.now(UTC).timestamp() if now is None else now
+        day = int(now // self.OPEN_TASK_REMINDER_SECONDS)
+        verbs = {
+            TaskStatus.WAITING: ("Waiting on you", "answer: /task answer {id} <answer>"),
+            TaskStatus.BLOCKED: ("Blocked", "resume: /task retry {id} [diagnostics]"),
+            TaskStatus.PROPOSED: ("Proposed", "admit: /task confirm {id}"),
+        }
+        routes: dict[str | None, list[str]] = {}
+        for task in self.tasks.all():
+            status = task.status
+            if status not in verbs or (status is TaskStatus.WAITING
+                                       and is_task_query(status.value, task.reason)):
+                continue
+            age = now - datetime.fromisoformat(task.updated_at).timestamp()
+            if age < self.OPEN_TASK_REMINDER_SECONDS:
+                continue
+            label, action = verbs[status]
+            days = int(age // self.OPEN_TASK_REMINDER_SECONDS)
+            entry = [f"{label} for {days} day{'s' if days != 1 else ''}: {task.title}",
+                     f"  {task.task_id} in {task.repository}"]
+            if task.reason:
+                entry.append("  " + " ".join(task.reason.split())[:300])
+            entry.append(f"  {action.format(id=task.task_id)} · or /task cancel {task.task_id}")
+            owner = task.owner if task.owner and ConversationId(task.owner).kind == "telegram" else None
+            routes.setdefault(owner, []).append("\n".join(entry))
+        recorded = 0
+        for owner, entries in routes.items():
+            key = f"task_open:{owner or 'operator'}:{day}"
+            if self.result_receipt(key):
+                continue
+            text = ("Still open after a day or more. Nothing re-queues these; "
+                    "each needs an answer, a retry or a cancel.\n\n" + "\n\n".join(entries))[:10_000]
+            # A prepared reply: delivery sends it as is and assesses nothing.
+            self.save_result_receipt({"owner": owner, "task_id": None, "source_key": key,
+                                      "result_text": text, "reply": text})
+            recorded += 1
+        return recorded
+
     def result_receipt_path(self, source_key: str) -> Path:
         key = hashlib.sha256(source_key.encode()).hexdigest()
         return self.path.with_name(f"{self.path.name}.task-results") / f"{key}.json"
@@ -1308,6 +1370,21 @@ class StateDatabase:
             if task.owner == str(conversation_id):
                 return task.task_id, self._task_result_text(task), key
         return None
+
+    def recorded_not_sent(self, since: float) -> list[str]:
+        """What automatic runs recorded since `since` without notifying anyone.
+
+        Silence is the default for rhythms, so it has to be countable: a world
+        rhythm's reply that asked for no delivery, and a rhythm review whose
+        findings asked for none. A run that wrote nothing at all is not here.
+        """
+        world = [receipt["source_key"] for receipt in (
+            json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
+            if receipt.get("recorded_only") and receipt.get("recorded_at", 0) >= since]
+        tasks = [task.procedure.event for task in self.tasks.all()
+                 if task.quiet and task.findings
+                 and datetime.fromisoformat(task.updated_at).timestamp() >= since]
+        return sorted(world) + sorted(tasks)
 
     def retain_pending_result(self, conversation_id) -> dict | None:
         """Retain the selected outcome before assessment or route diagnostics."""

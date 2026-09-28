@@ -185,12 +185,16 @@ def test_pending_action_replays_with_repository_authority(tmp_path, allowed):
     assert tuple((k, t) for _, k, t, _ in state.tasks.get(task_id).pending) == notes
 
 
-def completed_review(tmp_path, *, event="rhythm:light:1", disposition="idle"):
+FLAGGED = ("Existing finding remains owned; full retained evidence.\n"
+           "NOTIFY: The receipt regressed and needs repair.")
+
+
+def completed_review(tmp_path, *, event="rhythm:light:1", disposition="idle", findings=FLAGGED):
     from steward_harness.task_store import ProcedureRun
     service, facts, cognition, owner, task_id = admitted(tmp_path)
     close_task_slice(service._state, task_id, disposition,
                      detail="Which source?" if disposition == "ask" else None,
-                     findings="Existing finding remains owned; full retained evidence.")
+                     findings=findings)
     work = service._state.tasks.get(task_id).work_sha
     procedure = ProcedureRun(name="review", event=event, instructions="Review changes.",
                              provider="codex", model={"model": "gpt"}, access="read-only",
@@ -200,24 +204,44 @@ def completed_review(tmp_path, *, event="rhythm:light:1", disposition="idle"):
     return service, facts, cognition, owner, task_id
 
 
-def test_silent_scheduled_review_keeps_evidence_and_stays_quiet_after_restart(tmp_path):
-    service, facts, cognition, owner, task_id = completed_review(tmp_path)
-    cognition.replies.append(_reply(""))
-    pending = service._state.pending_task_result_for(owner)
-    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("silent review sent")) == ""
-    receipt = service._state.result_receipt(pending[2])
-    assert receipt["done"] and receipt["reply"] == ""
-    assert "full retained evidence" in receipt["result_text"]
-    assert service._state.tasks.get(task_id).verdict == "fail"
+@pytest.mark.parametrize("findings", [
+    "Existing finding remains owned; full retained evidence.",
+    # What the launch reflections wrote when told to write nothing.
+    "Nothing material has changed since the last reflection, so I'm reporting no findings.",
+    "NOTIFY: NONE",
+])
+def test_unflagged_scheduled_review_keeps_evidence_and_costs_no_turn(tmp_path, findings):
+    import time
+    service, facts, cognition, owner, task_id = completed_review(tmp_path, findings=findings)
+    state = service._state
+    assert state.tasks.get(task_id).quiet
+    assert state.pending_task_result_conversations() == ()
+    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("unflagged review sent")) is None
+    # The evidence commit keeps the findings, and the silence is counted.
+    assert findings.split()[0] in state.tasks.get(task_id).findings
+    assert state.recorded_not_sent(time.time() - 60) == ["rhythm:light:1"]
     restarted = _service(tmp_path, cognition)
     restarted._state.tasks.transports = {"app": facts}
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed silence")) is None
-    assert len(cognition.requests) == 2
+    assert len(cognition.requests) == 1
+
+
+@pytest.mark.parametrize("assessment", ["", "SILENT", "Nothing new."])
+def test_flagged_review_is_sent_as_the_run_wrote_it_unless_replaced(tmp_path, assessment):
+    service, facts, cognition, owner, task_id = completed_review(tmp_path)
+    cognition.replies.append(_reply(assessment))
+    sent = []
+    assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == \
+        "The receipt regressed and needs repair."
+    assert [text for text, _ in sent] == ["The receipt regressed and needs repair."]
+    # The assessment was told what would be sent, and how to replace it.
+    prompt = cognition.requests[-1].prompt
+    assert "The receipt regressed and needs repair." in prompt and "NOTIFY:" in prompt
 
 
 def test_material_scheduled_review_sends_owner_summary_and_retries_exactly(tmp_path):
     service, facts, cognition, owner, task_id = completed_review(tmp_path)
-    cognition.replies.append(_reply("A new failure needs repair."))
+    cognition.replies.append(_reply("Reading it.\nNOTIFY: A new failure needs repair."))
     attempted = []
     def unavailable(text, key):
         attempted.append((text, key))
@@ -250,20 +274,22 @@ def test_scheduled_assessment_failure_remains_visible(tmp_path):
     assert "full retained evidence" in sent[0][0]
 
 
-def test_crash_before_silent_receipt_commit_replays_accepted_assessment_once(tmp_path, monkeypatch):
+def test_crash_before_receipt_commit_replays_accepted_assessment_once(tmp_path, monkeypatch):
     service, facts, cognition, owner, task_id = completed_review(tmp_path)
     cognition.replies.append(_reply(""))
     original = service._state.save_result_receipt
     def crash(receipt):
         if "reply" in receipt:
-            raise OSError("crash before quiet receipt")
+            raise OSError("crash before receipt")
         original(receipt)
     monkeypatch.setattr(service._state, "save_result_receipt", crash)
     with pytest.raises(OSError):
-        service.deliver_task_result(owner, send=lambda *_: pytest.fail("silent review sent"))
+        service.deliver_task_result(owner, send=lambda *_: pytest.fail("sent before its receipt"))
     restarted = _service(tmp_path, cognition)
     restarted._state.tasks.transports = {"app": facts}
-    assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed silence")) == ""
+    sent = []
+    restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    assert [text for text, _ in sent] == ["The receipt regressed and needs repair."]
     assert len(cognition.requests) == 2
     assert not restarted._state.pending_task_result_conversations()
 
@@ -325,3 +351,48 @@ def test_a_long_task_record_cannot_push_its_result_past_the_prompt_bound():
     assert "more characters on the task's branch" in request
     short = build_result_assessment_request(admitted, "done", quiet=True)
     assert "task's branch" not in short
+
+
+def _day_after(state, task_id, days=1):
+    from datetime import datetime
+    return datetime.fromisoformat(state.tasks.get(task_id).updated_at).timestamp() + days * 86_400 + 60
+
+
+def test_open_ask_is_named_again_once_a_day_without_a_model_turn(tmp_path):
+    # gg, 2026-09-25: the light rhythm's grant ask reached its owner once and
+    # then sat for three days where only desk turns mentioned it.
+    service, facts, cognition, owner, task_id = admitted(tmp_path)
+    state = service._state
+    close_task_slice(state, task_id, 'ask', detail='May light read the repository clones?')
+    cognition.replies.append(_reply(''))
+    assert 'May light read' in service.deliver_task_result(owner, send=lambda *_: None)
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 0) - 120) == 0
+    requests = len(cognition.requests)
+
+    assert state.remind_open_tasks(now=_day_after(state, task_id)) == 1
+    assert state.remind_open_tasks(now=_day_after(state, task_id)) == 0, "one digest per day"
+    sent = []
+    service.deliver_task_result(owner, send=lambda text, key: sent.append((text, key)))
+    [(text, key)] = sent
+    assert key.startswith(f"task_open:{owner}:")
+    assert "Waiting on you for 1 day: Fix the receipt" in text
+    assert "May light read the repository clones?" in text
+    assert f"/task answer {task_id}" in text and f"/task cancel {task_id}" in text
+    assert len(cognition.requests) == requests, "a reminder is not assessed by a model"
+
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 2)) == 1
+    state.tasks.answer(task_id, 'Yes, read-only.')
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 3)) == 0, "answered is not open"
+
+
+def test_blocked_task_owned_off_telegram_goes_to_the_operator_route(tmp_path):
+    service, facts, cognition, owner, task_id = admitted(tmp_path)
+    state = service._state
+    state.tasks.hold(task_id, "blocked", 'No space left on device')
+    state.tasks.change(task_id, lambda d: d.model_copy(update={"owner": "desk:0"}),
+                       message="reassign to the desk")
+    assert state.remind_open_tasks(now=_day_after(state, task_id, 3)) == 1
+    [receipt] = [r for r in state.pending_result_receipts() if r["source_key"].startswith("task_open:")]
+    assert receipt["owner"] is None and receipt["source_key"].startswith("task_open:operator:")
+    assert "Blocked for 3 days" in receipt["reply"] and "No space left on device" in receipt["reply"]
+    assert f"/task retry {task_id}" in receipt["reply"]

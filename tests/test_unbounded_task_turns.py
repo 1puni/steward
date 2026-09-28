@@ -18,7 +18,7 @@ import pytest
 
 from steward_harness.runtime.process import ProcessController
 from steward_harness.runtime.providers.claude import ClaudeRuntime
-from test_quiet_rhythms import commit, quiet_harness
+from test_quiet_rhythms import commit, quiet_harness, refresh
 from test_task_cancellation import _commands
 from test_task_no_changes import InvestigationAdapter, result_text, setup_task, task_status
 from test_task_runner_kernel import EditingAdapter, _git, run_task
@@ -209,6 +209,7 @@ def test_procedure_runs_keep_the_provider_deadline(tmp_path):
     clone, state, runner, _, procedures, adapter = quiet_harness(tmp_path / "procedure")
     procedures.advance_rhythms(now=0)
     commit(clone, "changed.txt")
+    refresh(runner)
     procedures.advance_rhythms(now=10)
     procedures.advance_rhythms(now=310)
     runner.prepare(state.tasks.queued()[0])

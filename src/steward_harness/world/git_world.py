@@ -58,18 +58,48 @@ class GitWorld:
         return self._git("rev-parse", "HEAD")
 
     def changed(self, since: str, paths: tuple[str, ...]) -> bool:
-        """Does the accepted world differ from `since` under any of `paths`?
+        """Was content added or modified under any of `paths` since `since`?
 
+        Something new to read is the only change that counts. A deletion, a
+        move out of the paths and a move within them (archiving an episode
+        into a subdirectory) leave nothing new there, so they are not input.
         A revision Git can no longer read, or a Git that cannot answer, counts
         as changed: an unanswerable cursor admits the run rather than silencing it.
         """
         try:
             return run_agent_git(
-                self.execution_broker, "diff", "--quiet", since, "HEAD", "--", *paths,
+                self.execution_broker, "diff", "--quiet", "--find-renames", "--diff-filter=AMT",
+                since, "HEAD", "--", *paths,
                 cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
             ).returncode != 0
         except (OSError, subprocess.TimeoutExpired):
             return True
+
+    def turn_file(self, event_id: str, path: str) -> str | None:
+        """`path` as the accepted commit of turn `event_id` left it, if that commit changed it.
+
+        The accepted commit is found by its turn trailer, not by the turn's
+        candidate: a turn that landed behind another is replayed onto the
+        world as a new commit. None when no accepted commit names the turn,
+        when it did not change `path`, or when it removed it.
+        """
+        validate_turn_id(event_id)
+        commit = next((sha for sha in self._git(
+            "log", "--format=%H", "--fixed-strings", f"--grep={TURN_TRAILER}: {event_id}", "HEAD", "--",
+        ).split() if self.trailers(sha).get(TURN_TRAILER) == event_id), None)
+        if commit is None:
+            return None
+        changed = run_agent_git(
+            self.execution_broker, "diff", "--quiet", f"{commit}^", commit, "--", path,
+            cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
+        ).returncode != 0
+        if not changed:
+            return None
+        shown = run_agent_git(
+            self.execution_broker, "show", f"{commit}:{path}",
+            cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
+        )
+        return shown.stdout if shown.returncode == 0 else None
 
     def finish(self, event_id: str, user_text: str, reply_text: str, *,
                base: str, source: str) -> None:

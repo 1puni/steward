@@ -550,8 +550,13 @@ class ProcedureRhythmConfig(BaseModel):
     input: str
     owner: str | None  # Explicit null retains findings without assessment/delivery.
     workdir: str | None = None
-    # World paths whose change since the rhythm's last accepted run is its input.
+    # What counts as input. For a world rhythm, world paths whose change since
+    # its last accepted run is its input; for an organisation (`workdir`)
+    # rhythm, the prefixes of its activity keys, such as `repositories/app/main`.
     paths: tuple[str, ...] = ()
+    # A world file that is the message: when a run changes it, its content is
+    # sent to the owner in place of the reply.
+    deliver: str | None = None
 
     @model_validator(mode="after")
     def validates_workdir(self):
@@ -561,7 +566,7 @@ class ProcedureRhythmConfig(BaseModel):
             raise ValueError("rhythm requires exactly one of schedule or after")
         if self.offset and not (isinstance(self.schedule, int) and self.offset < self.schedule):
             raise ValueError("rhythm offset requires an interval schedule longer than it")
-        for path in self.paths:
+        for path in (*self.paths, *((self.deliver,) if self.deliver is not None else ())):
             parts = PurePosixPath(path).parts
             if not path.strip() or path.startswith("/") or ".." in parts or ".git" in parts:
                 raise ValueError(f"rhythm path must stay inside the world: {path!r}")
@@ -630,8 +635,18 @@ class StewardConfig(BaseModel):
                     raise ValueError("world rhythm requires a workspace-write procedure")
                 if rhythm.after is None and not isinstance(rhythm.schedule, int):
                     raise ValueError("world rhythm requires an interval schedule")
-            elif rhythm.after is not None or rhythm.paths:
-                raise ValueError("rhythm after and paths apply only to world rhythms")
+            elif rhythm.after is not None or rhythm.deliver is not None or (rhythm.paths and rhythm.workdir is None):
+                raise ValueError("rhythm after and deliver apply only to world rhythms, "
+                                 "and paths only to world or organisation rhythms")
+            else:
+                for path in rhythm.paths:
+                    # An organisation rhythm's input is keyed by repository
+                    # ref or task; a prefix naming neither would silence it.
+                    root, _, rest = path.partition("/")
+                    repository = rest.partition("/")[0]
+                    if not (root == "tasks" or (root == "repositories" and repository in self.repositories)):
+                        raise ValueError(f"organisation rhythm path must name tasks/ or a "
+                                         f"configured repositories/<name>: {path!r}")
             if rhythm.owner is not None:
                 kind, _, reference = rhythm.owner.partition(":")
                 if kind == "telegram":
