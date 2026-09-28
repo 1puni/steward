@@ -9,11 +9,11 @@ import hashlib
 import json
 import logging
 import time
-import unicodedata
 from pathlib import Path
 
 from steward_harness.git_transport import GitTransportError
 from steward_harness.lease import Busy
+from steward_harness.notify import notification
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.state import ConversationBusy, ConversationId, TaskId, TaskSpec, TaskStatus
 from steward_harness.task_store import ProcedureRun
@@ -262,13 +262,14 @@ class Procedures:
             # The interval is consumed: at most one run, never a retry storm.
             log.error("world rhythm %s failed: %s", key, error)
             return
-        reply = result.reply_text.strip()
-        # Told to stay silent, a model will sometimes send an invisible
-        # character instead of nothing. A reply with nothing to read is none.
-        if not any(unicodedata.category(c)[0] not in "CZ" for c in reply):
-            reply = ""
+        recorded = result.reply_text.strip()
+        # Silence is the default: a run sends only what it asked to send.
+        message = notification(recorded)
+        if recorded and not message:
+            log.info("world rhythm %s: reply recorded, not delivered", key)
         # The ordinary result lane delivers a pending receipt to its owner.
         self.state.save_result_receipt({
             "owner": rhythm.owner, "task_id": None, "source_key": key,
-            "result_text": reply, "reply": reply, "done": not (reply and rhythm.owner),
+            "result_text": recorded, "reply": message, "done": not (message and rhythm.owner),
+            "recorded_only": bool(recorded and not message), "recorded_at": time.time(),
         })

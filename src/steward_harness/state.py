@@ -1362,6 +1362,21 @@ class StateDatabase:
                 return task.task_id, self._task_result_text(task), key
         return None
 
+    def recorded_not_sent(self, since: float) -> list[str]:
+        """What automatic runs recorded since `since` without notifying anyone.
+
+        Silence is the default for rhythms, so it has to be countable: a world
+        rhythm's reply that asked for no delivery, and a rhythm review whose
+        findings asked for none. A run that wrote nothing at all is not here.
+        """
+        world = [receipt["source_key"] for receipt in (
+            json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
+            if receipt.get("recorded_only") and receipt.get("recorded_at", 0) >= since]
+        tasks = [task.procedure.event for task in self.tasks.all()
+                 if task.quiet and task.findings
+                 and datetime.fromisoformat(task.updated_at).timestamp() >= since]
+        return sorted(world) + sorted(tasks)
+
     def retain_pending_result(self, conversation_id) -> dict | None:
         """Retain the selected outcome before assessment or route diagnostics."""
         pending = self.pending_task_result_for(conversation_id)

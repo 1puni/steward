@@ -57,12 +57,14 @@ def test_world_rhythm_runs_once_per_interval_as_a_world_turn(tmp_path):
     assert request.model.model == "night-model" and request.provider_order == ("codex",)
     assert request.sandbox_mode == "workspace-write"
     assert "Consolidate the world." in request.prompt and "TASK_PROPOSAL" not in request.prompt
+    # It is told that nothing is sent unless it asks.
+    assert "start a line with `NOTIFY:`" in request.prompt
     # A rhythm owns no transport, so its turn cannot admit the task it proposed.
     assert state.tasks.all() == []
+    # Its reply asked to notify no one: recorded, not sent.
     receipt = state.result_receipt("rhythm:sleep:20")
-    assert receipt["owner"] == "telegram:3" and not receipt["done"]
-    assert receipt["reply"].startswith("Investigation saved.")
-    assert "cannot admit" in receipt["reply"]
+    assert receipt["owner"] == "telegram:3" and receipt["done"] and receipt["recorded_only"]
+    assert receipt["reply"] == "" and receipt["result_text"].startswith("Investigation saved.")
 
     assert list(procedures.due_world_rhythms(now=NOW + 600)) == []
     # A restarted controller reads the same settled interval.
@@ -92,7 +94,7 @@ def test_crash_after_acceptance_replays_the_turn_without_repeating_cognition(tmp
     assert list(procedures.due_world_rhythms(now=NOW)) == [("sleep", "rhythm:sleep:20")]
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
     assert cognition.calls == 1
-    assert state.result_receipt("rhythm:sleep:20")["reply"].startswith("Investigation saved.")
+    assert state.result_receipt("rhythm:sleep:20")["result_text"].startswith("Investigation saved.")
 
 
 def test_failed_interval_is_consumed_rather_than_retried(tmp_path):
@@ -109,23 +111,57 @@ def test_failed_interval_is_consumed_rather_than_retried(tmp_path):
     assert not (checkpoint.world.root / "decision.md").exists()
 
 
-# Staging's first night on GLM replied with a lone word joiner.
-@pytest.mark.parametrize("output", ["", " \n", "\u2060", "\u200b\ufeff "])
-def test_silent_world_rhythm_settles_without_a_delivery(tmp_path, output):
-    class Silent(EditingCognition):
+def _replying(output, *, write=None):
+    def edit(request):
+        for path, text in (write or {}).items():
+            (request.cwd / path).write_text(text)
+
+    class Replying(EditingCognition):
         def run(self, request, *, execution_id=None):
             return replace(super().run(request, execution_id=execution_id), output=output)
+    return Replying(before_return=edit)
 
-    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, Silent())
+
+# Every reply here reached gg's World topic under the old rule, which sent any
+# reply that was not blank: the word joiner and the parenthetical before
+# ac3a18b9, and "SILENT", "(empty)", "<br>" and the staging sentence after it.
+@pytest.mark.parametrize("output", [
+    "", " \n", "\u2060", "\u200b\ufeff ", "SILENT", "(empty)", "<br>",
+    "*(Empty reply \u2014 the brief carries the morning.)*",
+    "Staging pass complete. No new episodes since the last deep sleep.",
+    "NOTIFY: NONE", "NOTIFY:\n\u2060",
+])
+def test_a_world_rhythm_that_does_not_ask_to_notify_sends_nothing(tmp_path, output):
+    import time
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, _replying(output))
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
     assert (checkpoint.world.root / "decision.md").exists()
-    assert state.result_receipt("rhythm:sleep:20")["done"]
+    receipt = state.result_receipt("rhythm:sleep:20")
+    assert receipt["done"] and receipt["reply"] == ""
     assert state.pending_result_receipts() == []
     assert list(procedures.due_world_rhythms(now=NOW)) == []
+    # Silence is recorded where it can be counted, never lost.
+    recorded = bool(output.strip())
+    assert receipt["recorded_only"] is recorded
+    assert state.recorded_not_sent(time.time() - 60) == (["rhythm:sleep:20"] if recorded else [])
+
+
+@pytest.mark.parametrize("output,message", [
+    ("Filed the night.\nNOTIFY: The calendar write failed again.", "The calendar write failed again."),
+    ("**NOTIFY:** Sleep did not complete.\nREM wrote no brief.", "Sleep did not complete.\nREM wrote no brief."),
+    ("- notify: One thing needs you.", "One thing needs you."),
+])
+def test_a_world_rhythm_sends_what_follows_its_notify_line(tmp_path, output, message):
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, _replying(output))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    receipt = state.result_receipt("rhythm:sleep:20")
+    assert receipt["reply"] == message and not receipt["done"] and not receipt["recorded_only"]
+    assert receipt["result_text"] == output.strip()
 
 
 def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path):
-    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path)
+    config, state, checkpoint, service, cognition, procedures = _rhythm(
+        tmp_path, _replying("Investigation saved.\nNOTIFY: Investigation saved for the morning."))
     daemon = StewardDaemon(config, tmp_path / "steward.yaml")
     daemon._procedures = procedures
     sent = []
@@ -149,7 +185,7 @@ def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path
     assert len(sent) == 1
     chat, topic, text, source = sent[0]
     assert (chat, topic) == (1, 3) and source.startswith("rhythm:sleep:")
-    assert text.startswith("Investigation saved.")
+    assert text == "Investigation saved for the morning."
     assert state.lineage(ConversationId("rhythm:sleep")).provider == "codex"
 
 
