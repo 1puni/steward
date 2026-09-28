@@ -662,3 +662,76 @@ def test_a_procedure_leads_with_its_preference_and_pins_only_when_it_says_so(tmp
         cognition.run(_request(tmp_path, execution_id="turn-3", model=pinned.model,
                                provider_order=pinned.provider_order(("codex", "claude"))))
     assert len(codex.requests) == 1
+
+
+def _listed(**overrides):
+    from steward_harness.config.schema import ProcedureConfig
+
+    entries = [dict(provider="codex", model="codex-listed", effort="high"),
+               dict(provider="claude", model="claude-listed", effort="medium"),
+               dict(provider="glm", model="glm-listed")]
+    return ProcedureConfig(instructions="/etc/steward/p.md", models=entries, **overrides)
+
+
+def test_a_models_list_is_walked_in_order_and_each_entry_runs_exactly_its_own(tmp_path):
+    procedure = _listed()
+    family = ("glm", "claude", "codex")
+    codex, claude, glm = (FakeAdapter(f, available=f != "codex") for f in ("codex", "claude", "glm"))
+    claude.is_available = False
+    cognition = Cognition({"codex": codex, "claude": claude, "glm": glm},
+                          custom_models={"glm": {"balanced": "glm-configured"}})
+    result = cognition.run(_request(tmp_path, **procedure.routing(family)))
+    assert procedure.provider_order(family) == ("codex", "claude", "glm")
+    assert (result.resolved.provider, result.resolved.model, result.resolved.reasoning_effort) == (
+        "glm", "glm-listed", None)
+
+    codex.is_available = True
+    cognition.run(_request(tmp_path, execution_id="t2", **procedure.routing(family)))
+    assert (codex.requests[0].resolved.model, codex.requests[0].resolved.reasoning_effort) == ("codex-listed", "high")
+    claude.is_available = True
+    codex.is_available = False
+    result = cognition.run(_request(tmp_path, execution_id="t3", **procedure.routing(family)))
+    assert (result.resolved.model, result.resolved.reasoning_effort) == ("claude-listed", "medium")
+
+
+def test_an_exhausted_models_list_is_unavailable_with_every_reason(tmp_path):
+    class Limited(FakeAdapter):
+        def execute(self, request):
+            raise RuntimeUnavailable("usage limit")
+
+    procedure = _listed()
+    adapters = {"codex": Limited("codex"), "claude": FakeAdapter("claude", available=False),
+                "glm": Limited("glm")}
+    with pytest.raises(RuntimeUnavailable) as raised:
+        Cognition(adapters).run(_request(tmp_path, **procedure.routing(("codex", "claude", "glm"))))
+    text = str(raised.value)
+    assert "codex: unavailable: usage limit" in text and "claude: unavailable: offline" in text
+    assert "glm: unavailable: usage limit" in text
+
+
+def test_fallback_false_keeps_only_the_first_entry_and_scoped_reads_still_skip():
+    procedure = _listed(fallback=False)
+    routing = procedure.routing(("codex", "claude", "glm"))
+    assert routing["provider_order"] == ("codex",)
+    assert [p for p, _ in routing["entry_models"]] == ["codex"]
+
+
+def test_a_models_list_never_reaches_providers_outside_it_and_absent_list_is_unchanged():
+    from steward_harness.config.schema import ProcedureConfig
+
+    partial = ProcedureConfig(instructions="/etc/p.md", models=[dict(provider="claude", model="m")])
+    assert partial.provider_order(("codex", "claude", "glm")) == ("claude",)
+    single = ProcedureConfig(instructions="/etc/p.md", provider="claude", model=ModelChoice(model="m"))
+    assert single.routing(("codex", "claude"))["entry_models"] == ()
+    assert single.provider_order(("codex", "claude")) == ("claude", "codex")
+
+
+def test_a_models_list_still_never_falls_back_to_unscoped_cognition(tmp_path):
+    from steward_harness.runtime.contracts import ReadScope
+
+    procedure = _listed()
+    codex, claude = FakeAdapter("codex", available=False), FakeAdapter("claude")
+    with pytest.raises(RuntimeUnavailable, match="scoped read isolation"):
+        Cognition({"codex": codex, "claude": claude}).run(_request(
+            tmp_path, read_scope=ReadScope("visitor"), **procedure.routing(("codex", "claude", "glm"))))
+    assert claude.requests == []

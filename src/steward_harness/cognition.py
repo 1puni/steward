@@ -47,6 +47,9 @@ class CognitionRequest:
     native_generation: Callable[[ProviderFamily], int] = lambda _provider: 1
     # Pins the model of the first provider in `provider_order` only.
     model: ModelChoice | None = None
+    # An ordered model list's exact choice per provider. A provider named here
+    # runs that model and effort and nothing else; it never borrows another's.
+    entry_models: tuple[tuple[ProviderFamily, ModelChoice], ...] = ()
     provider_session_id: str | None = None
     session_provider: ProviderFamily | None = None
     images: tuple[Path, ...] = ()
@@ -75,6 +78,8 @@ class CognitionRequest:
             raise ValueError("Cognition provider IDs must be nonblank")
         if len(set(self.provider_order)) != len(self.provider_order):
             raise ValueError("Cognition provider order must be unique")
+        if {provider for provider, _ in self.entry_models} - set(self.provider_order):
+            raise ValueError("Cognition entry models must be in the provider order")
         if (self.provider_session_id is None) != (self.session_provider is None):
             raise ValueError(
                 "A saved session requires both its provider and session ID"
@@ -179,9 +184,11 @@ class Cognition:
                 )
                 # A pinned model names one provider's model; a fallback runs
                 # its own configured model for the profile.
+                entry = dict(request.entry_models).get(provider)
                 pinned = request.model is not None and provider == request.provider_order[0]
+                exact = entry or (request.model if pinned else None)
                 resolved = resolve_model(provider, request.profile,
-                    {provider: {request.profile: request.model}} if pinned else self._custom_models)
+                    {provider: {request.profile: exact}} if exact else self._custom_models)
                 def execute(provider_session_id: str | None) -> tuple[RuntimeRequest, RuntimeResult]:
                     started_session: str | None = None
 

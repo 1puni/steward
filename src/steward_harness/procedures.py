@@ -60,8 +60,9 @@ class Procedures:
     def request(self, name, repository, candidate, base, *, event="", owner=None, activity=None, workdir=None):
         config = self.config.procedures[name]
         instructions = Path(config.instructions).read_text()
-        # A default left unsaid keeps the identity every earlier run was accepted under.
-        payload = config.model_dump(mode="json", exclude=set() if not config.fallback else {"fallback"})
+        # Defaults left unsaid keep the identity every earlier run was accepted under.
+        unsaid = ({"fallback"} if config.fallback else set()) | ({"models"} if config.models is None else set())
+        payload = config.model_dump(mode="json", exclude=unsaid)
         payload["text"] = instructions
         if workdir is not None:
             payload["workdir"] = workdir
@@ -242,12 +243,12 @@ class Procedures:
         rhythm = self.config.rhythms[name]
         procedure = self.config.procedures[rhythm.procedure]
         owner = ConversationId(f"rhythm:{name}")
-        self.state.open_conversation(owner, provider=procedure.provider,
+        self.state.open_conversation(owner, provider=procedure.lead_provider,
                                      profile=self.state.tasks.default_profile)
         if self.state.turn_for_source(owner, key) is None:
             # Each interval starts a fresh session on the procedure's provider:
             # the world, not yesterday's session, carries what was consolidated.
-            self.state.bind_conversation_provider(owner, procedure.provider, None)
+            self.state.bind_conversation_provider(owner, procedure.lead_provider, None)
         try:
             result = conversations.run_turn(
                 transport="rhythm", transport_key=name, source_event_key=key,

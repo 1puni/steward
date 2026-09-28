@@ -571,9 +571,8 @@ class StewardDaemon:
                 profile=self.config.provider.default_profile,
                 prompt=prompt, cwd=turn.worktree,
                 timeout_seconds=self.config.provider.timeout_seconds,
-                provider_order=procedure.provider_order(self.config.provider.family_order)
-                    if procedure else self.config.provider.family_order,
-                model=procedure.model if procedure else None,
+                **(procedure.routing(self.config.provider.family_order) if procedure
+                   else dict(provider_order=self.config.provider.family_order)),
                 sandbox_mode="workspace-write"))
 
         checkpoint = self._world_checkpoint(state, resolve)

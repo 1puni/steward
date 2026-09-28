@@ -91,7 +91,8 @@ input: nothing retries it, so the rhythm's next admission cancels it as
 superseded. A procedure's `provider` and `model` name a preference, not a pin:
 its run leads with that provider and falls back through `provider.family_order`,
 each fallback using its own configured model for the profile. `fallback: false`
-makes it a pin; see [model preference](rhythms.md#model-preference).
+makes it a pin; a procedure may instead give an ordered `models` list of provider, model and
+effort entries walked in order. See [model preference](rhythms.md#model-preference).
 
 The controller measures elapsed quiet using its monotonic observation clock,
 not author or committer dates. After a restart, input no finished run captured
