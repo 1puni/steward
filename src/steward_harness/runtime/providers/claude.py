@@ -160,7 +160,12 @@ class _ClaudeLifecycle:
             raise RuntimeExecutionError(f"{self._provider} emitted a malformed event stream")
         return event
 
-    def consume_event(self, event: dict[str, Any]) -> str | None:
+    def consume_event(self, event: dict[str, Any], *, supersede: bool = True) -> str | None:
+        """Validate one event; a successful result becomes the output.
+
+        Without `supersede` a result is validated but keeps the earlier
+        output: the session answered a controller receipt after its work.
+        """
         event_type = event["type"]
         if event_type == "system" and event.get("subtype") in ("task_notification", "dev_intent"):
             # Background-agent and development-intent notices are informational,
@@ -206,12 +211,14 @@ class _ClaudeLifecycle:
                 session_id=self.session_id,
             )
         result = event.get("result")
-        if not isinstance(result, str) or (not result.strip() and not self._allow_empty_output):
+        if not isinstance(result, str) or (
+                supersede and not result.strip() and not self._allow_empty_output):
             raise RuntimeExecutionError(
                 f"{self._provider} completed without an agent response",
                 session_id=self.session_id,
             )
-        self._output = result.strip()[-_MAX_RESPONSE_CHARS:]
+        if supersede or self._output is None:
+            self._output = result.strip()[-_MAX_RESPONSE_CHARS:]
         self._completed = True
         return None
 
@@ -296,6 +303,9 @@ class ClaudeInputStream:
         # result. Its notification can open a native turn of its own after the
         # offered commands resolved, and that turn ends in its own result.
         self.notified = False
+        # Commands that carried a controller receipt. A native turn answering
+        # one is the session acknowledging a notice, not the execution's word.
+        self.receipts: set[str] = set()
         self.lock = RLock()
 
     def connect(self, writer: ProcessInput) -> None:
@@ -313,7 +323,7 @@ class ClaudeInputStream:
                 "request": {"subtype": "interrupt"},
             }) + "\n")
 
-    def _write(self, text: str, source: str | None) -> None:
+    def _write(self, text: str, source: str | None) -> str:
         command = str(uuid4())
         self.writer.write(json.dumps({
             "type": "user", "uuid": command, "session_id": "",
@@ -321,6 +331,7 @@ class ClaudeInputStream:
             "message": {"role": "user", "content": text},
         }) + "\n")
         self.commands[command] = source
+        return command
 
     def send(self, source: RuntimeInput) -> None:
         with self.lock:
@@ -332,12 +343,14 @@ class ClaudeInputStream:
                 self.request.on_input_result(RuntimeInputResult(source.source_id, "rejected"))
                 raise NativeInputClosed("native command queue is no longer accepting input", session_id=self.session_id)
             try:
-                self._write(source.attributed_text, source.source_id)
+                command = self._write(source.attributed_text, source.source_id)
             except RuntimeExecutionError:
                 # ProcessInput.write is atomic: failure queued no bytes.
                 self.request.on_input_result(RuntimeInputResult(source.source_id, "rejected"))
                 raise
             self.sources.add(source.source_id)
+            if source.receipt:
+                self.receipts.add(command)
 
     def consume(self, line: str) -> None:
         # The common parser checks credential content, JSON shape and session
@@ -366,6 +379,7 @@ class ClaudeInputStream:
                     # after its turn, and the native queue runs the notice as a
                     # turn of its own. That is this execution going on, and its
                     # result is the latest word, not a stray.
+                    answers_receipt = False
                     if not self._continuation(event):
                         if (not isinstance(command, str) or command not in self.expected_results
                                 or command in self.results):
@@ -373,12 +387,15 @@ class ClaudeInputStream:
                         if self.started - self.completed - {command}:
                             raise RuntimeExecutionError("native returned before active commands completed", session_id=self.session_id)
                         self.results.add(command)
+                        answers_receipt = command in self.receipts
                     self.notified = False
                 if self.interrupt_id is not None and event.get("type") == "result":
                     # Interrupted results are terminal evidence, never a usable
                     # reply. Drain command completion before closing transport.
                     self._session(event.get("session_id"))
                     started = None
+                elif event.get("type") == "result" and answers_receipt:
+                    started = self.lifecycle.consume_event(event, supersede=False)
                 else:
                     started = self.lifecycle.consume_event(event)
                 if started is not None:
