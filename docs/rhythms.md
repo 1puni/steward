@@ -58,7 +58,8 @@ rhythms:
 Its runs then capture only those keys and its `input` candidate, so only a
 new commit on those lines, or on the input ref, admits a run. The procedure can
 still read every repository and task; the paths decide what wakes it, not what
-it may see. A launch reflection is for launch progress, so a harness redeploy or
+it may see. Before admission only the input repository and the repositories
+the paths name are fetched. A launch reflection is for launch progress, so a harness redeploy or
 a repair task's work in progress should not call a model. `repositories/app/`
 follows every branch of `app`, and `tasks/` every ordinary task's work.
 Configuration refuses a prefix that names neither `tasks/` nor a configured

@@ -194,6 +194,27 @@ def test_org_rhythm_paths_narrow_its_input_to_what_it_is_for(tmp_path):
     assert state.tasks.read(second)[1].procedure.activity == {"repositories/peer/main": moved}
 
 
+def test_org_rhythm_paths_fetch_only_the_repositories_they_name(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer(tmp_path, state, runner)
+    fetched = []
+    for name, transport in runner.transports.items():
+        fetch = transport.fetch
+        transport.fetch = lambda name=name, fetch=fetch: (fetched.append(name), fetch())[1]
+    rhythm = ProcedureRhythmConfig(owner=None, schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main")
+    procedures.observe(rhythm)
+    assert sorted(fetched) == ["app", "peer"]
+    # The input repository is always read; a repository no path names is not.
+    fetched.clear()
+    _, candidate, _, activity = procedures.observe(rhythm.model_copy(update={"paths": ("tasks/",)}))
+    assert fetched == ["app"] and activity == {}
+    assert candidate == _git("rev-parse", "HEAD", cwd=clone)
+    fetched.clear()
+    procedures.observe(rhythm.model_copy(update={"paths": ("repositories/peer/",)}))
+    assert sorted(fetched) == ["app", "peer"]
+
+
 def _org_config(tmp_path, paths):
     from test_world_rhythms import _config
 
