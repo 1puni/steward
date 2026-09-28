@@ -7,7 +7,7 @@
 **Git is a filesystem with infinite history.**
 
 You can put code in it. You can put knowledge in it. You can branch reality, let an
-intelligence fuck around in a private possible future, inspect exactly what changed,
+intelligence mess around in a private possible future, inspect exactly what changed,
 test that exact universe, and then decide whether it deserves to become real.
 
 Steward is what happens when you take that seriously.
@@ -26,7 +26,7 @@ wander, sleep, wake up, and propose changes. The harness keeps the keys.
 | A separate Unix identity for everything the model runs, with credentials kept by the controller | A sandbox product: the boundary is OS permissions, or it isn't there |
 | Operated from Telegram and the host CLI | A dashboard: the task board browses and changes nothing |
 
-## What the fuck is this?
+## What is this?
 
 ### Private possible futures
 
