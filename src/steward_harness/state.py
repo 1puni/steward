@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import hashlib
 import os
 import re
@@ -18,6 +19,8 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 
 from steward_harness.receipts import write_receipt
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from steward_harness.config.schema import IncidentPolicy
@@ -689,6 +692,12 @@ class StateDatabase:
                 notice = rejection or notice
             else:
                 notice = rejection
+            if rejection is not None and row["operator_id"].startswith("harness:"):
+                # An automatic turn's refused proposal or action is the
+                # steward's own bookkeeping. The turn keeps it and the log
+                # names it; the operator did not ask, so it is not news to them.
+                log.warning("turn %s (%s): %s", event_id, row["operator_id"], rejection)
+                notice = None
             reply = (
                 f"{visible_reply}\n\n{notice}"
                 if notice and visible_reply

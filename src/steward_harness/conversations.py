@@ -13,6 +13,7 @@ from threading import RLock
 from typing import Literal, cast
 
 from steward_harness.cognition import Cognition, CognitionRequest
+from steward_harness.notify import notification
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
@@ -553,16 +554,19 @@ class ConversationService:
         # A scheduled read-only run retains evidence for its owner to assess.
         # Explicit requests and actionable execution outcomes still owe a report.
         target_result = source_event_key.startswith("target_result:")
-        review = target_result or bool(procedure and procedure.access == "read-only"
+        rhythm = bool(procedure and procedure.access == "read-only"
                       and procedure.event.startswith("rhythm:")
                       and source_event_key.endswith(":done"))
+        review = target_result or rhythm
+        # A scheduled run arrives here only when its findings asked to notify.
+        notice = notification(task.findings) if rhythm else ""
         self._state.open_conversation(conversation_id,
                                       provider=self._state.tasks.default_provider,
                                       profile=self._state.tasks.default_profile)
         conversation = self._state.get_conversation(conversation_id)
         prior = self._state.turn_for_source(conversation_id, source_event_key)
         text = prior.input_text if prior is not None else build_result_assessment_request(
-            task.brief, result_text, quiet=review,
+            task.brief, result_text, quiet=review, notice=notice,
         )
         result = self.run_turn(
             transport=conversation.transport,
@@ -582,8 +586,17 @@ class ConversationService:
         reply = result.reply_text
         # Old accepted assessments retain the meaning of their frozen request.
         # New completion requests never instruct or interpret a silence token.
-        if prior is not None and "reply exactly silent" in text.casefold() and reply.strip() == "SILENT":
+        legacy = prior is not None and "reply exactly silent" in text.casefold()
+        if legacy and reply.strip() == "SILENT":
             reply = ""
+        if rhythm and notice and not legacy and result.execution_turn_id is None:
+            # The run decided that its owner hears of it; this turn may only
+            # say it differently. Its other words stay in the world, and a
+            # follow-up it admitted is named, since that is news too.
+            message = notification(reply) or notice
+            if result.task_admission is not None:
+                message += f"\n\nTask admitted: {result.task_admission.task_id}"
+            return message
         if review and result.execution_turn_id is None:
             return reply
         return (

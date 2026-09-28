@@ -272,9 +272,21 @@ long reply.
 Every reply is kept. The turn keeps it in state and the world commit keeps its
 text. Its result receipt keeps it as `result_text` and marks the interval
 `recorded_only` when nothing was sent. `/status` counts what rhythms recorded
-without sending in the last 24 hours, so an absent message can be told apart from
-a run that never happened. The controller also logs
+without sending in the last 24 hours, rhythm reviews below included, so an absent
+message can be told apart from a run that never happened. The controller also logs
 `world rhythm <key>: reply recorded, not delivered`.
+
+A procedure rhythm's findings follow the same rule. Findings above the closure
+lines are the run's evidence commit, and they notify no one unless they contain a
+`NOTIFY:` line. Until then the result costs no model turn: no assessment runs and
+nothing is sent. A flagged result is assessed by its owning conversation as
+before. The run's own message is what gets sent, unless the assessment writes a
+`NOTIFY:` line of its own to say it differently, and a follow-up task the
+assessment admitted is named after it. The assessment cannot silence a flagged
+result. An explicit request, a question and a failure still report as they
+always did, and so does a harness-prepared result that already carries its reply.
+A refused proposal or action in any automatic turn (`harness:*`) is kept on the
+turn and logged, not appended to the owner's message.
 
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
 harness never invents a schedule for you. A world rhythm is configured like any
