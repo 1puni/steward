@@ -672,3 +672,31 @@ def test_desk_model_and_authority_configuration():
         DeskConfig(profile="arbitrary-client-model")
     with pytest.raises(ValidationError):
         DeskConfig(access="write-everywhere")
+
+
+def _listed_config(models, **procedure):
+    return StewardConfig.model_validate(dict(
+        identity=dict(name="test", slug="test"),
+        procedures={"light": dict(instructions="/etc/light.md", models=models, **procedure)}))
+
+
+def test_a_models_list_validates_at_load():
+    ok = [dict(provider="codex", model="a", effort="high"), dict(provider="claude", model="b")]
+    config = _listed_config(ok)
+    assert config.procedures["light"].lead_provider == "codex"
+    for models, message in (
+        ([], "must not be empty"),
+        ([dict(provider="codex", model="a"), dict(provider="codex", model="b")], "each provider once"),
+        ([dict(provider="nope", model="a")], "unprovisioned provider"),
+        ([dict(provider="codex", model="a", effort="turbo")], "effort"),
+        ([dict(provider="codex")], "model"),
+    ):
+        with pytest.raises(ValidationError, match=message):
+            _listed_config(models)
+    with pytest.raises(ValidationError, match="conflicts with provider and model"):
+        _listed_config(ok, provider="codex")
+    with pytest.raises(ValidationError, match="conflicts with provider and model"):
+        _listed_config(ok, model=dict(model="x"))
+    with pytest.raises(ValidationError, match="provider and model, or a models list"):
+        StewardConfig.model_validate(dict(identity=dict(name="t", slug="t"),
+            procedures={"p": dict(instructions="/etc/p.md")}))
