@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from steward_harness.notify import DIRECTIVE as NOTIFY_DIRECTIVE
+
 
 TASK_PROPOSAL_DIRECTIVE = """\
 Optional final-line task proposal (at most one):
@@ -128,8 +130,10 @@ def build_turn_prompt(
     delivery_roots: tuple[str, ...] = (),
 ) -> str:
     """Current machine interface, observations, and input for every execution."""
-    # A rhythm owns no transport, so it cannot receive a task's result.
-    interface = [] if transport == "rhythm" else [TASK_PROPOSAL_DIRECTIVE, TASK_ACTION_DIRECTIVE]
+    # A rhythm owns no transport, so it cannot receive a task's result, and
+    # it speaks to its owner only by opting in.
+    interface = ([NOTIFY_DIRECTIVE] if transport == "rhythm"
+                 else [TASK_PROPOSAL_DIRECTIVE, TASK_ACTION_DIRECTIVE])
     if transport == "telegram":
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
         if delivery_roots:
