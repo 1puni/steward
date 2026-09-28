@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import subprocess
 import time
 from pathlib import Path
 
@@ -40,6 +41,17 @@ def captured(runs):
     """
     return {sha for task in runs if task.status is TaskStatus.DONE
             for sha in (task.procedure.candidate, *(task.procedure.activity or {}).values())}
+
+
+#: A delivered world file is a message, not an attachment: past this it is
+#: cut, and the rest stays in the world.
+DELIVERY_LIMIT = 12_000
+
+
+def _bounded_delivery(text, path):
+    if len(text) <= DELIVERY_LIMIT:
+        return text
+    return text[:DELIVERY_LIMIT] + f"\n\n[{path} continues in the world.]"
 
 
 def interval(rhythms, name, now):
@@ -265,6 +277,16 @@ class Procedures:
         recorded = result.reply_text.strip()
         # Silence is the default: a run sends only what it asked to send.
         message = notification(recorded)
+        if rhythm.deliver is not None and self.world is not None:
+            try:
+                changed = self.world.turn_file(str(result.turn_id), rhythm.deliver)
+            except (OSError, subprocess.SubprocessError, ValueError) as error:
+                # The reply and the world both keep the file; an unreadable
+                # one costs this delivery, never the run.
+                log.warning("world rhythm %s: %s unreadable: %s", key, rhythm.deliver, error)
+                changed = None
+            if changed and changed.strip():
+                message = _bounded_delivery(changed.strip(), rhythm.deliver)
         if recorded and not message:
             log.info("world rhythm %s: reply recorded, not delivered", key)
         # The ordinary result lane delivers a pending receipt to its owner.
