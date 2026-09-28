@@ -253,6 +253,22 @@ the owner's topic. A filter can drop one of these, but a model finds the next.
 With an explicit marker, sending is something the model does, and an evasion
 only fails to send.
 
+A world rhythm can name a file as its message:
+
+```yaml
+rhythms:
+  rem: {after: sleep, procedure: rem, input: world, owner: telegram:5,
+        deliver: morning_brief.md}
+```
+
+When the accepted turn changed `deliver`, the owner receives the file as that
+turn left it, whatever the reply says. The accepted commit is found by its
+`Steward-Turn` trailer, so a turn that was replayed behind another still counts.
+A file the turn did not change is not sent again; that night's reply falls back
+to the ordinary `NOTIFY:` rule. The file is cut at 12,000 characters with a note
+that it continues in the world, and Telegram splits it into pieces as it does any
+long reply.
+
 Every reply is kept. The turn keeps it in state and the world commit keeps its
 text. Its result receipt keeps it as `result_text` and marks the interval
 `recorded_only` when nothing was sent. `/status` counts what rhythms recorded
