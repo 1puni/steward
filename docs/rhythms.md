@@ -40,6 +40,30 @@ commits (`candidate`, and `activity` for an organisation run), so the rhythm's
 own finished runs are the cursor; there is no second record of what it has seen.
 Deleting a branch or naming an already seen commit again is not new input.
 
+Reading everything is not the same as being for everything. An organisation
+rhythm can set `paths` to the activity it exists to follow, as prefixes of its
+activity keys, `repositories/<name>/<branch>` and `tasks/<id>`:
+
+```yaml
+rhythms:
+  launch-reflection:
+    workdir: /srv/organisation
+    schedule: 10800
+    procedure: launch-reflection
+    input: repositories/company/main
+    paths: [repositories/landing/main, repositories/app/main]
+    owner: telegram:3
+```
+
+Its runs then capture only those keys and its `input` candidate, so only a
+new commit on those lines, or on the input ref, admits a run. The procedure can
+still read every repository and task; the paths decide what wakes it, not what
+it may see. A launch reflection is for launch progress, so a harness redeploy or
+a repair task's work in progress should not call a model. `repositories/app/`
+follows every branch of `app`, and `tasks/` every ordinary task's work.
+Configuration refuses a prefix that names neither `tasks/` nor a configured
+repository, because it would match nothing and silence the rhythm.
+
 The steward's own bookkeeping cannot appear in that input. Task documents,
 their `steward: accept task` commits and holds live in the controller's task
 store, never in a repository remote. Procedure runs, a rhythm's own included,

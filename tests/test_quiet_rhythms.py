@@ -169,6 +169,58 @@ def test_org_rhythm_input_is_every_remote_head_and_ordinary_task_work(tmp_path):
     assert len(state.tasks.all()) == 4
 
 
+def test_org_rhythm_paths_narrow_its_input_to_what_it_is_for(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer_clone = peer(tmp_path, state, runner)
+    config.rhythms = {"org": ProcedureRhythmConfig(owner=None, schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",))}
+    procedures.advance_rhythms(now=100)
+    first = state.tasks.queued()[0]
+    assert state.tasks.read(first)[1].procedure.activity == {
+        "repositories/peer/main": _git("rev-parse", "HEAD", cwd=peer_clone)}
+    runner.prepare(first)
+    # Accepted task work and a branch outside the paths are readable, not input.
+    product, _ = state.tasks.create(TaskSpec("app", "Investigate", "Investigate a real obligation."))
+    runner.prepare(product)
+    sha = commit(peer_clone, "feature.txt", push=False)
+    _git("push", "origin", f"{sha}:refs/heads/feature", cwd=peer_clone)
+    procedures.advance_rhythms(now=200)
+    procedures.advance_rhythms(now=300)
+    assert len(state.tasks.all()) == 2
+    # The line it watches moving is.
+    moved = commit(peer_clone, "release.txt")
+    procedures.advance_rhythms(now=400)
+    second = state.tasks.queued()[0]
+    assert state.tasks.read(second)[1].procedure.activity == {"repositories/peer/main": moved}
+
+
+def _org_config(tmp_path, paths):
+    from test_world_rhythms import _config
+
+    config = _config(tmp_path, tmp_path / "world").model_dump()
+    config["repositories"] = {"app": {"path": str(tmp_path / "app"),
+                                      "remote_url": "https://example.com/app.git"}}
+    config["procedures"]["review"] = config["procedures"]["sleep"] | {"access": "read-only"}
+    config["rhythms"] = {"org": {"schedule": 100, "procedure": "review", "input": "repositories/app/main",
+                                 "workdir": str(tmp_path), "owner": None, "paths": paths}}
+    return config
+
+
+@pytest.mark.parametrize("paths", [["repositories/app/main"], ["repositories/app/"], ["tasks/"]])
+def test_org_rhythm_paths_accept_configured_repositories_and_tasks(tmp_path, paths):
+    from steward_harness.config.schema import StewardConfig
+
+    StewardConfig.model_validate(_org_config(tmp_path, paths))
+
+
+@pytest.mark.parametrize("paths", [["repositories/typo/main"], ["episodes/"]])
+def test_org_rhythm_paths_refuse_a_prefix_that_would_silence_it(tmp_path, paths):
+    from steward_harness.config.schema import StewardConfig
+
+    with pytest.raises(ValidationError, match="must name tasks/ or a configured"):
+        StewardConfig.model_validate(_org_config(tmp_path, paths))
+
+
 def test_org_reflection_refreshes_sibling_refs_without_moving_local_work(tmp_path):
     from steward_harness.config.schema import RepositoryConfig
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
