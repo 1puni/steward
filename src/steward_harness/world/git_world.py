@@ -58,14 +58,18 @@ class GitWorld:
         return self._git("rev-parse", "HEAD")
 
     def changed(self, since: str, paths: tuple[str, ...]) -> bool:
-        """Does the accepted world differ from `since` under any of `paths`?
+        """Was content added or modified under any of `paths` since `since`?
 
+        Something new to read is the only change that counts. A deletion, a
+        move out of the paths and a move within them (archiving an episode
+        into a subdirectory) leave nothing new there, so they are not input.
         A revision Git can no longer read, or a Git that cannot answer, counts
         as changed: an unanswerable cursor admits the run rather than silencing it.
         """
         try:
             return run_agent_git(
-                self.execution_broker, "diff", "--quiet", since, "HEAD", "--", *paths,
+                self.execution_broker, "diff", "--quiet", "--find-renames", "--diff-filter=AMT",
+                since, "HEAD", "--", *paths,
                 cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
             ).returncode != 0
         except (OSError, subprocess.TimeoutExpired):

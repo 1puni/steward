@@ -449,6 +449,40 @@ def test_paths_gate_calls_no_model_without_new_episodes(tmp_path):
     assert checkpoint.world.changed("0" * 40, ("episodes/",))
 
 
+def _world_git(world_root, *args):
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=world_root, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=t@x", "commit", "-q", "-m",
+                    " ".join(args)], cwd=world_root, check=True)
+
+
+def test_paths_gate_ignores_archiving_and_deletion_but_not_new_content(tmp_path):
+    # Staging's cursor is its own last run. Sleep then archives what it
+    # consolidated and deletes nothing new into the paths: nothing to stage.
+    rhythms = {"staging": CHAIN["sleep"] | {"paths": ["episodes/", "episodes.md"]}}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    root = checkpoint.world.root
+    _world_commit(root, "episodes/2026-09-27.md")
+    _world_commit(root, "episodes/2026-09-26.md")
+    _world_commit(root, "episodes.md")
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:20")
+
+    (root / "episodes" / "archive").mkdir()
+    _world_git(root, "mv", "episodes/2026-09-27.md", "episodes/archive/2026-09-27.md")
+    _world_git(root, "rm", "-q", "episodes/2026-09-26.md")
+    _world_git(root, "mv", "episodes.md", "index.md")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
+
+    # An appended episode is new content, and so is a new one.
+    (root / "episodes" / "archive" / "2026-09-27.md").write_text("more\n")
+    _world_git(root, "add", "episodes/archive/2026-09-27.md")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("staging", "rhythm:staging:21")]
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:21")
+    _world_commit(root, "episodes/2026-09-28.md")
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == [("staging", "rhythm:staging:22")]
+
+
 def test_a_gated_predecessor_that_did_not_run_does_not_start_its_dependent(tmp_path):
     rhythms = {"sleep": CHAIN["sleep"] | {"paths": ["episodes/"]}, "rem": CHAIN["rem"]}
     config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
