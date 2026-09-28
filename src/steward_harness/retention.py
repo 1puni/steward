@@ -120,9 +120,11 @@ def prune_world_sessions(checkpoint, idle_seconds: int, native_homes: Iterable[P
                 if pending or receipt.exists():
                     log.warning("retained world workspace %s: pending world turn or completion", path)
                     continue
-                head = _head_if_clean(checkpoint.broker, checkpoint.world.root, path)
-                if checkpoint._git(checkpoint.world.root, "merge-base", "--is-ancestor", head,
-                                   checkpoint.world.input_cursor(), check=False).returncode:
+                _head_if_clean(checkpoint.broker, checkpoint.world.root, path)
+                # An accepted turn rebased past a concurrent writer is not an
+                # ancestor of the world; its completed receipt accepts it.
+                if checkpoint.unaccepted(path, checkpoint.world.input_cursor(),
+                                         connection=connection):
                     raise ValueError("HEAD is not in the accepted world")
                 # Native state is cache for this checkout; the originals are in the world.
                 # Retire it first, so a failure leaves both for the next pass.
