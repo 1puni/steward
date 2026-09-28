@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeInput, RuntimeRequest, resolve_model
+from steward_harness.runtime.contracts import (
+    NativeInputClosed, RuntimeExecutionError, RuntimeInput, RuntimeRequest, resolve_model,
+)
 from steward_harness.runtime.providers.claude import ClaudeInputStream, _ClaudeLifecycle
 
 SESSION = "11111111-1111-4111-8111-111111111111"
@@ -178,6 +180,57 @@ def test_completion_race_is_rejected_before_any_bytes_are_offered(tmp_path):
     stream.disconnect()
     assert len(wire.messages) == sent
     assert [(r.source_id, r.disposition) for r in receipts] == [("late", "rejected")]
+
+
+def notice(stream, task="a6f4db4b8a5408eb"):
+    emit(stream, type="system", subtype="task_notification", task_id=task, status="completed")
+
+
+def unattributed(stream, text):
+    emit(stream, type="result", subtype="success", terminal_reason="completed", result=text, usage={})
+
+
+def test_background_notice_turn_after_the_offered_result_continues_the_execution(tmp_path):
+    # gg, 2026-09-27: the parent's turn ended while its background agent ran.
+    # The queue closed, a late offer reply was refused, and the agent's notice
+    # opened a native turn whose result named nothing the controller offered.
+    stream, wire, root, receipts = start(tmp_path)
+    result(stream, root, text="first account")
+    command(stream, root, "completed")
+    assert wire.closed
+    with pytest.raises(NativeInputClosed):
+        stream.send(RuntimeInput("late", "reply to a late offer"))
+    notice(stream)
+    emit(stream, type="assistant", message={"content": [{"type": "text", "text": "Folding in the agent."}]})
+    unattributed(stream, "final account")
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == "final account"
+    assert [(r.source_id, r.disposition) for r in receipts] == [("late", "rejected")]
+
+
+def test_second_result_needs_a_background_notice_since_the_last(tmp_path):
+    stream, _, root, _ = start(tmp_path)
+    notice(stream)  # during the parent's own turn: its result consumes it
+    result(stream, root)
+    command(stream, root, "completed")
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        unattributed(stream, "stray")
+
+
+def test_background_notice_cannot_repeat_an_offered_result(tmp_path):
+    stream, _, root, _ = start(tmp_path)
+    result(stream, root)
+    command(stream, root, "completed")
+    notice(stream)
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        result(stream, root, text="again")
+
+
+def test_background_notice_cannot_complete_an_unfinished_offered_command(tmp_path):
+    stream, _, _, _ = start(tmp_path)
+    notice(stream)
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        result(stream, "33333333-3333-4333-8333-333333333333")
 
 
 def test_result_without_optional_timing_uuid_is_fenced_by_native_root(tmp_path):

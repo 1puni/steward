@@ -15,6 +15,7 @@ from steward_harness.runtime.contracts import (
     SESSION_WORKSPACE_CAPABILITIES,
     Availability,
     MissingProviderSession,
+    NativeInputClosed,
     ProviderFamily,
     RuntimeExecutionError,
     RuntimeInput,
@@ -291,6 +292,10 @@ class ClaudeInputStream:
         self.session_id: str | None = None
         self.closed = False
         self.interrupt_id: str | None = None
+        # A native background task (agent or command) finished since the last
+        # result. Its notification can open a native turn of its own after the
+        # offered commands resolved, and that turn ends in its own result.
+        self.notified = False
         self.lock = RLock()
 
     def connect(self, writer: ProcessInput) -> None:
@@ -325,7 +330,7 @@ class ClaudeInputStream:
             # raises on its own. There is nothing to ask a predicate about.
             if self.closed or self.interrupt_id is not None:
                 self.request.on_input_result(RuntimeInputResult(source.source_id, "rejected"))
-                raise RuntimeExecutionError("native command queue is no longer accepting input", session_id=self.session_id)
+                raise NativeInputClosed("native command queue is no longer accepting input", session_id=self.session_id)
             try:
                 self._write(source.attributed_text, source.source_id)
             except RuntimeExecutionError:
@@ -350,17 +355,25 @@ class ClaudeInputStream:
             if event.get("type") == "command_lifecycle":
                 self._command_event(event)
             else:
+                if event.get("type") == "system" and event.get("subtype") == "task_notification":
+                    self.notified = True
                 if event.get("type") == "result":
                     # user_message_uuid is optional timing metadata (it can be
                     # absent after native agent work). The serial lifecycle's
                     # current fresh command owns the result before completing.
                     command = event.get("user_message_uuid", self.turn_root)
-                    if (not isinstance(command, str) or command not in self.expected_results
-                            or command in self.results):
-                        raise RuntimeExecutionError("native result has no offered command identity", session_id=self.session_id)
-                    if self.started - self.completed - {command}:
-                        raise RuntimeExecutionError("native returned before active commands completed", session_id=self.session_id)
-                    self.results.add(command)
+                    # Background work the native parent started can finish
+                    # after its turn, and the native queue runs the notice as a
+                    # turn of its own. That is this execution going on, and its
+                    # result is the latest word, not a stray.
+                    if not self._continuation(event):
+                        if (not isinstance(command, str) or command not in self.expected_results
+                                or command in self.results):
+                            raise RuntimeExecutionError("native result has no offered command identity", session_id=self.session_id)
+                        if self.started - self.completed - {command}:
+                            raise RuntimeExecutionError("native returned before active commands completed", session_id=self.session_id)
+                        self.results.add(command)
+                    self.notified = False
                 if self.interrupt_id is not None and event.get("type") == "result":
                     # Interrupted results are terminal evidence, never a usable
                     # reply. Drain command completion before closing transport.
@@ -381,6 +394,20 @@ class ClaudeInputStream:
                          or (self.expected_results and self.results == self.expected_results))):
                 self.closed = True
                 self.writer.close()
+
+    def _continuation(self, event: dict[str, Any]) -> bool:
+        """Whether a result belongs to a native turn a background notice opened.
+
+        Only once every offered command has its result and completed, and only
+        after a native task notification: the result then names no command
+        at all, or one the controller never saw. A repeated result for an
+        offered command is still refused.
+        """
+        named = event.get("user_message_uuid")
+        return (self.notified and bool(self.expected_results)
+                and self.results == self.expected_results
+                and not self.started - self.completed
+                and (named is None or (isinstance(named, str) and named not in self.commands)))
 
     def _session(self, identity: object) -> None:
         if (not isinstance(identity, str) or validated_uuid(identity) is None
