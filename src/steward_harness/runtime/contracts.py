@@ -134,8 +134,15 @@ class RuntimeInput:
     text: str
     origin: Literal["operator", "controller"] = "operator"
     author: str = "operator"
+    #: A controller notice that asks nothing of the session, such as an
+    #: understanding offer's acceptance. The session may answer it, but that
+    #: answer is not the execution's word: its final response stays the one
+    #: that ended the work, closure lines and all.
+    receipt: bool = False
 
     def __post_init__(self) -> None:
+        if self.receipt and self.origin != "controller":
+            raise ValueError("only a controller notice can be a receipt")
         if not self.source_id.strip() or len(self.source_id) > 256:
             raise ValueError("native input requires a bounded source ID")
         if not self.text.strip() or len(self.text) > 128_000:

@@ -277,7 +277,10 @@ class TaskRunner:
             live.acknowledgements.add(source_id)
             live.sent[source_id] = (offer, reply, decided)
         try:
-            live.send(RuntimeInput(source_id, reply, origin="controller", author="steward"))
+            # The reply concerns the account, not the work: whatever the
+            # session says back must not replace the response that closed it.
+            live.send(RuntimeInput(source_id, reply, origin="controller", author="steward",
+                                   receipt=True))
         except Exception:
             self._offer_reply_result(live, RuntimeInputResult(source_id, "rejected"))
             raise

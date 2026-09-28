@@ -365,3 +365,62 @@ def test_pre_init_dev_intent_does_not_open_input_or_complete_command(tmp_path, p
     stream.finish()
     assert wire.closed
     assert lifecycle.finish() == ("findings", SESSION, "synthetic-model")
+
+
+CLOSURE = "done\nCOMMIT: map the landscape\nDISPOSITION: idle\nQUESTION: NONE"
+
+
+@pytest.mark.parametrize("provider", ["claude", "glm"])
+def test_answer_to_a_receipt_after_the_closure_keeps_the_closure(tmp_path, provider):
+    # gg, 2026-09-25, task-d2b1703a: the session closed with valid lines, the
+    # understanding acceptance queued behind that result, and the session's
+    # "Acknowledged" became the output. Five retries repeated it exactly.
+    stream, wire, root, _ = start(tmp_path, provider)
+    result(stream, root, text=CLOSURE)
+    stream.send(RuntimeInput("understanding-abc-0", "Steward accepted understanding offer abc",
+                             origin="controller", author="steward", receipt=True))
+    ack = wire.messages[-1]["uuid"]
+    command(stream, root, "completed")
+    for state in ("queued", "started"):
+        command(stream, ack, state)
+    result(stream, ack, text="Acknowledged: offer abc is accepted. Nothing further is owed.")
+    command(stream, ack, "completed")
+    assert wire.closed
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == CLOSURE
+
+
+def test_empty_answer_to_a_receipt_is_not_a_missing_response(tmp_path):
+    stream, wire, root, _ = start(tmp_path)
+    result(stream, root, text=CLOSURE)
+    stream.send(RuntimeInput("understanding-abc-0", "accepted", origin="controller",
+                             author="steward", receipt=True))
+    ack = wire.messages[-1]["uuid"]
+    command(stream, root, "completed")
+    for state in ("queued", "started"):
+        command(stream, ack, state)
+    result(stream, ack, text="")
+    command(stream, ack, "completed")
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == CLOSURE
+
+
+def test_an_ordinary_late_input_still_owns_the_final_word(tmp_path):
+    # Only a receipt keeps the earlier word: a note or correction the session
+    # acted on is the execution going on, and its result is the latest.
+    stream, wire, root, _ = start(tmp_path)
+    result(stream, root, text=CLOSURE)
+    stream.send(RuntimeInput("note:1", "also check the tests", origin="controller", author="harness"))
+    late = wire.messages[-1]["uuid"]
+    command(stream, root, "completed")
+    for state in ("queued", "started"):
+        command(stream, late, state)
+    result(stream, late, text="checked\nCOMMIT: check tests\nDISPOSITION: idle\nQUESTION: NONE")
+    command(stream, late, "completed")
+    stream.finish()
+    assert stream.lifecycle.finish()[0].startswith("checked")
+
+
+def test_only_a_controller_notice_can_be_a_receipt():
+    with pytest.raises(ValueError, match="receipt"):
+        RuntimeInput("x", "y", receipt=True)
