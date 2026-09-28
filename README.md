@@ -168,6 +168,19 @@ Everything else should justify its existence.
   exact revision and report whether it actually came up healthy. The included
   systemd driver can deploy the harness to itself, with rollback.
 
+## Who it's for
+
+People who want AI to *finish* things, not just generate them. An individual with
+more projects than executive function. A small organisation that wants one
+accountable steward per repository or per company. Anyone who reads "the agent
+has full access to production" and feels their stomach turn.
+
+It is not a hosted service, a chat app, or a no-code builder. You provision a Linux
+host, you log in to your providers, you decide what it may touch. It is also not a
+personality. The harness has no voice of its own; whatever voice you give your
+steward lives in its world, not here. ([GuruGee](https://1puni.com) is one such
+voice, built on top. GG is the voice. Steward is the workshop.)
+
 ## Five minutes, then an afternoon
 
 Python 3.11+, Git and [`uv`](https://docs.astral.sh/uv/). macOS or Linux is fine
