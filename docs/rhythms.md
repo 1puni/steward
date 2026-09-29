@@ -273,6 +273,13 @@ procedure's instructions, and it runs on the procedure's
 session; the world, not the previous session, carries what earlier runs
 consolidated.
 
+Consolidating means rewriting. A world rhythm's edits and its reply are accepted
+as one world commit, so its prompt says so: the files state what is true now,
+and anything earlier, including who changed what and why, is in `git log` and
+that commit's reply. Told only to replace obsolete claims, a nightly sleep kept
+appending dated sections and correction notes, and its world grew by the night.
+A procedure that asks for in-file history or attribution works against this.
+
 ```yaml
 procedures:
   sleep:
