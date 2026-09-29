@@ -69,8 +69,10 @@ rhythms:
     owner: telegram:3
 ```
 
-Its runs then capture only those keys and its `input` candidate, so only a
-new commit on those lines, or on the input ref, admits a run. The procedure can
+Its runs then capture only those keys, and only a new commit on those lines
+admits a run. The `input` candidate is still recorded, but it wakes the rhythm
+only when a path names it: the paths say what the rhythm is for, and its input is
+where it works, not what it waits on. The procedure can
 still read every repository and task; the paths decide what wakes it, not what
 it may see. Before admission only the input repository and the repositories
 the paths name are fetched. A launch reflection is for launch progress, so a harness redeploy or
