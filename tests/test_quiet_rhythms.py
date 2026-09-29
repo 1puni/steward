@@ -13,7 +13,7 @@ from steward_harness.state import StateDatabase, TaskSpec
 from test_git_tasks import harness
 from test_rewrite_convergence import setup_procedures
 from test_task_no_changes import InvestigationAdapter
-from test_task_runner_kernel import _git, _repository
+from test_task_runner_kernel import _git, _repository, publish_task
 
 
 def quiet_harness(tmp_path):
@@ -613,3 +613,82 @@ def test_org_rhythm_paths_decide_whether_its_input_ref_wakes_it(tmp_path):
         update={"paths": ("repositories/peer/main", "repositories/app/main")})
     procedures.advance_rhythms(now=300)
     assert len(state.tasks.queued()) == 1
+
+def writing_org_rhythm(tmp_path, *, edit, findings):
+    """An organisation rhythm that consolidates into its input repository."""
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer_clone = peer(tmp_path, state, runner)
+    config.procedures["security-one"] = config.procedures["security-one"].model_copy(
+        update={"access": "workspace-write"})
+    config.rhythms = {"org": ProcedureRhythmConfig(owner="desk:steward", schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",))}
+    execute = adapter.execute
+
+    def consolidate(request):
+        result = execute(request)
+        if edit:
+            (request.cwd / "launch.md").write_text(edit)
+        subject = "docs: consolidate launch" if edit else "no material change"
+        return replace(result, output=f"{findings}COMMIT: {subject}\nDISPOSITION: idle\nQUESTION: NONE")
+
+    adapter.execute = consolidate
+    return clone, peer_clone, state, runner, procedures, adapter
+
+
+def remote_main(clone):
+    return _git("ls-remote", "origin", "main", cwd=clone).split()[0]
+
+
+def test_writing_org_rhythm_lands_its_consolidation_and_tells_no_one(tmp_path):
+    clone, peer_clone, state, runner, procedures, adapter = writing_org_rhythm(
+        tmp_path, edit="Launch moved.\n", findings="")
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    request = adapter.requests[-1]
+    # It works in its own worktree, reads the organisation beside it, and
+    # learns that only NOTIFY reaches anyone.
+    assert request.cwd != tmp_path and (request.cwd / ".git").exists()
+    assert request.sandbox_mode == "workspace-write"
+    assert f"siblings beneath {tmp_path}" in request.prompt
+    assert "NOTIFY:" in request.prompt and "VERDICT:" not in request.prompt
+    assert publish_task(runner) == task
+    _git("fetch", "-q", "origin", cwd=clone)
+    assert _git("show", "origin/main:launch.md", cwd=clone) == "Launch moved."
+    landed = state.tasks.get(task)
+    assert landed.status.value == "done" and landed.quiet
+    assert state.pending_task_result_conversations() == ()
+    # Its own landing moved its input repository; only its paths wake it.
+    for now in (200, 300):
+        procedures.advance_rhythms(now=now)
+    assert len(state.tasks.all()) == 1
+    commit(peer_clone, "release.txt")
+    procedures.advance_rhythms(now=400)
+    assert len(state.tasks.queued()) == 1
+
+
+def test_writing_org_rhythm_notifies_only_when_its_findings_ask(tmp_path):
+    clone, _, state, runner, procedures, _ = writing_org_rhythm(
+        tmp_path, edit="Launch moved.\n", findings="NOTIFY: the launch date moved.\n")
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    assert publish_task(runner) == task
+    assert not state.tasks.get(task).quiet
+    assert tuple(map(str, state.pending_task_result_conversations())) == ("desk:steward",)
+
+
+def test_writing_org_rhythm_that_changed_and_found_nothing_lands_nothing(tmp_path):
+    clone, _, state, runner, procedures, _ = writing_org_rhythm(tmp_path, edit="", findings="")
+    before = remote_main(clone)
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    # What it saw is already on main: done, no empty commit, no message.
+    finished = state.tasks.get(task)
+    assert finished.status.value == "done" and finished.quiet and not finished.publishable
+    assert publish_task(runner) is None
+    assert remote_main(clone) == before
+    assert state.pending_task_result_conversations() == ()
+    procedures.advance_rhythms(now=200)
+    assert len(state.tasks.all()) == 1
