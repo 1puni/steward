@@ -646,8 +646,9 @@ class TaskRunner:
             procedure_prompt = (
                 f"Reflect across the organisation. Its repositories are siblings beneath {procedure.workdir}; "
                 "read them there. Discover relevant evidence through their files and Git history. "
-                f"Consolidate what should be durable into {task.repository}, your working directory; "
-                "its accepted changes publish. Change nothing when nothing material is new."
+                f"Consolidate what should be durable into {task.repository}, your working directory {worktree}; "
+                f"only its accepted changes publish. Edit nothing beneath {procedure.workdir}: those are "
+                "other checkouts, and nothing written there publishes. Change nothing when nothing material is new."
                 if writes else
                 "Reflect across the organisation from this root directory, with repositories beneath it as siblings. "
                 "Discover relevant evidence through their files and Git history. "
