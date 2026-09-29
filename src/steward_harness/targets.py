@@ -147,7 +147,8 @@ class Targets:
         owners = []
         for task in self.state.tasks.all():
             task_id, definition = str(task.task_id), task.definition
-            if revision is None or definition.repository != repository or not definition.owner or task.landed != revision:
+            if (revision is None or definition.repository != repository or not definition.owner
+                    or task.landed != revision or task.landed_nothing):
                 continue
             owners.append((task_id, definition.owner))
         for task_id, owner in owners or [(None, None)]:

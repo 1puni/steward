@@ -223,7 +223,10 @@ class Procedures:
                 log.warning("Rhythm %s input unavailable this poll: %s", name, error)
                 continue
             self._observed_bucket[name] = bucket
-            observed = {candidate, *(activity or {}).values()}
+            # With `paths`, only what they name is input, the candidate included:
+            # a writing rhythm's own landing moves its input repository.
+            observed = ({*(activity or {}).values()} if rhythm.paths and activity is not None
+                        else {candidate, *(activity or {}).values()})
             if observed <= captured(runs):
                 self._quiet.pop(name, None)
                 log.debug("Rhythm %s has no new input since its last run", name)

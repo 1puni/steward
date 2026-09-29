@@ -242,7 +242,7 @@ def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, m
     with _harness(tmp_path) as (daemon, clone, _calls):
         revision = _git("rev-parse", "HEAD", cwd=clone)
         targets = daemon._targets
-        task = SimpleNamespace(task_id="task-1", landed=revision, definition=SimpleNamespace(
+        task = SimpleNamespace(task_id="task-1", landed=revision, landed_nothing=False, definition=SimpleNamespace(
             repository="app", owner="telegram:42"))
         monkeypatch.setattr(targets.state.tasks, "all", lambda: [task])
         target = _Script(targets, monkeypatch)

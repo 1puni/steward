@@ -123,6 +123,18 @@ def _operator_context_block(operator_context: tuple[str, ...]) -> str:
     )
 
 
+#: A world rhythm's edits and reply are accepted as one world commit, so the
+#: files never need to carry their own history. Told only to "replace obsolete
+#: claims", nightly consolidation kept appending dated sections and correction
+#: notes instead, and the world grew where it should have been rewritten.
+WORLD_REWRITE = """\
+The world is Git. When this turn is accepted, your edits and this reply become one
+commit, and every earlier version stays in `git log` and `git show`. So each file
+should say only what is true now: rewrite, merge, move and delete freely. Keep no
+dated sections, changelogs, "corrected on" notes or superseded claims in the files;
+say what you changed and why in your reply, which the commit keeps."""
+
+
 def build_turn_prompt(
     text: str,
     orientation: str | None = None,
@@ -135,7 +147,7 @@ def build_turn_prompt(
     """Current machine interface, observations, and input for every execution."""
     # A rhythm owns no transport, so it cannot receive a task's result, and
     # it speaks to its owner only by opting in.
-    interface = ([NOTIFY_DIRECTIVE] if transport == "rhythm"
+    interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE] if transport == "rhythm"
                  else [TASK_PROPOSAL_DIRECTIVE, TASK_ACTION_DIRECTIVE])
     if transport == "telegram":
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")

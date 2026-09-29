@@ -59,6 +59,8 @@ def test_world_rhythm_runs_once_per_interval_as_a_world_turn(tmp_path):
     assert "Consolidate the world." in request.prompt and "TASK_PROPOSAL" not in request.prompt
     # It is told that nothing is sent unless it asks.
     assert "start a line with `NOTIFY:`" in request.prompt
+    # History is the world's Git, not a section of its files.
+    assert "The world is Git." in request.prompt and "delete freely" in request.prompt
     # A rhythm owns no transport, so its turn cannot admit the task it proposed.
     assert state.tasks.all() == []
     # Its reply asked to notify no one: recorded, not sent.

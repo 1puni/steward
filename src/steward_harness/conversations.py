@@ -553,8 +553,9 @@ class ConversationService:
         # A scheduled read-only run retains evidence for its owner to assess.
         # Explicit requests and actionable execution outcomes still owe a report.
         target_result = source_event_key.startswith("target_result:")
-        rhythm = bool(procedure and procedure.access == "read-only"
-                      and procedure.event.startswith("rhythm:")
+        # A writing run's work has landed; like a review's evidence, it is
+        # kept whether or not anyone hears of it.
+        rhythm = bool(procedure and procedure.event.startswith("rhythm:")
                       and source_event_key.endswith(":done"))
         review = target_result or rhythm
         # A scheduled run arrives here only when its findings asked to notify.

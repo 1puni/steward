@@ -71,3 +71,10 @@ def test_task_prompt_places_procedure_scope_between_title_and_repository() -> No
         repository="app", brief="Do the thing.",
     )
     assert "## Task\nTask: light-review: abc123\n\nSCOPE-SENTINEL\n\nRepository: app" in prompt
+
+
+def test_only_a_world_rhythm_is_told_its_history_is_git() -> None:
+    rhythm = build_turn_prompt("consolidate", transport="rhythm")
+    assert "The world is Git." in rhythm and "TASK_PROPOSAL:" not in rhythm
+    for transport in ("telegram", "desk"):
+        assert "The world is Git." not in build_turn_prompt("hi", transport=transport)

@@ -27,7 +27,7 @@ decision that gets reused.
 
 ## Observed source and retained findings
 
-Before an organisation-root read-only rhythm thinks, the controller refreshes
+Before an organisation rhythm thinks, the controller refreshes
 every configured clone's `refs/steward/remote/<branch>`. Those refs are
 convenience labels for remote commits the controller observed. They grant no
 acceptance, publication or deployment authority. Working HEADs, local changes and

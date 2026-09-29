@@ -173,6 +173,9 @@ class TaskRunner:
         self.transports = dict(transports)
         self.worktrees_root = worktrees_root.resolve()
         state.tasks.transports = self.transports
+        # What any provider this steward runs writes as its own session state.
+        state.tasks.session_state = tuple(
+            prefix for family in cognition.families for prefix in session_state_prefixes(family))
         self.broker = broker
         self.cognition = cognition
         self.provider_fallbacks = provider_fallbacks
@@ -632,7 +635,11 @@ class TaskRunner:
             full_tree=not procedure.event,
             verdict=not procedure.event,
         ) if procedure else ""
-        execution_cwd = Path(procedure.workdir) if procedure and procedure.workdir else worktree
+        writes = not (procedure and procedure.access == "read-only")
+        # A reviewing organisation rhythm works from the organisation root; a
+        # writing one works in its own repository's worktree, whose accepted
+        # changes publish like any task's, and reads the organisation beside it.
+        execution_cwd = Path(procedure.workdir) if procedure and procedure.workdir and not writes else worktree
         if procedure and procedure.workdir:
             # Organisation evidence is read from existing sibling repositories.
             # Refresh their observed refs through the credential-free transfer;
@@ -640,11 +647,17 @@ class TaskRunner:
             for name, transport in self.transports.items():
                 transport.sync_remote_to_agent(self.repositories[name].path, self.broker)
             procedure_prompt = (
+                f"Reflect across the organisation. Its repositories are siblings beneath {procedure.workdir}; "
+                "read them there. Discover relevant evidence through their files and Git history. "
+                f"Consolidate what should be durable into {task.repository}, your working directory {worktree}; "
+                f"only its accepted changes publish. Edit nothing beneath {procedure.workdir}: those are "
+                "other checkouts, and nothing written there publishes. Change nothing when nothing material is new."
+                if writes else
                 "Reflect across the organisation from this root directory, with repositories beneath it as siblings. "
                 "Discover relevant evidence through their files and Git history. "
                 "Return findings and missing evidence, not a gate verdict."
             )
-        if procedure and procedure.access == "read-only" and procedure.event.startswith("rhythm:"):
+        if procedure and procedure.event.startswith("rhythm:"):
             procedure_prompt = f"{procedure_prompt}\n\n{RHYTHM_FINDINGS}".strip()
         request = CognitionRequest(
             execution_id=execution_id,
