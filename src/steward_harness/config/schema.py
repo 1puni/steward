@@ -671,9 +671,9 @@ class StewardConfig(BaseModel):
         for rhythm in self.rhythms.values():
             if rhythm.procedure not in self.procedures:
                 raise ValueError("rhythm names an unknown procedure")
-            if rhythm.workdir is not None and self.procedures[rhythm.procedure].access != "read-only":
-                raise ValueError("organisation rhythm workdir requires a read-only procedure")
             if rhythm.input == "world":
+                if rhythm.workdir is not None:
+                    raise ValueError("a world rhythm takes no organisation workdir")
                 # A world rhythm is an ordinary world turn: it writes the world
                 # through the same checkpoint, so it needs one and needs to write.
                 if self.world is None:
