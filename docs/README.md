@@ -61,6 +61,10 @@ message in, reply out, edit on the accepted world, task landed through the gate.
 [native probes](../experiments/native_sessions/README.md) drive real installed
 providers. Neither substitutes for the other, and neither is live deployment evidence.
 
+The [dashboard evidence research](dashboard-evidence-research.md) inventories retained
+task/session sources and proposes a bounded read-only detail interface and phased
+implementation. It is a revision-scoped proposal, not an implemented API contract.
+
 The [reflex layer survey](reflex-layer.md) maps the fast-decision landscape
 (Jev, Laya, semantic routers, process reward models, learning-to-defer) and
 reports a measured local prototype: sub-millisecond judgment heads for
