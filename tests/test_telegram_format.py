@@ -102,3 +102,26 @@ def test_format_markdown_chunks_keeps_fenced_code_valid_across_chunks() -> None:
     assert all(chunk.startswith("<pre><code") for chunk in chunks)
     assert all(chunk.endswith("</code></pre>") for chunk in chunks)
     assert "".join(_visible_text(chunk) for chunk in chunks) == "x&" * 20
+
+
+def test_task_references_are_compact_links_without_rewriting_code_or_paths():
+    raw = "task-" + "a" * 32
+    references = {raw: ("#1234abcd", "https://t.me/steward/tasks?startapp=task_1234abcd")}
+    source = f"{raw} **`{raw}`**\n`/task show {raw}`\n```\n{raw}\n```\n/tasks/{raw}\n[Task](https://example.test/{raw})"
+    formatted = sanitize_markdown_for_telegram(source, references=references)
+    assert formatted.count('href="https://t.me/steward/tasks?startapp=task_1234abcd"') == 2
+    assert f"<code>/task show {raw}</code>" in formatted
+    assert f"<pre><code>{raw}</code></pre>" in formatted
+    assert f"/tasks/{raw}" in formatted
+    assert sanitize_markdown_for_telegram(f"{raw}.md é{raw}", references=references) == f"{raw}.md é{raw}"
+    assert f'href="https://example.test/{raw}"' in formatted
+    assert _visible_text(formatted).startswith("#1234abcd #1234abcd")
+    for chunk in format_markdown_chunks(source, max_units=40, references=references):
+        assert len(_visible_text(chunk).encode("utf-16-le")) // 2 <= 40
+
+
+def test_reference_labels_are_escaped_and_unsafe_targets_cannot_become_links():
+    formatted = sanitize_markdown_for_telegram(
+        "task-reference", references={"task-reference": ("<script>", "javascript:alert(1)")}
+    )
+    assert formatted == "<code>&lt;script&gt;</code>"

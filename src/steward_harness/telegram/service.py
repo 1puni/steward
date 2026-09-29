@@ -21,6 +21,7 @@ from steward_harness.config.schema import TelegramConfig
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.state import ConversationBusy, StateDatabase
+from steward_harness.telegram.tasks import reference_entities
 from steward_harness.telegram.api import TelegramAPI, TelegramAPIError
 from steward_harness.telegram.commands import (
     BUILTIN_COMMAND_DESCRIPTIONS,
@@ -834,7 +835,20 @@ class TelegramService:
             self._save_receipt()
         clean_text, actions = extract_telegram_action_markers(text)
         clean_text, artifacts = extract_artifact_markers(clean_text)
-        chunks = format_markdown_chunks(clean_text)
+        retained = getattr(self._delivery_context, "path", None) is not None
+        chunks = self._delivery_context.receipt.get("formatted_chunks") if retained else None
+        if chunks is None:
+            chunks = format_markdown_chunks(
+                clean_text, references=reference_entities(
+                    self._state.tasks, clean_text, self.config.task_app_url, self.config.chat_id,
+                )
+                if chat_id == self.config.chat_id else None,
+            )
+            if retained:
+                # Piece indexes must keep referring to the same text if a task
+                # is pruned or the configured app link changes before retry.
+                self._delivery_context.receipt["formatted_chunks"] = chunks
+                self._save_receipt()
         failures: list[str] = []
         artifact_failures: list[tuple[OutboundArtifact, str, Path | None]] = []
         sent_message_ids: list[int] = []

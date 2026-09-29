@@ -320,6 +320,18 @@ class GitTaskStore:
     def get(self, task_id: TaskId) -> Task:
         return self._observe([self._record(task_id)])[0]
 
+    def resolve(self, reference: str) -> TaskId:
+        """Resolve a human reference; never choose between colliding short IDs."""
+        if not reference.startswith("#"):
+            return TaskId(reference)
+        matches = [TaskId(ref.removeprefix(PREFIX)) for ref in self.refs()
+                   if TaskId(ref.removeprefix(PREFIX)).short == reference.lower()]
+        if not matches:
+            raise LookupError(f"unknown task {reference}")
+        if len(matches) > 1:
+            raise ValueError(f"ambiguous task {reference}; use the full task ID")
+        return matches[0]
+
     def all(self) -> list[Task]:
         tasks = self._observe([self._record(TaskId(ref.removeprefix(PREFIX)), sha)
                                for ref, sha in self.refs().items()])

@@ -1022,3 +1022,24 @@ def test_result_diagnostic_write_failure_defers_discovery(tmp_path, monkeypatch)
     step()
     assert not [key for key, _ in queued if key[0] == "result"]
     assert not state.result_receipt("target_result:external").get("done")
+
+
+def test_task_cards_and_short_commands_keep_the_existing_git_identity(tmp_path):
+    from steward_harness.config.schema import TelegramConfig
+    from steward_harness.telegram.format import sanitize_markdown_for_telegram
+
+    commands = _status_commands(tmp_path)
+    commands.config = commands.config.model_copy(update={"telegram": TelegramConfig(
+        chat_id=1, allowed_users=(7,), task_app_url="https://t.me/steward/tasks",
+    )})
+    task_id = admit_task(commands.state, TaskSpec("app", "Fix [links] & <labels>", "Make it readable.")).task_id
+    listing = sanitize_markdown_for_telegram(commands("tasks", None, 1, 42, 7))
+    assert "Fix [links] &amp; &lt;labels&gt;" in listing
+    assert str(task_id) not in listing
+    assert "startapp=task_" + task_id.short[1:] in listing
+    shown = commands("task", f"show {task_id.short}", 1, 42, 7)
+    assert "Make it readable." in shown
+    assert str(task_id) not in shown
+    assert "Note recorded" in commands("task", f"note {task_id.short} Keep the old links working", 1, 42, 7)
+    assert commands.state.tasks.get(task_id).pending[-1][2] == "Keep the old links working"
+    assert commands("task", f"show {task_id}", 1, 42, 7).startswith("⏳")
