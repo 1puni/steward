@@ -31,7 +31,7 @@ def _broker() -> UntrustedExecutionBroker:
 
 def test_task_result_replays_only_unconfirmed_pieces_after_restart(tmp_path, monkeypatch):
     service = _service(tmp_path)
-    monkeypatch.setattr(service_module, "format_markdown_chunks", lambda _text: ["first", "second"])
+    monkeypatch.setattr(service_module, "format_markdown_chunks", lambda _text, **kwargs: ["first", "second"])
     monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0)
     attempts = []
     def send(_chat, text, **_kwargs):
@@ -2120,7 +2120,7 @@ def test_live_input_does_not_overtake_retained_updates_in_its_topic(tmp_path, mo
 def test_partial_reply_resumes_after_restart_without_resending_confirmed_pieces(tmp_path, monkeypatch):
     service = _service(tmp_path)
     service.turn_handler = lambda *a: "the reply"
-    monkeypatch.setattr(service_module, "format_markdown_chunks", lambda text: ["first", "second"])
+    monkeypatch.setattr(service_module, "format_markdown_chunks", lambda text, **kwargs: ["first", "second"])
     monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0)
     monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
     sent = []
@@ -2385,3 +2385,50 @@ def test_poll_wait_budget_reaches_every_reply_piece(tmp_path, monkeypatch, piece
     with pytest.raises(TelegramDeliveryError):
         service.send_reply(1, 7, text, max_wait_seconds=service_module._POLL_THREAD_MAX_WAIT)
     assert sleeps == []
+
+
+def test_task_receipts_link_known_long_ids_and_leave_unknown_ids_alone(tmp_path, monkeypatch):
+    from state_fixtures import admit_task
+    from steward_harness.state import TaskSpec
+
+    service = _service(tmp_path, task_app_url="https://t.me/steward/tasks")
+    task_id = admit_task(service._state, TaskSpec("app", "Repair task links", "Restore them.")).task_id
+    sent = []
+    monkeypatch.setattr(service.api, "send_message", lambda chat, text, **kw: sent.append(text) or 1)
+    unknown = "task-" + "0" * 32
+    service.send_reply(1, 0, f"Accepted {task_id}. Unknown {unknown}.")
+    assert str(task_id) not in sent[0]
+    assert f'">{task_id.short}</a>' in sent[0]
+    assert "startapp=task_" + task_id.short[1:] in sent[0]
+    assert unknown in sent[0]
+    service.send_reply(2, 0, f"Task {task_id}")
+    assert str(task_id) in sent[1]
+
+
+def test_task_link_rendering_is_retained_across_delivery_retries(tmp_path, monkeypatch):
+    from state_fixtures import admit_task
+    from steward_harness.state import TaskSpec
+
+    service = _service(tmp_path, task_app_url="https://t.me/steward/tasks")
+    task_id = admit_task(service._state, TaskSpec("app", "Keep delivery stable", "Keep links.")).task_id
+    monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0)
+    sent = []
+    def send(chat, text, **kwargs):
+        if task_id.short in text:
+            raise TelegramAPIError("temporary outage")
+        sent.append(text)
+        return 1
+    monkeypatch.setattr(service.api, "send_message", send)
+    text = "x" * 4100 + f"\nTask {task_id}"
+    with pytest.raises(TelegramAPIError):
+        service.send_result(1, 42, text, "stable-linked-result")
+    assert len(sent) == 1
+    restarted = _service(tmp_path, task_app_url="https://t.me/renamed_bot/tasks")
+    def no_task_read():
+        raise AssertionError("A retry must use its retained rendering")
+    monkeypatch.setattr(restarted._state.tasks, "refs", no_task_read)
+    monkeypatch.setattr(restarted.api, "send_message", lambda chat, text, **kwargs: sent.append(text) or 2)
+    restarted.send_result(1, 42, text, "stable-linked-result")
+    assert len(sent) == 2
+    assert "https://t.me/steward/tasks?startapp=" in sent[1]
+    assert "renamed_bot" not in sent[1]

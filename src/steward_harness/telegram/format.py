@@ -23,6 +23,7 @@ _INLINE_DELIMITERS = {
 _SAFE_LINK_SCHEMES = {"http", "https", "tg"}
 _ESCAPABLE_MARKDOWN_CHARACTERS = frozenset(string.punctuation)
 _CODE_ENTITY = re.compile(r"(<code>.*?</code>)", re.DOTALL)
+TASK_REFERENCE = re.compile(r"(?<![\w/:?=&.\-])[a-z0-9][a-z0-9-]*(?![\w/\-]|\.[A-Za-z0-9])")
 
 
 def _find_unescaped(text: str, needle: str, start: int) -> int:
@@ -84,7 +85,14 @@ def _wrap_outside_code(opening: str, closing: str, formatted: str) -> str:
     )
 
 
-def _format_inline(text: str) -> str:
+def _reference_html(reference: tuple[str, str | None]) -> str:
+    label, target = reference
+    escaped = html.escape(label, quote=False)
+    safe = _safe_link_target(target) if target else None
+    return f'<a href="{html.escape(safe, quote=True)}">{escaped}</a>' if safe else f'<code>{escaped}</code>'
+
+
+def _format_inline(text: str, references: dict | None = None) -> str:
     """Convert the Telegram-supported, useful subset of inline Markdown."""
     output: list[str] = []
     cursor = 0
@@ -105,7 +113,8 @@ def _format_inline(text: str) -> str:
             end = _find_unescaped(text, marker, cursor + run)
             if end >= 0:
                 code = text[cursor + run : end].replace("\n", " ")
-                output.append(f"<code>{html.escape(code, quote=False)}</code>")
+                output.append(_reference_html(references[code]) if references and code in references
+                              else f"<code>{html.escape(code, quote=False)}</code>")
                 cursor = end + run
                 continue
 
@@ -158,7 +167,7 @@ def _format_inline(text: str) -> str:
             if delimiter == "_" and end + 1 < len(text) and text[end + 1].isalnum():
                 continue
             output.append(
-                _wrap_outside_code(f"<{tag}>", f"</{tag}>", _format_inline(inner))
+                _wrap_outside_code(f"<{tag}>", f"</{tag}>", _format_inline(inner, references))
             )
             cursor = end + len(delimiter)
             matched = True
@@ -166,13 +175,19 @@ def _format_inline(text: str) -> str:
         if matched:
             continue
 
+        if references:
+            match = TASK_REFERENCE.match(text, cursor)
+            if match and match[0] in references:
+                output.append(_reference_html(references[match[0]]))
+                cursor += len(match[0])
+                continue
         output.append(html.escape(text[cursor], quote=False))
         cursor += 1
 
     return "".join(output)
 
 
-def sanitize_markdown_for_telegram(text: str) -> str:
+def sanitize_markdown_for_telegram(text: str, *, references: dict | None = None) -> str:
     """Convert Markdown to the safe HTML subset accepted by Telegram.
 
     User-supplied HTML is always escaped. The conversion intentionally covers
@@ -224,7 +239,7 @@ def sanitize_markdown_for_telegram(text: str) -> str:
                 if not match:
                     break
                 candidate_ending = candidate[len(candidate_body) :]
-                quoted.append(_format_inline(match.group(1)) + candidate_ending)
+                quoted.append(_format_inline(match.group(1), references) + candidate_ending)
                 cursor += 1
             output.append(f"<blockquote>{''.join(quoted).rstrip()}</blockquote>")
             if cursor < len(lines):
@@ -234,11 +249,11 @@ def sanitize_markdown_for_telegram(text: str) -> str:
         heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", body)
         if heading:
             output.append(
-                _wrap_outside_code("<b>", "</b>", _format_inline(heading.group(1)))
+                _wrap_outside_code("<b>", "</b>", _format_inline(heading.group(1), references))
                 + ending
             )
         else:
-            output.append(_format_inline(body) + ending)
+            output.append(_format_inline(body, references) + ending)
         cursor += 1
 
     return "".join(output)
@@ -313,10 +328,10 @@ def chunk_telegram_html(
 
 
 def format_markdown_chunks(
-    text: str, max_units: int = _TELEGRAM_MESSAGE_UNITS
+    text: str, max_units: int = _TELEGRAM_MESSAGE_UNITS, *, references: dict | None = None
 ) -> list[str]:
     """Convert one Markdown reply into valid, bounded Telegram HTML chunks."""
-    return chunk_telegram_html(sanitize_markdown_for_telegram(text), max_units=max_units)
+    return chunk_telegram_html(sanitize_markdown_for_telegram(text, references=references), max_units=max_units)
 
 
 class ArtifactKind(StrEnum):

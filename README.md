@@ -308,7 +308,10 @@ Start from [the minimal config](config/steward.minimal.yaml); the
 
 With `controller.health_bind` and `telegram` configured, the same loopback
 listener serves the [task board](docs/task-mini-app.md): read-only, signed by
-Telegram `initData`, and in need of your own TLS proxy to reach a phone.
+Telegram `initData`, and in need of your own TLS proxy to reach a phone. Register
+it in BotFather and set `telegram.task_app_url` to enable task links in chat.
+Task cards show titles and short references such as `#a1b2c3d4`; `/task` commands
+accept those references alongside full IDs.
 Organisation-specific commands go in `telegram.adapter_commands` as a declared argv;
 they run without a shell, through the same broker as everything else a model can
 reach.
