@@ -552,3 +552,32 @@ def test_rhythm_list_names_a_dependent_by_its_predecessor(tmp_path):
     )
     assert "rem: after sleep, sleep, world, owner=retained only; this interval: not run yet" in (
         commands("rhythm", "list", 1, 3, 7))
+
+
+def test_moving_or_deleting_an_episode_is_not_new_input(tmp_path):
+    import subprocess
+
+    rhythms = {"sleep": CHAIN["sleep"] | {"paths": ["episodes/"]}}
+    config, state, checkpoint, service, cognition, procedures = _chain(
+        tmp_path, Consolidating(), rhythms=rhythms)
+    root = checkpoint.world.root
+    _world_commit(root, "episodes/2026-09-27.md")
+    _world_commit(root, "episodes/2026-09-28.md")
+    cursor = checkpoint.world.input_cursor()
+
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=t@x", *args],
+                       cwd=root, check=True, capture_output=True)
+
+    # Archiving an episode is a rename within the paths: nothing new to read.
+    (root / "episodes" / "archive").mkdir()
+    git("mv", "episodes/2026-09-27.md", "episodes/archive/2026-09-27.md")
+    git("commit", "-q", "-m", "archive")
+    assert not checkpoint.world.changed(cursor, ("episodes/",))
+    # Neither is a deletion.
+    git("rm", "-q", "episodes/2026-09-28.md")
+    git("commit", "-q", "-m", "prune")
+    assert not checkpoint.world.changed(cursor, ("episodes/",))
+    # A new episode is.
+    _world_commit(root, "episodes/2026-09-29.md")
+    assert checkpoint.world.changed(cursor, ("episodes/",))
