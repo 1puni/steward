@@ -112,11 +112,11 @@ for its timing and failure semantics. The harness ships a generic
 [reflection skill](../src/steward_harness/skills/steward-reflection/SKILL.md);
 the procedure that names when and how an instance reflects belongs to that instance.
 
-Organisation-wide read-only rhythms can set `workdir: /srv/organisation` on the
-rhythm. Provision that directory with the managed repositories as siblings and
-an entry README; existing checkouts can be linked into it. Native cognition starts
-there, while its task account and checkpoint remain in a separate retained task
-worktree. The accepted run captures the directory so retries keep the same scope.
+Organisation-wide rhythms can set `workdir: /srv/organisation` on the rhythm.
+Provision that directory with the managed repositories as siblings and an entry
+README; existing checkouts can be linked into it. A reviewing rhythm's native
+cognition starts there, while its task account and checkpoint remain in a
+separate retained task worktree. The accepted run captures the directory so retries keep the same scope.
 Before cognition the existing credential-free Git transfer refreshes observed
 remote refs in the configured repositories, as `refs/steward/remote/<branch>`,
 without moving their HEADs, changing `origin/<branch>` or touching local changes.
@@ -129,10 +129,28 @@ An organisation rhythm whose procedure is `workspace-write` consolidates instead
 of only reporting. It reads the organisation from `workdir` exactly as above, but
 works in its `input` repository's task worktree, so what it writes there is
 ordinary task work: gated, published to the input branch and landed like any
-task's. Give it `paths`, or its own landing is new input on every interval. A
-company-knowledge repository is the natural input: the rhythm keeps it current as
-the products move, rather than retaining the same facts as evidence nobody
-publishes. A world rhythm takes no `workdir`.
+task's. A company-knowledge repository is the natural input: the rhythm keeps it
+current as the products move, rather than retaining the same facts as evidence
+nobody publishes. A world rhythm takes no `workdir`.
+
+Four things follow from its landing where it works:
+
+- Its landings move its own input repository, so configuration requires `paths`
+  that leave that repository out. Otherwise every landing would wake it again.
+- Only its worktree publishes. Like any writable execution it holds the
+  [agent's writable directories](execution-boundary.md), sibling checkouts
+  included, so its prompt names the worktree and says nothing beneath the
+  organisation root publishes.
+- A writable run keeps its [native session records](native-record-provenance.md)
+  in its worktree, and they publish with its work unless the input repository
+  ignores `artefacts/` and `memories/`. Decide that before the rhythm writes. A
+  repository that tracks them also never sees a run that changed nothing.
+- A blocked run is superseded at the next admission, like any rhythm run, and its
+  unpublished work is dropped with it. The next run reads everything again.
+
+A release that admits a writing organisation rhythm is a rollback floor. Older
+releases refuse its task documents, and one unreadable document stops the
+controller. Roll back below it only after removing those runs' task refs.
 
 An organisation run's captured `activity` remains controller-owned admission
 metadata in accepted Git. It is not copied into the task brief or prompt. The
@@ -164,9 +182,11 @@ Otherwise the result lane never selects it: no assessment turn, no model call,
 no message. What it did is kept either way. A review's findings are its evidence
 commit, retained on the task ref. A writing run's work publishes like any task's,
 because consolidation is the run's job and notification is a separate choice.
-A writing run that changed no file and wrote no findings lands nothing at all:
-what it saw is already on its input branch, so it is done without an empty
-commit. A question or a blocked run still enters assessment as above.
+A writing run that changed no file lands nothing, whatever its findings say:
+what it saw is already on its input branch, so it is done at that candidate
+without an empty commit, and its findings stay on its task ref as a review's do.
+Its result says it changed no files. A question or a blocked run still enters
+assessment as above.
 
 `owner: null` deliberately retains the task's evidence without assessment or
 notification. Requirement-only review tasks also retain evidence without an owner.
