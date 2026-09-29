@@ -173,6 +173,9 @@ class TaskRunner:
         self.transports = dict(transports)
         self.worktrees_root = worktrees_root.resolve()
         state.tasks.transports = self.transports
+        # What any provider this steward runs writes as its own session state.
+        state.tasks.session_state = tuple(
+            prefix for family in cognition.families for prefix in session_state_prefixes(family))
         self.broker = broker
         self.cognition = cognition
         self.provider_fallbacks = provider_fallbacks
