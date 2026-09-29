@@ -309,7 +309,7 @@ def test_the_listener_serves_the_board_beside_health_and_admits_no_write(
             urllib.request.urlopen(f"{root}/healthz", timeout=5)
         assert json.loads(unnamed.value.read()) == {"ok": False, "sha": ""}
         with urllib.request.urlopen(f"{root}/tasks", timeout=5) as response:
-            assert b"<title>Tasks</title>" in response.read()
+            assert b"<title>Task board</title>" in response.read()
         with pytest.raises(urllib.error.HTTPError) as refused:
             urllib.request.urlopen(
                 urllib.request.Request(
@@ -332,3 +332,42 @@ def test_a_landed_task_reports_the_commit_the_remote_took(board: _Board) -> None
     document = json.loads(board.read()[2])
     assert document["tasks"][0]["status"] == "done"
     assert document["tasks"][0]["tip"] == landed
+
+
+def test_short_reference_opens_the_same_task_and_still_requires_auth(board):
+    task = board.admit("Make Telegram readable")
+    query = "?" + urlencode({"task": task.task_id.short})
+    assert board.web.get("/tasks/api" + query, {})[0] == 403
+    status, _, body = board.read(query)
+    assert status == 200
+    detail = json.loads(body)
+    assert detail["task_id"] == str(task.task_id)
+    assert detail["reference"] == task.task_id.short
+    assert detail["title"] == "Make Telegram readable"
+    assert board.read("?" + urlencode({"task": "#unknown"}))[0] == 404
+
+
+def test_short_reference_collision_is_refused_instead_of_selecting_work(board, monkeypatch):
+    first = board.admit("First")
+    board.admit("Second")
+    monkeypatch.setattr(TaskId, "short", property(lambda self: "#00000000"))
+    with pytest.raises(ValueError, match="ambiguous"):
+        board.state.tasks.resolve("#00000000")
+    assert board.read("?task=%2300000000")[0] == 400
+    assert board.state.tasks.resolve(str(first.task_id)) == first.task_id
+
+
+def test_board_and_chat_link_back_to_the_same_admitted_topic_without_app_config(board):
+    from steward_harness.state import TaskOriginKind
+    from steward_harness.telegram.tasks import reference_entities, task_card
+
+    task_id, _ = board.state.tasks.create(
+        TaskSpec("app", "Restore the discussion", "Keep its context."),
+        kind=TaskOriginKind.CONVERSATION, owner="telegram:42",
+    )
+    task = board.state.tasks.get(task_id)
+    model = TaskBoard(board.state, -100123456)
+    url = "https://t.me/c/123456/42"
+    assert model.detail(task_id)["discussion_url"] == url
+    assert f"]({url})" in task_card(task, chat_id=-100123456)
+    assert reference_entities(board.state.tasks, str(task_id), None, -100123456)[str(task_id)] == (task_id.short, url)

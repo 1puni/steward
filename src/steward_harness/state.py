@@ -169,6 +169,11 @@ class TaskId:
     def __str__(self) -> str:
         return self.value
 
+    @property
+    def short(self) -> str:
+        """A stable display reference, derived from the full Git address."""
+        return "#" + hashlib.sha256(self.value.encode()).hexdigest()[:8]
+
 
 
 

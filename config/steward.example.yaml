@@ -74,6 +74,8 @@ provider:
 telegram:
   token_path: "/etc/steward/telegram-token"
   chat_id: -1001234567890
+  # Register the HTTPS /tasks/ URL in BotFather, then enable chat launch links:
+  # task_app_url: "https://t.me/your_bot/tasks"
   allowed_users:
     - 12345678
     - 87654321
