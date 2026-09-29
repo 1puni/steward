@@ -686,6 +686,11 @@ class StewardConfig(BaseModel):
                 raise ValueError("rhythm after and deliver apply only to world rhythms, "
                                  "and paths only to world or organisation rhythms")
             else:
+                if rhythm.workdir is not None and self.procedures[rhythm.procedure].access == "workspace-write":
+                    own = f"repositories/{rhythm.input.split('/', 2)[1]}"
+                    if not rhythm.paths or any(path == own or path.startswith(own + "/") for path in rhythm.paths):
+                        raise ValueError("a writing organisation rhythm needs paths that leave out its own "
+                                         "input repository, or its own landings wake it")
                 for path in rhythm.paths:
                     # An organisation rhythm's input is keyed by repository
                     # ref or task; a prefix naming neither would silence it.
