@@ -651,6 +651,8 @@ def test_writing_org_rhythm_lands_its_consolidation_and_tells_no_one(tmp_path):
     assert request.cwd != tmp_path and (request.cwd / ".git").exists()
     assert request.sandbox_mode == "workspace-write"
     assert f"siblings beneath {tmp_path}" in request.prompt
+    assert f"your working directory {request.cwd}" in request.prompt
+    assert f"Edit nothing beneath {tmp_path}" in request.prompt
     assert "NOTIFY:" in request.prompt and "VERDICT:" not in request.prompt
     assert publish_task(runner) == task
     _git("fetch", "-q", "origin", cwd=clone)

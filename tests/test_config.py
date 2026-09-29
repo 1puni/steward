@@ -619,9 +619,15 @@ def test_rhythm_output_owner_is_explicit_and_uses_configured_transport():
     assert StewardConfig.model_validate(configured).rhythms["review"].workdir == "/srv/org"
     with pytest.raises(ValidationError, match="absolute"):
         StewardConfig.model_validate(base | {"rhythms": {"review": rhythm | {"owner": None, "workdir": "relative"}}})
-    # A writing organisation rhythm consolidates into its input repository.
-    writing = configured | {"procedures": {"review": base["procedures"]["review"] | {"access": "workspace-write"}}}
-    assert StewardConfig.model_validate(writing).procedures["review"].access == "workspace-write"
+    # A writing organisation rhythm consolidates into its input repository,
+    # and only paths that leave that repository out keep it from waking itself.
+    writing = configured | {"procedures": {"review": base["procedures"]["review"] | {"access": "workspace-write"}},
+                            "repositories": base["repositories"] | {"peer": dict(path="/srv/peer", remote_url="https://example.invalid/peer.git")}}
+    for paths in ((), ("repositories/app/main",), ("repositories/peer/main", "repositories/app")):
+        with pytest.raises(ValidationError, match="leave out its own input repository"):
+            StewardConfig.model_validate(writing | {"rhythms": {"review": configured["rhythms"]["review"] | {"paths": paths}}})
+    watching = writing | {"rhythms": {"review": configured["rhythms"]["review"] | {"paths": ("repositories/peer/main",)}}}
+    assert StewardConfig.model_validate(watching).procedures["review"].access == "workspace-write"
     with pytest.raises(ValidationError, match="owner"):
         StewardConfig.model_validate(base | {"rhythms": {"review": rhythm}})
     assert StewardConfig.model_validate(base | {"rhythms": {"review": rhythm | {"owner": None}}})
