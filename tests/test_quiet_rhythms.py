@@ -614,7 +614,7 @@ def test_org_rhythm_paths_decide_whether_its_input_ref_wakes_it(tmp_path):
     procedures.advance_rhythms(now=300)
     assert len(state.tasks.queued()) == 1
 
-def writing_org_rhythm(tmp_path, *, edit, findings):
+def writing_org_rhythm(tmp_path, *, edit, findings, session=False):
     """An organisation rhythm that consolidates into its input repository."""
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
     peer_clone = peer(tmp_path, state, runner)
@@ -628,6 +628,11 @@ def writing_org_rhythm(tmp_path, *, edit, findings):
         result = execute(request)
         if edit:
             (request.cwd / "launch.md").write_text(edit)
+        if session:
+            # A native adapter maps its session directory into the worktree.
+            record = request.cwd / "artefacts" / "claude" / "projects" / "run.jsonl"
+            record.parent.mkdir(parents=True, exist_ok=True)
+            record.write_text('{"role": "user"}\n')
         subject = "docs: consolidate launch" if edit else "no material change"
         return replace(result, output=f"{findings}COMMIT: {subject}\nDISPOSITION: idle\nQUESTION: NONE")
 
@@ -723,3 +728,30 @@ def test_writing_org_rhythm_notice_without_a_change_says_nothing_landed(tmp_path
     _, text, _ = state.pending_task_result_for(conversation)
     assert "Changed no files." in text and "Landed SHA" not in text
     assert "the alias bounced" in text
+
+
+def test_a_writing_run_whose_only_change_is_its_session_record_lands_nothing(tmp_path):
+    clone, _, state, runner, procedures, _ = writing_org_rhythm(
+        tmp_path, edit="", findings="", session=True)
+    before = remote_main(clone)
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    finished = state.tasks.get(task)
+    assert finished.landed_nothing and finished.quiet
+    assert publish_task(runner) is None and remote_main(clone) == before
+    # The record is retained with the run, not dropped.
+    assert state.tasks.git("show", f"{finished.work_sha}:artefacts/claude/projects/run.jsonl")
+
+
+def test_a_writing_run_that_changed_a_file_publishes_its_session_record_too(tmp_path):
+    clone, _, state, runner, procedures, _ = writing_org_rhythm(
+        tmp_path, edit="Launch moved.\n", findings="", session=True)
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    assert not state.tasks.get(task).landed_nothing
+    assert publish_task(runner) == task
+    _git("fetch", "-q", "origin", cwd=clone)
+    assert _git("show", "origin/main:launch.md", cwd=clone) == "Launch moved."
+    assert _git("show", "origin/main:artefacts/claude/projects/run.jsonl", cwd=clone)
