@@ -656,7 +656,7 @@ def test_writing_org_rhythm_lands_its_consolidation_and_tells_no_one(tmp_path):
     _git("fetch", "-q", "origin", cwd=clone)
     assert _git("show", "origin/main:launch.md", cwd=clone) == "Launch moved."
     landed = state.tasks.get(task)
-    assert landed.status.value == "done" and landed.quiet
+    assert landed.status.value == "done" and landed.quiet and not landed.landed_nothing
     assert state.pending_task_result_conversations() == ()
     # Its own landing moved its input repository; only its paths wake it.
     for now in (200, 300):
@@ -687,8 +687,37 @@ def test_writing_org_rhythm_that_changed_and_found_nothing_lands_nothing(tmp_pat
     # What it saw is already on main: done, no empty commit, no message.
     finished = state.tasks.get(task)
     assert finished.status.value == "done" and finished.quiet and not finished.publishable
+    assert finished.landed_nothing
     assert publish_task(runner) is None
     assert remote_main(clone) == before
     assert state.pending_task_result_conversations() == ()
     procedures.advance_rhythms(now=200)
     assert len(state.tasks.all()) == 1
+
+
+def test_writing_org_rhythm_findings_without_a_change_land_nothing(tmp_path):
+    clone, _, state, runner, procedures, _ = writing_org_rhythm(
+        tmp_path, edit="", findings="The alias still has no delivery receipt.\n")
+    before = remote_main(clone)
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    finished = state.tasks.get(task)
+    # Findings are evidence on its task ref, not an empty commit on main.
+    assert finished.status.value == "done" and finished.quiet
+    assert publish_task(runner) is None and remote_main(clone) == before
+    assert "no delivery receipt" in state.tasks.git("show", "-s", "--format=%B", finished.work_sha)
+
+
+def test_writing_org_rhythm_notice_without_a_change_says_nothing_landed(tmp_path):
+    clone, _, state, runner, procedures, _ = writing_org_rhythm(
+        tmp_path, edit="", findings="NOTIFY: the alias bounced.\n")
+    before = remote_main(clone)
+    procedures.advance_rhythms(now=100)
+    task = state.tasks.queued()[0]
+    runner.prepare(task)
+    assert publish_task(runner) is None and remote_main(clone) == before
+    [conversation] = state.pending_task_result_conversations()
+    _, text, _ = state.pending_task_result_for(conversation)
+    assert "Changed no files." in text and "Landed SHA" not in text
+    assert "the alias bounced" in text

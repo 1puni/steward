@@ -171,6 +171,12 @@ class Task:
                 and self.procedure.event.startswith("rhythm:") and not notification(self.findings))
 
     @property
+    def landed_nothing(self) -> bool:
+        """A writing rhythm run done at its candidate: it changed no file, and nothing was pushed."""
+        return bool(self.procedure and self.landed
+                    and self.landed == self.procedure.candidate != self.work_sha)
+
+    @property
     def dispatchable(self) -> bool:
         """Owes another execution slice."""
         d = self.definition
@@ -352,14 +358,16 @@ class GitTaskStore:
         return observed
 
     def _changed_nothing(self, task: Task) -> bool:
-        """A writing rhythm run that finished with no change and no findings.
+        """A writing rhythm run that finished without changing a file.
 
-        It owes nothing, exactly as a review that found nothing does. Any
-        other task that changed no file still publishes its findings.
+        Its findings stay on its task ref, as a review's do, and a `NOTIFY:`
+        line in them still reaches its owner; landing them would only put an
+        empty commit on the input branch every interval. Any other task that
+        changed no file still publishes its findings.
         """
         run = task.procedure
         if not (run and run.event.startswith("rhythm:") and not task.read_only
-                and task.disposition == "idle" and not (task.findings or "").strip()
+                and task.disposition == "idle"
                 and not task.pending and not task.definition.hold):
             return False
         key = (task.work_sha, run.candidate)
