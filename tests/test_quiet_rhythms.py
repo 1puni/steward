@@ -595,3 +595,21 @@ def test_a_running_or_waiting_rhythm_run_still_prevents_overlap(tmp_path):
     queued = state.tasks.queued()[0]
     procedures.advance_rhythms(now=200)
     assert [str(t.task_id) for t in state.tasks.all()] == [str(queued)]
+
+
+def test_org_rhythm_paths_decide_whether_its_input_ref_wakes_it(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer(tmp_path, state, runner)
+    config.rhythms = {"org": ProcedureRhythmConfig(owner=None, schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",))}
+    procedures.advance_rhythms(now=100)
+    runner.prepare(state.tasks.queued()[0])
+    # Its input ref moving is not what it is for.
+    commit(clone, "company.txt")
+    procedures.advance_rhythms(now=200)
+    assert len(state.tasks.all()) == 1
+    # Unless its paths say so.
+    config.rhythms["org"] = config.rhythms["org"].model_copy(
+        update={"paths": ("repositories/peer/main", "repositories/app/main")})
+    procedures.advance_rhythms(now=300)
+    assert len(state.tasks.queued()) == 1
