@@ -176,9 +176,9 @@ the rhythm's own included, are never input. See [schedule semantics](automatic-d
 Manual runs are explicit new requests. Every rhythm explicitly names a configured
 result owner or `null` for retained evidence only. Owned findings enter ordinary
 world assessment, authorized follow-up admission and durable result delivery;
-there is no separate reflection notification lifecycle. A finished read-only
-rhythm run without findings is not selected for assessment at all; completed
-scheduled reviews with findings notify only with their owner's material update.
+there is no separate reflection notification lifecycle. A finished rhythm run
+is selected for assessment only when its findings ask to notify (`NOTIFY:`); its
+evidence, or a writing run's landed work, is kept either way.
 A checkpoint itself does not broadcast to Telegram.
 
 Read-only access constrains mutations; it does not turn every procedure into a

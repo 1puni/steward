@@ -124,7 +124,15 @@ Those refs are observations, not new authority: read source at the configured
 default branch under that namespace. See
 [source and retained findings](provenance-discovery.md#observed-source-and-retained-findings).
 Manual `/rhythm run` uses the same working directory.
-Workspace-write procedures cannot select an external working directory.
+
+An organisation rhythm whose procedure is `workspace-write` consolidates instead
+of only reporting. It reads the organisation from `workdir` exactly as above, but
+works in its `input` repository's task worktree, so what it writes there is
+ordinary task work: gated, published to the input branch and landed like any
+task's. Give it `paths`, or its own landing is new input on every interval. A
+company-knowledge repository is the natural input: the rhythm keeps it current as
+the products move, rather than retaining the same facts as evidence nobody
+publishes. A world rhythm takes no `workdir`.
 
 An organisation run's captured `activity` remains controller-owned admission
 metadata in accepted Git. It is not copied into the task brief or prompt. The
@@ -150,12 +158,15 @@ result through its configured transport. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
 repeating accepted world edits or follow-up admission.
 
-A finished read-only rhythm run with no findings owes its owner nothing. Its
-prompt says so: findings above the closure lines are delivered, and when nothing
-material is new the run writes none and names that in its COMMIT subject. That
-checkpoint is retained on the task ref as evidence, and the result lane never
-selects it: no assessment turn, no model call, no message. Any finding, a
-question or a blocked run still enters assessment as above.
+A finished rhythm run owes its owner a message only when its findings carry a
+`NOTIFY:` line ([what a rhythm sends](#what-a-rhythm-sends)). Its prompt says so.
+Otherwise the result lane never selects it: no assessment turn, no model call,
+no message. What it did is kept either way. A review's findings are its evidence
+commit, retained on the task ref. A writing run's work publishes like any task's,
+because consolidation is the run's job and notification is a separate choice.
+A writing run that changed no file and wrote no findings lands nothing at all:
+what it saw is already on its input branch, so it is done without an empty
+commit. A question or a blocked run still enters assessment as above.
 
 `owner: null` deliberately retains the task's evidence without assessment or
 notification. Requirement-only review tasks also retain evidence without an owner.
