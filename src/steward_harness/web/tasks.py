@@ -176,8 +176,9 @@ class TaskBoard:
             # because it outlives neither this machine nor that run.
             "withdrawn": task.definition.hold == "cancelled",
             # For a landed task this is the commit the remote took; publication
-            # retips the branch at what it pushed.
-            "tip": task.tip if status is TaskStatus.DONE else None,
+            # retips the branch at what it pushed. A run that pushed nothing
+            # shows its own evidence, as a review does.
+            "tip": (task.work_sha if task.landed_nothing else task.tip) if status is TaskStatus.DONE else None,
         }
 
 

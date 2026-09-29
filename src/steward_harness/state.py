@@ -1248,6 +1248,8 @@ class StateDatabase:
                 lines.append(f"Evidence SHA: {task.tip}")
                 if task.procedure.workdir is None:
                     lines.append(f"Reviewed candidate: {task.procedure.candidate}")
+            elif task.landed_nothing:
+                lines.append(f"Changed no files. Evidence SHA: {task.work_sha}")
             else:
                 lines.append(f"Landed SHA: {task.tip}")
         if task.reason:
@@ -1375,7 +1377,7 @@ class StateDatabase:
         """What automatic runs recorded since `since` without notifying anyone.
 
         Silence is the default for rhythms, so it has to be countable: a world
-        rhythm's reply that asked for no delivery, and a rhythm review whose
+        rhythm's reply that asked for no delivery, and a rhythm run whose
         findings asked for none. A run that wrote nothing at all is not here.
         """
         world = [receipt["source_key"] for receipt in (
