@@ -61,8 +61,8 @@ class ProcedureRun(ProcedureConfig):
     def validates_workdir(self):
         if self.workdir is not None:
             _require_bounded_absolute("rhythm workdir", self.workdir)
-            if not self.event.startswith("rhythm:") or self.access != "read-only":
-                raise ValueError("organisation workdir requires a read-only rhythm")
+            if not self.event.startswith("rhythm:"):
+                raise ValueError("organisation workdir requires a rhythm")
         return self
 
 
@@ -161,13 +161,20 @@ class Task:
 
     @property
     def quiet(self) -> bool:
-        """A finished rhythm review that notifies no one: its evidence commit is all it owes.
+        """A finished rhythm run that notifies no one: its commit is all it owes.
 
-        Its findings are that commit's message, so they are kept either way;
-        only a `NOTIFY:` line in them asks for the owner's attention.
+        A review's findings are its evidence commit's message and a writing
+        run's work has landed, so both are kept either way; only a `NOTIFY:`
+        line in the findings asks for the owner's attention.
         """
-        return (self.status is TaskStatus.DONE and self.read_only
+        return (self.status is TaskStatus.DONE and self.procedure is not None
                 and self.procedure.event.startswith("rhythm:") and not notification(self.findings))
+
+    @property
+    def landed_nothing(self) -> bool:
+        """A writing rhythm run done at its candidate: it changed no file, and nothing was pushed."""
+        return bool(self.procedure and self.landed
+                    and self.landed == self.procedure.candidate != self.work_sha)
 
     @property
     def dispatchable(self) -> bool:
@@ -213,6 +220,12 @@ class GitTaskStore:
         self.path = path
         # One record per task, replaced when its accepted tip moves.
         self._records: dict[str, Task] = {}
+        # Worktree paths a provider writes its own session into; see
+        # `task_runner.session_state_prefixes`. They are not a run's change.
+        self.session_state: tuple[str, ...] = ()
+        # Whether a work commit changed only session state, keyed by both
+        # commits and the paths excused: fixed forever for that key.
+        self._unchanged: dict[tuple[str, str, tuple[str, ...]], bool] = {}
         self.remote: str | None = None
         self.repositories: set[str] | None = None
         self.transports = {}
@@ -351,9 +364,39 @@ class GitTaskStore:
                 if task.repository not in tips:
                     tips[task.repository] = transport.observed_tip()
                 if tips[task.repository]:
-                    landed = transport.landing(task.work_sha, tips[task.repository][0])
+                    tip = tips[task.repository][0]
+                    landed = transport.landing(task.work_sha, tip)
+                    if landed is None and self._changed_nothing(task):
+                        # What it saw is already there, and a push would
+                        # land an empty commit: it lands as its candidate.
+                        landed = transport.landing(task.procedure.candidate, tip)
             observed.append(replace(task, landed=landed, running=str(task.task_id) in running))
         return observed
+
+    def _changed_nothing(self, task: Task) -> bool:
+        """A writing rhythm run that finished without changing a file.
+
+        Its own native session record does not count: every run writes one.
+        That record and its findings stay on its task ref, as a review's do,
+        and a `NOTIFY:` line still reaches its owner; landing them would put a
+        transcript-only commit on the input branch every interval. A run that
+        changed a real file publishes its session record with it. Any other
+        task that changed no file still publishes its findings.
+        """
+        run = task.procedure
+        if not (run and run.event.startswith("rhythm:") and not task.read_only
+                and task.disposition == "idle"
+                and not task.pending and not task.definition.hold):
+            return False
+        key = (task.work_sha, run.candidate, self.session_state)
+        if key not in self._unchanged:
+            try:
+                changed = self.git("diff", "--name-only", "-z", run.candidate, task.work_sha, "--")
+            except RuntimeError:
+                return False  # Not decidable here; publication will ask again.
+            self._unchanged[key] = all(
+                path.startswith(self.session_state) for path in changed.split("\0") if path)
+        return self._unchanged[key]
 
     def checkpoints(self, task: Task, limit: int) -> tuple[TaskCheckpointSummary, ...]:
         """The task's slices, newest first; a commit without the trailer is skipped."""

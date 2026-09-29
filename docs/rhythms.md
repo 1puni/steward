@@ -69,8 +69,10 @@ rhythms:
     owner: telegram:3
 ```
 
-Its runs then capture only those keys and its `input` candidate, so only a
-new commit on those lines, or on the input ref, admits a run. The procedure can
+Its runs then capture only those keys, and only a new commit on those lines
+admits a run. The `input` candidate is still recorded, but it wakes the rhythm
+only when a path names it: the paths say what the rhythm is for, and its input is
+where it works, not what it waits on. The procedure can
 still read every repository and task; the paths decide what wakes it, not what
 it may see. Before admission only the input repository and the repositories
 the paths name are fetched. A launch reflection is for launch progress, so a harness redeploy or
@@ -110,11 +112,11 @@ for its timing and failure semantics. The harness ships a generic
 [reflection skill](../src/steward_harness/skills/steward-reflection/SKILL.md);
 the procedure that names when and how an instance reflects belongs to that instance.
 
-Organisation-wide read-only rhythms can set `workdir: /srv/organisation` on the
-rhythm. Provision that directory with the managed repositories as siblings and
-an entry README; existing checkouts can be linked into it. Native cognition starts
-there, while its task account and checkpoint remain in a separate retained task
-worktree. The accepted run captures the directory so retries keep the same scope.
+Organisation-wide rhythms can set `workdir: /srv/organisation` on the rhythm.
+Provision that directory with the managed repositories as siblings and an entry
+README; existing checkouts can be linked into it. A reviewing rhythm's native
+cognition starts there, while its task account and checkpoint remain in a
+separate retained task worktree. The accepted run captures the directory so retries keep the same scope.
 Before cognition the existing credential-free Git transfer refreshes observed
 remote refs in the configured repositories, as `refs/steward/remote/<branch>`,
 without moving their HEADs, changing `origin/<branch>` or touching local changes.
@@ -122,7 +124,34 @@ Those refs are observations, not new authority: read source at the configured
 default branch under that namespace. See
 [source and retained findings](provenance-discovery.md#observed-source-and-retained-findings).
 Manual `/rhythm run` uses the same working directory.
-Workspace-write procedures cannot select an external working directory.
+
+An organisation rhythm whose procedure is `workspace-write` consolidates instead
+of only reporting. It reads the organisation from `workdir` exactly as above, but
+works in its `input` repository's task worktree, so what it writes there is
+ordinary task work: gated, published to the input branch and landed like any
+task's. A company-knowledge repository is the natural input: the rhythm keeps it
+current as the products move, rather than retaining the same facts as evidence
+nobody publishes. A world rhythm takes no `workdir`.
+
+Four things follow from its landing where it works:
+
+- Its landings move its own input repository, so configuration requires `paths`
+  that leave that repository out. Otherwise every landing would wake it again.
+- Only its worktree publishes. Like any writable execution it holds the
+  [agent's writable directories](execution-boundary.md), sibling checkouts
+  included, so its prompt names the worktree and says nothing beneath the
+  organisation root publishes.
+- A writable run keeps its [native session records](native-record-provenance.md)
+  in its worktree, so every run writes one. That record alone is not a change:
+  a run whose only difference is its own provider's session state lands nothing,
+  and the record stays with the run on its task ref. A run that changed a real
+  file publishes its session record with its work, as provenance.
+- A blocked run is superseded at the next admission, like any rhythm run, and its
+  unpublished work is dropped with it. The next run reads everything again.
+
+A release that admits a writing organisation rhythm is a rollback floor. Older
+releases refuse its task documents, and one unreadable document stops the
+controller. Roll back below it only after removing those runs' task refs.
 
 An organisation run's captured `activity` remains controller-owned admission
 metadata in accepted Git. It is not copied into the task brief or prompt. The
@@ -148,12 +177,17 @@ result through its configured transport. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
 repeating accepted world edits or follow-up admission.
 
-A finished read-only rhythm run with no findings owes its owner nothing. Its
-prompt says so: findings above the closure lines are delivered, and when nothing
-material is new the run writes none and names that in its COMMIT subject. That
-checkpoint is retained on the task ref as evidence, and the result lane never
-selects it: no assessment turn, no model call, no message. Any finding, a
-question or a blocked run still enters assessment as above.
+A finished rhythm run owes its owner a message only when its findings carry a
+`NOTIFY:` line ([what a rhythm sends](#what-a-rhythm-sends)). Its prompt says so.
+Otherwise the result lane never selects it: no assessment turn, no model call,
+no message. What it did is kept either way. A review's findings are its evidence
+commit, retained on the task ref. A writing run's work publishes like any task's,
+because consolidation is the run's job and notification is a separate choice.
+A writing run that changed no file lands nothing, whatever its findings say:
+what it saw is already on its input branch, so it is done at that candidate
+without an empty commit, and its findings stay on its task ref as a review's do.
+Its result says it changed no files. A question or a blocked run still enters
+assessment as above.
 
 `owner: null` deliberately retains the task's evidence without assessment or
 notification. Requirement-only review tasks also retain evidence without an owner.
@@ -238,6 +272,13 @@ procedure's instructions, and it runs on the procedure's
 [model preference](#model-preference). Each interval starts a fresh native
 session; the world, not the previous session, carries what earlier runs
 consolidated.
+
+Consolidating means rewriting. A world rhythm's edits and its reply are accepted
+as one world commit, so its prompt says so: the files state what is true now,
+and anything earlier, including who changed what and why, is in `git log` and
+that commit's reply. Told only to replace obsolete claims, a nightly sleep kept
+appending dated sections and correction notes, and its world grew by the night.
+A procedure that asks for in-file history or attribution works against this.
 
 ```yaml
 procedures:

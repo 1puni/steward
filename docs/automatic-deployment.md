@@ -63,8 +63,9 @@ per bucket](rhythms.md), and compares them with the commits its finished
 runs captured. A repository rhythm reads its `input` ref: its input is that
 candidate commit. A rhythm with a `workdir` reads the organisation: its input is
 also every observed `refs/steward/remote/*` head of every configured repository
-and the accepted work commit of every ordinary task, narrowed to its
-[`paths`](rhythms.md) when it sets them. If every observed commit
+and the accepted work commit of every ordinary task. When it sets
+[`paths`](rhythms.md), only what they name is input, its own candidate
+included. If every observed commit
 was captured by a finished run, the poll admits nothing, calls no model and
 logs at debug level. The runs' own `candidate` and `activity` fields are the
 cursor; nothing else records what a rhythm has seen.
@@ -112,9 +113,10 @@ rhythm's input; the world is read by its owner's assessment, not observed for
 admission. A failed fetch skips that rhythm for the poll without changing its
 quiet state; other rhythms remain eligible.
 
-A finished read-only rhythm run without findings is retained evidence only. Its
-checkpoint commit names the outcome, and the result lane never selects it for
-assessment or delivery; see [rhythms](rhythms.md).
+A finished rhythm run whose findings do not ask to notify (`NOTIFY:`) owes its
+owner nothing. A review's checkpoint is retained evidence, a writing run's work
+lands, and the result lane never selects either for assessment or delivery; see
+[rhythms](rhythms.md).
 
 ## Driver protocol
 

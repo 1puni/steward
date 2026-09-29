@@ -619,8 +619,15 @@ def test_rhythm_output_owner_is_explicit_and_uses_configured_transport():
     assert StewardConfig.model_validate(configured).rhythms["review"].workdir == "/srv/org"
     with pytest.raises(ValidationError, match="absolute"):
         StewardConfig.model_validate(base | {"rhythms": {"review": rhythm | {"owner": None, "workdir": "relative"}}})
-    with pytest.raises(ValidationError, match="read-only"):
-        StewardConfig.model_validate(configured | {"procedures": {"review": base["procedures"]["review"] | {"access": "workspace-write"}}})
+    # A writing organisation rhythm consolidates into its input repository,
+    # and only paths that leave that repository out keep it from waking itself.
+    writing = configured | {"procedures": {"review": base["procedures"]["review"] | {"access": "workspace-write"}},
+                            "repositories": base["repositories"] | {"peer": dict(path="/srv/peer", remote_url="https://example.invalid/peer.git")}}
+    for paths in ((), ("repositories/app/main",), ("repositories/peer/main", "repositories/app")):
+        with pytest.raises(ValidationError, match="leave out its own input repository"):
+            StewardConfig.model_validate(writing | {"rhythms": {"review": configured["rhythms"]["review"] | {"paths": paths}}})
+    watching = writing | {"rhythms": {"review": configured["rhythms"]["review"] | {"paths": ("repositories/peer/main",)}}}
+    assert StewardConfig.model_validate(watching).procedures["review"].access == "workspace-write"
     with pytest.raises(ValidationError, match="owner"):
         StewardConfig.model_validate(base | {"rhythms": {"review": rhythm}})
     assert StewardConfig.model_validate(base | {"rhythms": {"review": rhythm | {"owner": None}}})
@@ -645,7 +652,7 @@ def test_world_rhythm_requires_a_world_and_a_writing_procedure():
         StewardConfig.model_validate(base | {"procedures": {"sleep": procedure}})
     with pytest.raises(ValidationError, match="interval schedule"):
         StewardConfig.model_validate(base | {"rhythms": {"sleep": rhythm | {"schedule": {"quiet": 300}}}})
-    with pytest.raises(ValidationError, match="workdir requires a read-only"):
+    with pytest.raises(ValidationError, match="world rhythm takes no organisation workdir"):
         StewardConfig.model_validate(base | {"rhythms": {"sleep": rhythm | {"workdir": "/srv/org"}}})
     with pytest.raises(ValidationError, match="unknown configured input"):
         StewardConfig.model_validate(base | {"rhythms": {"sleep": rhythm | {"input": "worlds"}}})

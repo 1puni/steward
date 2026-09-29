@@ -274,8 +274,8 @@ its owner that sends only what it asked to send
 
 Accepted assessment and external delivery are separate facts. A private task-result
 receipt retains the selected outcome before assessment and remains pending until
-transport succeeds. A completed scheduled read-only review reaches assessment only
-when its findings asked to notify, and it then sends the run's message, or the
+transport succeeds. A completed scheduled rhythm run, review or writing, reaches
+assessment only when its findings asked to notify, and it then sends the run's message, or the
 assessment's own `NOTIFY:` replacement; assessment cannot silence it. Full evidence remains in the
 task ref and receipt. Explicitly requested runs, questions, blocked/cancelled work,
 and assessment failures retain their outcome reports. Transport retries replay the
