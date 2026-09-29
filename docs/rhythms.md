@@ -142,9 +142,10 @@ Four things follow from its landing where it works:
   included, so its prompt names the worktree and says nothing beneath the
   organisation root publishes.
 - A writable run keeps its [native session records](native-record-provenance.md)
-  in its worktree, and they publish with its work unless the input repository
-  ignores `artefacts/` and `memories/`. Decide that before the rhythm writes. A
-  repository that tracks them also never sees a run that changed nothing.
+  in its worktree, so every run writes one. That record alone is not a change:
+  a run whose only difference is its own provider's session state lands nothing,
+  and the record stays with the run on its task ref. A run that changed a real
+  file publishes its session record with its work, as provenance.
 - A blocked run is superseded at the next admission, like any rhythm run, and its
   unpublished work is dropped with it. The next run reads everything again.
 

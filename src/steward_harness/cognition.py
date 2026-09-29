@@ -112,6 +112,11 @@ class Cognition:
         self._active: dict[str, Callable[[], None] | None] = {}
         self._lock = RLock()
 
+
+    @property
+    def families(self) -> tuple[str, ...]:
+        """Every provider family this cognition can run."""
+        return tuple(self._adapters)
     def cancel(self, execution_id: str) -> bool:
         """Stop the running execution. False if it is not running here."""
         with self._lock:
