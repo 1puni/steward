@@ -67,11 +67,15 @@ class GitWorld:
         as changed: an unanswerable cursor admits the run rather than silencing it.
         """
         try:
-            return run_agent_git(
-                self.execution_broker, "diff", "--quiet", "--find-renames", "--diff-filter=AMT",
-                since, "HEAD", "--", *paths,
+            names = run_agent_git(
+                self.execution_broker, "diff", "--find-renames", "--diff-filter=AMT",
+                "--name-only", "-z", since, "HEAD", "--", *paths,
                 cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
-            ).returncode != 0
+            )
+            # `--quiet`'s exit code ignores `--diff-filter` (a rename-only
+            # diff still exits 1), so the surviving names are the answer.
+            # A Git that cannot answer still counts as changed.
+            return names.returncode != 0 or bool(names.stdout.strip("\0"))
         except (OSError, subprocess.TimeoutExpired):
             return True
 
