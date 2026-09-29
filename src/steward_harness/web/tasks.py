@@ -31,6 +31,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 from steward_harness.state import StateDatabase, TaskId, TaskStatus
+from steward_harness.telegram.tasks import discussion_link
 
 #: How long one Telegram sign-in stays good for. Long enough to read a board,
 #: short enough that a captured `initData` is not a standing grant.
@@ -117,8 +118,9 @@ def authenticate(
 class TaskBoard:
     """Every task the store knows, resolved against one Git snapshot."""
 
-    def __init__(self, state: StateDatabase) -> None:
+    def __init__(self, state: StateDatabase, chat_id: int | None = None) -> None:
         self.state = state
+        self.chat_id = chat_id
 
     def board(self) -> dict:
         """The whole board as one document; the browser does the rest.
@@ -136,7 +138,7 @@ class TaskBoard:
             counts[row["status"]] = counts.get(row["status"], 0) + 1
         return {"paused": self.state.paused(), "counts": counts, "tasks": rows}
 
-    def detail(self, task_id: TaskId) -> dict:
+    def detail(self, task_id: TaskId | str) -> dict:
         """One task, from the same accessors `/task show` reads.
 
         Deliberately the same ones: two surfaces reporting the same task from
@@ -144,8 +146,9 @@ class TaskBoard:
         `checkpoints` are one `git log` each, which is affordable exactly once
         and never in `board()`.
         """
-        task = self.state.tasks.get(task_id)
+        task = self.state.tasks.get(self.state.tasks.resolve(str(task_id)))
         return self._summary(task) | {
+            "discussion_url": discussion_link(task.definition.owner, self.chat_id),
             "brief": task.brief,
             "findings": task.findings,
             "pending_inputs": len(task.pending),
@@ -164,6 +167,7 @@ class TaskBoard:
         status = task.status
         return {
             "task_id": str(task.task_id),
+            "reference": task.task_id.short,
             "title": task.title,
             "repository": task.repository,
             "status": status.value,
@@ -231,7 +235,7 @@ class TaskWeb:
             query = dict(parse_qsl(split.query))
             requested = query.get("task")
             document = (
-                self.board.detail(TaskId(requested))
+                self.board.detail(requested)
                 if requested
                 else self.board.board()
             )

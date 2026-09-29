@@ -49,6 +49,7 @@ from steward_harness.state import (
 from steward_harness.task_runner import TaskRunner
 from steward_harness.task_lock import locked_tasks
 from steward_harness.telegram.service import TelegramService
+from steward_harness.telegram.tasks import app_link, task_card
 from steward_harness.web.health import HealthServer
 from steward_harness.web.tasks import TaskBoard, TaskWeb
 from steward_harness.world.git_world import GitWorld
@@ -189,11 +190,12 @@ class KernelCommands:
             )
         if name == "tasks":
             tasks = self.state.tasks.all()[:20]
-            return "No tasks." if not tasks else "Tasks:\n" + "\n".join(
-                f"  • {task.task_id} {task.status.value}: "
-                f"{task.title} ({task.repository})"
-                for task in tasks
-            )
+            url = self.config.telegram.task_app_url if self.config.telegram else None
+            launch = app_link(url)
+            heading = f"[Open task board]({launch})" if launch else "**Tasks**"
+            chat = self.config.telegram.chat_id if self.config.telegram else None
+            cards = "\n\n".join(task_card(task, url, chat) for task in tasks)
+            return heading + "\n\n" + (cards or "No tasks yet.")
         if name == "pause":
             self.state.set_paused(True)
             return "⏸️ Scheduler paused; accepted publication and target convergence remain active."
@@ -270,7 +272,7 @@ class KernelCommands:
             return self._cancel(arg or "")
         detail = parts[2].removeprefix("::").strip() if len(parts) == 3 else ""
         try:
-            task_id = TaskId(raw_id)
+            task_id = self.state.tasks.resolve(raw_id)
             if verb in {"model", "model_family"}:
                 session = self.state.tasks.get(task_id).session_id
                 lineage = self.state.get_conversation(session)
@@ -302,13 +304,17 @@ class KernelCommands:
                 )
                 progress += f"\nPending inputs: {len(task.pending)}"
                 return (
-                    f"{task.task_id} — {task.status.value}"
+                    task_card(
+                        task, self.config.telegram.task_app_url if self.config.telegram else None,
+                        self.config.telegram.chat_id if self.config.telegram else None,
+                    )
                     + (
                         " (cancellation requested)"
                         if task.definition.hold == "cancelled" else ""
                     )
                     + f"\nRepository: {task.repository}\n"
-                    f"Priority: {task.priority}\nTitle: {task.title}\nBrief: {task.brief}{reason}{progress}"
+                    f"Priority: {task.priority}\nBrief: {task.brief}{reason}{progress}\n\n"
+                    f"`/task note {task.task_id.short} <text>`"
                 )
             if verb == "confirm" and not detail:
                 self.state.tasks.confirm(task_id)
@@ -359,7 +365,7 @@ class KernelCommands:
         lines = []
         for raw_id in ids.split()[1:]:
             try:
-                cancelled = self.state.tasks.cancel(TaskId(raw_id), normalized)
+                cancelled = self.state.tasks.cancel(self.state.tasks.resolve(raw_id), normalized)
                 # The marker says it was abandoned; the signal stops the
                 # slice that is running right now.
                 self.conversations.cancel(cancelled.session_id)
@@ -413,8 +419,8 @@ class KernelCommands:
             if rest[0] not in self.config.repositories:
                 return f"Unknown repository {rest[0]!r}."
             try:
-                task = self.state.tasks.retarget(TaskId(name), rest[0])
-            except (RuntimeError, ValueError) as error:
+                task = self.state.tasks.retarget(self.state.tasks.resolve(name), rest[0])
+            except (LookupError, RuntimeError, ValueError) as error:
                 return f"⚠️ {error}"
             return f"🔀 Retargeted {task.task_id} to {task.repository}."
         repository = self.config.repositories.get(name)
@@ -695,7 +701,7 @@ class StewardDaemon:
         if telegram is None:
             return None
         return TaskWeb(
-            TaskBoard(state),
+            TaskBoard(state, telegram.chat_id),
             token_path=telegram.token_path,
             allowed_users=telegram.allowed_users,
         )

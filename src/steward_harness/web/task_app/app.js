@@ -1,92 +1,143 @@
-// The board, rendered. Every request carries the Telegram sign-in; nothing
-// here writes, because every action is a `/task` command in the chat this was
-// opened from.
 "use strict";
 
 const app = window.Telegram && window.Telegram.WebApp;
 if (app) { app.ready(); app.expand(); }
-
 const auth = { Authorization: "tma " + ((app && app.initData) || "") };
 const el = (id) => document.getElementById(id);
-const open = new Set();
+const icons = { proposed: "💡", queued: "⏳", running: "⚙️", waiting: "💬", blocked: "⚠️", done: "✅", cancelled: "🛑" };
+const attention = new Set(["waiting", "blocked", "proposed"]);
+let snapshot = null;
 let version = null;
+let filter = "active";
+let selected = null;
+let detailVersion = null;
 
-function fail(message) {
-  el("error").hidden = false;
-  el("error").textContent = message;
+function element(tag, text, className) {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  if (className) node.className = className;
+  return node;
 }
-
-async function read(query) {
-  const response = await fetch("api" + query, { headers: auth });
-  if (!response.ok) {
-    throw new Error((await response.json().catch(() => ({}))).error || response.statusText);
-  }
+function fail(message) { el("error").hidden = false; el("error").textContent = message; }
+async function read(query = "") {
+  const response = await fetch("/tasks/api" + query, { headers: auth });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || response.statusText);
   return { etag: response.headers.get("ETag"), body: await response.json() };
 }
-
+function status(task) {
+  return (icons[task.status] || "") + " " + task.status[0].toUpperCase() + task.status.slice(1);
+}
 function row(task) {
-  const node = document.createElement("div");
-  node.className = "task " + task.status;
-  const head = document.createElement("h2");
-  head.textContent = task.title;
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  const badge = document.createElement("span");
-  badge.className = "badge";
-  badge.textContent = task.status;
-  meta.append(badge, " " + task.repository + " · " + task.task_id +
-    (task.priority ? " · priority " + task.priority : "") +
-    (task.withdrawn ? " · withdrawal requested" : "") +
-    (task.tip ? " · " + task.tip.slice(0, 12) : ""));
-  node.append(head, meta);
-  if (task.reason) {
-    const reason = document.createElement("div");
-    reason.className = "reason";
-    reason.textContent = task.reason;
-    node.append(reason);
-  }
-  if (open.has(task.task_id)) { node.append(detail(task.task_id)); }
-  node.onclick = () => {
-    open.has(task.task_id) ? open.delete(task.task_id) : open.add(task.task_id);
-    refresh(true);
+  const node = element("button", "", "task");
+  node.append(element("h2", task.title));
+  const meta = element("div", "", "meta");
+  meta.append(element("span", status(task), "badge"), element("span", task.repository), element("span", task.reference));
+  if (task.priority) meta.append(element("span", "Priority " + task.priority));
+  node.append(meta);
+  if (task.reason) node.append(element("p", task.reason, "reason"));
+  node.onclick = () => showTask(task.task_id);
+  return node;
+}
+function render() {
+  if (!snapshot) return;
+  const query = el("search").value.trim().toLowerCase();
+  const tasks = snapshot.tasks.filter((task) =>
+    (filter === "all" || (filter === "attention" ? attention.has(task.status) : !["done", "cancelled"].includes(task.status))) &&
+    [task.title, task.repository, task.task_id, task.reference].some((value) => value.toLowerCase().includes(query)));
+  el("tasks").replaceChildren(...tasks.map(row));
+  el("empty").hidden = tasks.length > 0;
+  el("empty").textContent = query ? "No matching tasks. Try another title or reference." :
+    filter === "attention" ? "Nothing needs your input." : "No tasks here. Choose All tasks to see completed work.";
+}
+function section(parent, title, text) {
+  if (!text) return;
+  parent.append(element("h3", title), element("div", text, "prose"));
+}
+function copyCommand(parent, command) {
+  const button = element("button", command, "command");
+  button.title = "Copy command";
+  button.onclick = async () => {
+    try { await navigator.clipboard.writeText(command); button.textContent = "Copied — paste in the task’s Telegram chat"; }
+    catch (_) { button.textContent = command; fail("Could not copy. Select and copy the command below."); }
   };
-  return node;
+  parent.append(button);
 }
-
-function detail(taskId) {
-  const node = document.createElement("div");
-  node.className = "detail";
-  node.textContent = "…";
-  read("?task=" + encodeURIComponent(taskId)).then(({ body }) => {
-    const lines = [body.brief];
-    if (body.findings) { lines.push("", "Findings", body.findings); }
-    if (body.checkpoints.length) {
-      lines.push("", "Checkpoints");
-      for (const point of body.checkpoints) {
-        lines.push("  " + point.disposition + (point.question ? " — " + point.question : ""));
-      }
-    }
-    if (body.pending_inputs) { lines.push("", body.pending_inputs + " pending input(s)"); }
-    node.textContent = lines.join("\n");
-  }).catch((error) => { node.textContent = error.message; });
-  return node;
-}
-
-async function refresh(force) {
+async function showTask(reference, focus = true, updating = false) {
+  if (!updating) detailVersion = null;
+  selected = reference;
+  el("board").hidden = true;
+  el("detail").hidden = false;
+  if (!updating) el("content").textContent = "Loading task…";
+  if (app && app.BackButton) app.BackButton.show();
+  if (focus) el("back").focus();
   try {
-    const { etag, body } = await read("");
-    if (!force && etag === version) { return; }
-    version = etag;
+    const { etag, body: task } = await read("?task=" + encodeURIComponent(reference));
+    if (selected !== reference) return;
     el("error").hidden = true;
-    el("heading").textContent = body.paused ? "Tasks (scheduler paused)" : "Tasks";
-    el("counts").textContent = Object.entries(body.counts)
-      .map(([status, count]) => count + " " + status).join(" · ") || "no tasks";
-    const list = el("tasks");
-    list.replaceChildren(...body.tasks.map(row));
-  } catch (error) {
-    fail(error.message);
-  }
+    if (etag === detailVersion) return;
+    detailVersion = etag;
+    const content = el("content");
+    content.replaceChildren(element("h2", task.title), element("p", status(task) + " · " + task.repository + " · " + task.reference, "meta"));
+    if (task.withdrawn) content.append(element("p", "Withdrawal requested"));
+    section(content, attention.has(task.status) ? "Needs your attention" : "Status", task.reason);
+    section(content, "Brief", task.brief);
+    section(content, "Findings", task.findings);
+    if (task.checkpoints.length) section(content, "Recent checkpoints", task.checkpoints.map((p) => p.disposition + (p.question ? ": " + p.question : "")).join("\n"));
+    if (task.pending_inputs) content.append(element("p", task.pending_inputs + " pending input(s)", "help"));
+    content.append(element("h3", "Continue in Telegram"), element("p", "Tap to copy a command. Paste it in your steward’s chat and replace the placeholder text.", "help"));
+    if (task.discussion_url) {
+      const discussion = element("a", "Open discussion", "discussion");
+      discussion.href = task.discussion_url;
+      if (app && app.openTelegramLink) discussion.onclick = (event) => {
+        event.preventDefault();
+        app.openTelegramLink(task.discussion_url);
+      };
+      content.append(discussion);
+    }
+    const ref = task.reference;
+    copyCommand(content, "/task show " + ref);
+    if (task.status === "waiting") copyCommand(content, "/task answer " + ref + " <your answer>");
+    if (task.status === "proposed") copyCommand(content, "/task confirm " + ref);
+    if (["blocked", "cancelled"].includes(task.status)) copyCommand(content, "/task retry " + ref);
+    if (!["done", "cancelled"].includes(task.status)) copyCommand(content, "/task note " + ref + " <your note>");
+    const technical = element("details", "");
+    technical.append(element("summary", "Git details"), element("p", task.task_id));
+    if (task.tip) technical.append(element("p", "Accepted commit: " + task.tip));
+    content.append(technical);
+  } catch (error) { if (selected === reference) { el("content").textContent = "Task unavailable."; fail(error.message); } }
 }
-
-refresh(true);
+function back() {
+  selected = null;
+  el("board").hidden = false;
+  el("detail").hidden = true;
+  el("error").hidden = true;
+  if (app && app.BackButton) app.BackButton.hide();
+  el("search").focus();
+}
+async function refresh() {
+  try {
+    const { etag, body } = await read();
+    el("error").hidden = true;
+    if (selected) await showTask(selected, false, true);
+    if (etag === version) return;
+    version = etag;
+    snapshot = body;
+    const total = body.tasks.length;
+    const needs = body.tasks.filter((t) => attention.has(t.status)).length;
+    el("counts").textContent = total + " tasks · " + needs + (needs === 1 ? " needs your attention" : " need your attention") + (body.paused ? " · Scheduling paused" : "");
+    render();
+  } catch (error) { fail(error.message); }
+}
+el("search").oninput = render;
+for (const button of document.querySelectorAll("[data-filter]")) button.onclick = () => {
+  filter = button.dataset.filter;
+  for (const peer of document.querySelectorAll("[data-filter]")) peer.setAttribute("aria-pressed", String(peer === button));
+  render();
+};
+el("back").onclick = back;
+if (app && app.BackButton) app.BackButton.onClick(back);
+// The parameter only selects a read. Every API call still requires signed initData.
+const start = (app && app.initDataUnsafe && app.initDataUnsafe.start_param) || new URLSearchParams(location.search).get("tgWebAppStartParam") || "";
+if (/^task_[0-9a-f]{8}$/.test(start)) showTask("#" + start.slice(5), false);
+refresh();
 setInterval(refresh, 15000);

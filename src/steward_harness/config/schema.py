@@ -287,6 +287,8 @@ class TelegramConfig(BaseModel):
     media_max_mb: int = Field(default=50, ge=1, le=2000)
     inbound_media_dir: str | None = None
     botapi_base: str | None = None
+    # A BotFather-registered Mini App link; the HTTPS hosting stays external.
+    task_app_url: str | None = None
     delivery_outbox_dir: str | None = None
     delivery_quarantine_dir: str | None = None
     delivery_roots: tuple[str, ...] = ()
@@ -296,6 +298,10 @@ class TelegramConfig(BaseModel):
     @model_validator(mode="after")
     def validates_adapter_commands(self) -> "TelegramConfig":
         _require_bounded_absolute("Telegram token_path", self.token_path)
+        if self.task_app_url is not None and not re.fullmatch(
+            r"https://t\.me/[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?", self.task_app_url
+        ):
+            raise ValueError("task_app_url must be https://t.me/bot or https://t.me/bot/app")
         if len(set(self.topics.values())) != len(self.topics):
             raise ValueError("Telegram topic IDs must be unique")
         unknown_passive = set(self.passive_topics) - set(self.topics)
