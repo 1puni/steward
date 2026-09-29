@@ -244,7 +244,8 @@ Either way, a rhythm runs only on **new input**: a commit none of its finished
 runs captured. For a repository rhythm that is the `input:` branch's current
 commit. For a rhythm with a `workdir:`, which reads across the organisation, it
 is also every configured repository's observed remote branch tips and the
-retained work of every ordinary task. Nothing the steward writes as bookkeeping
+retained work of every ordinary task, or only what its `paths:` name when it sets
+them. Nothing the steward writes as bookkeeping
 counts: task documents and their acceptance commits live in the task store, and
 procedure runs, this rhythm's own included, are never input. A tick with nothing
 new admits nothing and calls no model.
@@ -275,15 +276,15 @@ different candidate.
 `owner:` is required on every rhythm — you must write it, even to write `null`.
 
 A configured `telegram:<topic-id>` or `desk:<conversation>` becomes the
-protected result owner of every task that rhythm creates. When the run finishes,
-asks or fails, its outcome goes through the ordinary task-result assessment path
-in that conversation: the owner's session sees the brief and the findings as
-*evidence*, can record what matters in the world, can propose a follow-up task
-within the repository authority it already has, and returns a concise update
-through its transport. It can also decide nothing needs saying and complete
-without a reply, which retains the evidence and sends nothing. A read-only
-rhythm run that finishes without findings never reaches assessment at all: its
-checkpoint names the outcome, and no turn runs and no message is sent. Assessment cannot grant
+protected result owner of every task that rhythm creates. A run that asks or
+fails, or finishes with findings carrying a `NOTIFY:` line, goes through the
+ordinary task-result assessment path in that conversation: the owner's session
+sees the brief and the findings as *evidence*, can record what matters in the
+world, can propose a follow-up task within the repository authority it already
+has, and sends the run's message or its own replacement. A run that finishes
+without asking to notify never reaches assessment at all. Its findings stay on
+its task ref, and a writing run's work lands, but no turn runs and no message is
+sent. Assessment cannot grant
 itself repository access it did not have, and cannot steer tasks owned by
 another conversation.
 
