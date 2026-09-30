@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import time
+from dataclasses import replace
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -229,6 +230,33 @@ def test_a_listing_costs_one_snapshot_however_many_tasks_exist(
     assert len(document["tasks"]) == 6
     assert document["counts"] == {"queued": 6}
     assert calls == []
+
+
+def test_the_listing_cap_drops_the_oldest_finished_work_and_counts_everything(
+    board: _Board, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past the cap, a board must still show the open work and the newest.
+
+    The defect this pins: the cap took `GitTaskStore.all()`'s head, oldest
+    first, so a busy instance's board stopped a week before today.
+    """
+    titles = ("Open and oldest", "Old cancel", "Cancel", "Newest cancel")
+    tasks = {title: board.admit(title) for title in titles}
+    for title in titles[1:]:
+        board.state.tasks.cancel(tasks[title].task_id, "superseded")
+    # Admission within one second shares a timestamp, and the store keeps
+    # GIT_* out of its commits; give each task its own day instead.
+    real = GitTaskStore.all
+    monkeypatch.setattr(GitTaskStore, "all", lambda self: sorted(
+        (replace(task, created_at=f"2026-09-0{titles.index(task.title) + 1}T12:00:00Z")
+         for task in real(self)),
+        key=lambda t: (-t.priority, t.created_at, str(t.task_id))))
+    monkeypatch.setattr("steward_harness.web.tasks._LISTED", 3)
+
+    document = json.loads(board.read()[2])
+
+    assert [row["title"] for row in document["tasks"]] == ["Open and oldest", "Newest cancel", "Cancel"]
+    assert document["counts"] == {"queued": 1, "cancelled": 3}
 
 
 def test_the_one_task_read_carries_what_task_show_carries(board: _Board) -> None:

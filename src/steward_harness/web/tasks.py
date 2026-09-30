@@ -38,9 +38,13 @@ from steward_harness.telegram.tasks import discussion_link
 AUTH_WINDOW_SECONDS = 3600
 
 #: What a browse is for: the ones that need the operator come first, the ones
-#: that need nobody come last. Within a rank the order is `GitTaskStore.all`'s —
-#: priority, age, slug — which a stable sort preserves and which is total, so
-#: two reads of an unchanged board serialize identically.
+#: that need nobody come last. Within a rank, higher priority first, then the
+#: newest; ties fall to the task ID, so the order is total and two reads of an
+#: unchanged board serialize identically.
+#:
+#: The listing cap chooses rows by a different order: all open work, then the
+#: most recently created finished work. Ranking first would spend the cap on
+#: last week's `done` before this morning's `cancelled`.
 _RANK = {
     TaskStatus.WAITING: 0,
     TaskStatus.BLOCKED: 1,
@@ -50,6 +54,10 @@ _RANK = {
     TaskStatus.DONE: 5,
     TaskStatus.CANCELLED: 6,
 }
+
+#: The most rows one listing carries; what falls past it is the oldest finished work.
+_LISTED = 200
+_FINISHED = (TaskStatus.DONE, TaskStatus.CANCELLED)
 
 _PREFIX = "/tasks"
 _ASSETS = {
@@ -128,14 +136,18 @@ class TaskBoard:
         There is no page, no offset and no server-side filter. The SQL those
         were written in had a `status` column and no longer does, and the
         Python that would replace it buys an offset that goes stale between
-        requests and a token covering one page of it. The board caps the
-        read at 200 rows, which is the ceiling this relies on.
+        requests and a token covering one page of it. The board lists at most
+        `_LISTED` rows, which is the ceiling this relies on; `counts` covers
+        every task, so the browser can say how many it was not sent.
         """
-        rows = [self._summary(task) for task in self.state.tasks.all()[:200]]
-        rows.sort(key=lambda row: _RANK[TaskStatus(row["status"])])
+        tasks = sorted(self.state.tasks.all(),
+                       key=lambda task: (task.created_at, str(task.task_id)), reverse=True)
+        tasks.sort(key=lambda task: task.status in _FINISHED)
         counts: dict[str, int] = {}
-        for row in rows:
-            counts[row["status"]] = counts.get(row["status"], 0) + 1
+        for task in tasks:
+            counts[task.status.value] = counts.get(task.status.value, 0) + 1
+        listed = sorted(tasks[:_LISTED], key=lambda task: (_RANK[task.status], -task.priority))
+        rows = [self._summary(task) for task in listed]
         return {"paused": self.state.paused(), "counts": counts, "tasks": rows}
 
     def detail(self, task_id: TaskId | str) -> dict:
