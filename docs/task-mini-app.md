@@ -57,7 +57,9 @@ unchanged board return the same token, and that closing a slice changes it.
 The board is one snapshot, then Python: `all()` takes one observed tip per
 repository and one lock scan, and every field after that is an attribute. It
 serves at most 200 task summaries, about 60 KB, as one document, and the browser
-scrolls it.
+scrolls it. The cap keeps every open task and then the most recently created
+finished ones, so what falls past it is the oldest `done` and `cancelled` work.
+`counts` covers every task, and the header says how many were listed.
 
 Server-side paging would buy a cursor, an offset that goes stale between requests
 and a token that covers only a page. None of that is worth having for 60 KB.

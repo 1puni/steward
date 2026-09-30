@@ -122,9 +122,10 @@ async function refresh() {
     if (etag === version) return;
     version = etag;
     snapshot = body;
-    const total = body.tasks.length;
-    const needs = body.tasks.filter((t) => attention.has(t.status)).length;
-    el("counts").textContent = total + " tasks · " + needs + (needs === 1 ? " needs your attention" : " need your attention") + (body.paused ? " · Scheduling paused" : "");
+    const total = Object.values(body.counts).reduce((sum, n) => sum + n, 0);
+    const needs = [...attention].reduce((sum, status) => sum + (body.counts[status] || 0), 0);
+    const listed = body.tasks.length < total ? " (" + body.tasks.length + " most recent listed)" : "";
+    el("counts").textContent = total + " tasks" + listed + " · " + needs + (needs === 1 ? " needs your attention" : " need your attention") + (body.paused ? " · Scheduling paused" : "");
     render();
   } catch (error) { fail(error.message); }
 }
