@@ -65,6 +65,11 @@ The [dashboard evidence research](dashboard-evidence-research.md) inventories re
 task/session sources and proposes a bounded read-only detail interface and phased
 implementation. It is a revision-scoped proposal, not an implemented API contract.
 
+The [execution-boundary audit](legacy-execution-boundary-audit.md) traces remaining
+coupling between sources, native executions, task operations, result delivery and
+scheduled obligations. It records revision-scoped evidence, preserved guarantees
+and bounded recommendations, including overlap with already-owned work.
+
 The [reflex layer survey](reflex-layer.md) maps the fast-decision landscape
 (Jev, Laya, semantic routers, process reward models, learning-to-defer) and
 reports a measured local prototype: sub-millisecond judgment heads for

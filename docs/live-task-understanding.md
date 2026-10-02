@@ -176,9 +176,12 @@ wherever the agent can write its repository's objects and refs.
 
 - A provider without live input gets no acknowledgement, and its offers are not
   evaluated during the turn; it records understanding at closure only.
-- On Claude, input queued after a result starts another native turn, so an
-  acknowledgement can cost one extra turn, which must again end with the closure
-  lines.
+- On Claude/GLM, input queued after a result can start another native turn.
+  Understanding acknowledgements are marked as controller receipts: their native
+  results are validated but do not replace the working turn's output or require
+  another closure. Ordinary late notes and corrections can still replace that
+  output. Codex steers within one native turn and cannot distinguish which input
+  caused its final answer.
 - Without a dropped execution identity, Codex sandboxing may protect `.git` inside
   writable roots, which would stop offers and native commits alike. Unverified.
 
