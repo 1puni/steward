@@ -56,9 +56,10 @@ unchanged board return the same token, and that closing a slice changes it.
 
 The board is one snapshot, then Python: `all()` takes one observed tip per
 repository and one lock scan, and every field after that is an attribute. It
-serves at most 200 task summaries, about 60 KB, as one document, and the browser
-scrolls it. The cap keeps every open task and then the most recently created
-finished ones, so what falls past it is the oldest `done` and `cancelled` work.
+serves every open task, then fills a 200-summary budget (about 60 KB) with the
+most recently created finished work, as one document the browser scrolls.
+When more than 200 tasks are open, all are listed. Only the oldest `done` and
+`cancelled` work falls outside the listing.
 `counts` covers every task, and the header says how many were listed.
 
 Server-side paging would buy a cursor, an offset that goes stale between requests
@@ -107,8 +108,8 @@ links keep their original text.
 
 The board searches titles, repositories and references locally, with In progress,
 Needs you and All tasks filters. A task link reads its detail directly, even when
-it falls outside the 200-task listing. Command buttons copy text for the operator
-to paste into Telegram; no command is submitted by the browser.
+it falls outside the listing of recent finished work. Command buttons copy text
+for the operator to paste into Telegram; no command is submitted by the browser.
 
 **Auth.** Every data request carries `Authorization: tma <initData>` and is
 verified before anything is read: HMAC-SHA256 over the sorted `initData` pairs,
