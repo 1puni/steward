@@ -85,8 +85,9 @@ The rehearsal has to establish that:
 1. the target opens the converted database without resetting it;
 2. native session originals and the right provider homes resume under the real
    execution identity (an empty directory is not a login);
-3. prepared world work applies or stays explicitly unresolved, with no repeated
-   dependent admission, and interrupted unprepared work keeps its actual files;
+3. prepared world work applies or stays explicitly unresolved, independently
+   admitted tasks survive without duplicate admission, and interrupted unprepared
+   work keeps its actual files;
 4. task branches, pending inputs, withdrawals and origins survive;
 5. publication observes the trusted remote before claiming a result, including
    across a rebased push;

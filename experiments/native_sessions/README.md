@@ -13,6 +13,15 @@ databases, and clean up after themselves. They do not touch any running steward.
 The [native provider runtime](../../docs/native-provider-runtime.md) is the
 contract these probes check against.
 
+The task-call transport also has a no-inference probe:
+`uv run python experiments/native_sessions/task_call_probe.py`. It uses a clean
+Codex home and the installed App Server's MCP discovery/tool-call methods to
+admit two tasks, replay a submission, inspect and cancel work while the
+controller conversation remains running. It needs no provider login, spends no
+model tokens, and does not prove a deployed release or split-UID enforcement.
+The latter task-call check is in `tests/test_boundary_acceptance.py` and runs
+with the Linux boundary acceptance script.
+
 ## Running them
 
 From the repository root, with Python 3.11+, Git and the provider CLI on `PATH`.

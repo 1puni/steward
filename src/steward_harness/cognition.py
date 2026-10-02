@@ -56,6 +56,8 @@ class CognitionRequest:
     sandbox_mode: SandboxMode = "read-only"
     read_scope: ReadScope | None = None
     allow_empty_output: bool = False
+    task_call_socket: str | None = None
+    on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None
     on_session_started: Callable[[ProviderFamily, str], None] = (
         lambda _provider, _session_id: None
     )
@@ -217,6 +219,8 @@ class Cognition:
                         allow_empty_output=request.allow_empty_output,
                         writable_roots=self._writable_roots
                         if request.sandbox_mode == "workspace-write" else (),
+                        task_call_socket=request.task_call_socket,
+                        on_process_started=request.on_process_started,
                         on_session_started=session_started,
                         on_started=lambda stop: self._register(
                             request.execution_id, stop

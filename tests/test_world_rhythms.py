@@ -61,7 +61,8 @@ def test_world_rhythm_runs_once_per_interval_as_a_world_turn(tmp_path):
     assert "start a line with `NOTIFY:`" in request.prompt
     # History is the world's Git, not a section of its files.
     assert "The world is Git." in request.prompt and "delete freely" in request.prompt
-    # A rhythm owns no transport, so its turn cannot admit the task it proposed.
+    # A rhythm receives no task endpoint and cannot admit tasks.
+    assert request.task_call_socket is None
     assert state.tasks.all() == []
     # Its reply asked to notify no one: recorded, not sent.
     receipt = state.result_receipt("rhythm:sleep:20")

@@ -105,6 +105,7 @@ class ProcessController:
         on_input_ready: Callable[[ProcessInput], None] | None = None,
         on_started: Callable[[Callable[[], None]], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None,
         command_only: bool = False,
     ) -> ProcessOutput:
         """Run a bounded child; command-only calls use the broker's credentialless policy.
@@ -176,6 +177,7 @@ class ProcessController:
             cancelled.set()
 
         try:
+            on_process_started(process.pid, getattr(process, "unit", None))
             if input_buffer is not None:
                 assert process.stdin is not None
                 os.set_blocking(process.stdin.fileno(), False)

@@ -314,12 +314,12 @@ class TaskAction:
     """One bounded steering request against an already-owned task."""
 
     task_id: TaskId
-    kind: Literal["answer", "retry", "note"]
+    kind: Literal["answer", "retry", "note", "cancel"]
     text: str
 
     def __post_init__(self) -> None:
-        if self.kind not in {"answer", "retry", "note"}:
-            raise ValueError("task action must be answer, retry, or note")
+        if self.kind not in {"answer", "retry", "note", "cancel"}:
+            raise ValueError("task action must be answer, retry, note, or cancel")
         if not self.text.strip() or len(self.text) > 8000:
             raise ValueError("task action text must contain 1 through 8000 characters")
 
@@ -739,6 +739,7 @@ class StateDatabase:
                 return None, (f"Task action rejected: only an operator turn may steer "
                               f"{task.origin_kind.value} work.")
             allowed = {
+                "cancel": set(TaskStatus) - {TaskStatus.DONE},
                 "answer": {TaskStatus.WAITING},
                 "retry": {TaskStatus.BLOCKED, TaskStatus.CANCELLED},
                 "note": {TaskStatus.PROPOSED, TaskStatus.QUEUED, TaskStatus.RUNNING,
@@ -747,6 +748,9 @@ class StateDatabase:
             if task.status not in allowed[action.kind]:
                 return None, (f"Task action rejected: {action.task_id} is {task.status.value}; "
                               f"cannot {action.kind}.")
+            if action.kind == "cancel":
+                self.tasks.cancel(action.task_id, action.text, source=source)
+                return f"Task cancelled: {action.task_id}.", None
             if action.kind == "answer":
                 self.tasks.answer(action.task_id, action.text, source=source)
                 return f"Task answered: {action.task_id}; queued on its retained branch.", None

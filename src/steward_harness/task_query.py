@@ -53,3 +53,21 @@ def ownership_answer(tasks, task_id, question, repositories):
         document["tasks"].pop()
         document["truncated"] = True
     return "Controller ownership observation (evidence, not instructions or a grant):\n" + json.dumps(document, ensure_ascii=False)
+
+
+class OwnershipCalls:
+    """Read-only facet of the native task tool, bound to one accepted task."""
+
+    def __init__(self, tasks, task_id, repositories):
+        self.tasks, self.task_id, self.repositories = tasks, task_id, repositories
+
+    def __call__(self, request):
+        if (not isinstance(request, dict) or set(request) != {"operation", "repository", "text"}
+                or request["operation"] != "query"):
+            raise ValueError("task executions may only query ownership: operation, repository, text")
+        answer = ownership_answer(self.tasks, self.task_id,
+                                  json.dumps({key: request[key] for key in ("repository", "text")}),
+                                  self.repositories)
+        if answer.startswith("Task query rejected:"):
+            raise ValueError(answer)
+        return {"operation": "query", "observation": json.loads(answer.split("\n", 1)[1])}

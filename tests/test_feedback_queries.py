@@ -154,3 +154,47 @@ def test_query_bounds_results_and_observes_live_lock_without_exposing_content(tm
     assert '"ownership": "same conversation"' in matching
     assert "Private body" not in answer and "telegram:17" not in answer
     assert len(answer) <= 8000
+
+
+def test_native_task_can_query_ownership_before_closure_without_steering(tmp_path):
+    import os
+    import subprocess
+    from steward_harness.runtime.task_call_mcp import CLIENT
+
+    bare, clone = _repository(tmp_path)
+    adapter = InvestigationAdapter()
+    state, runner, _, _ = harness(tmp_path / 'state', bare, clone, adapter)
+    peer, _ = state.tasks.create(TaskSpec('app', 'Repair consumer', 'PRIVATE BODY'), owner='telegram:other')
+    task, _ = state.tasks.create(TaskSpec('app', 'Inspect', 'Find ownership'), owner='telegram:17')
+    execute = adapter.execute
+    observed = []
+    def during(request):
+        assert 'operation="query"' in request.prompt
+        assert 'QUESTION: TASK_QUERY:' not in request.prompt
+        request.on_process_started(os.getpid(), None)
+        child = subprocess.Popen(['python3', '-c', CLIENT, request.task_call_socket],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        def call(arguments):
+            child.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                'params': {'name': 'task', 'arguments': arguments}}) + '\n')
+            child.stdin.flush()
+            return json.loads(json.loads(child.stdout.readline())['result']['content'][0]['text'])
+        try:
+            for _ in range(2):
+                result = call(dict(operation='query', repository='app', text='consumer'))
+                observed.append(result)
+                assert result['observation']['tasks'][0]['task_id'] == str(peer)
+                assert result['observation']['tasks'][0]['ownership'] == 'another conversation'
+                assert 'PRIVATE BODY' not in json.dumps(result) and 'telegram:other' not in json.dumps(result)
+                assert state.tasks.get(task).status.value == 'running'
+            assert call(dict(operation='query', repository='secret', text=''))['accepted'] is False
+            assert call(dict(operation='cancel', key='no', task_id=str(peer), text='Stop'))['accepted'] is False
+        finally:
+            child.stdin.close()
+            assert child.wait(timeout=5) == 0
+        return execute(request)
+    adapter.execute = during
+    runner.prepare(task)
+    assert len(observed) == 2
+    assert state.tasks.get(peer).status.value == 'queued'
+    assert not tuple(state.tasks.get(task).pending)

@@ -262,7 +262,7 @@ including topics absent from `telegram.topics`. That mapping names configured
 destinations; it is not an allow-list for ordinary conversations or their results.
 
 Assessment uses the ordinary world-turn path and current authority. A typed
-`TASK_ACTION` can answer, retry or note an existing task; prose alone cannot resume it.
+The [live task tool](git-native-tasks.md#live-conversation-task-calls) can answer, retry, note or cancel an authorized task; prose alone cannot resume it.
 A turn proposes at most one action or one new task. A rhythm explicitly names its
 configured result owner, or null for retained evidence only. Owned rhythm task findings
 that ask to notify (`NOTIFY:`) use this same assessment path, including world
@@ -344,8 +344,10 @@ refs and require external exact-revision readiness. See
 Provider completion is not acceptance. The owner's checkout commits the candidate, with
 `Steward-Turn` trailers, before the prepared world receipt is recorded. Under the world
 lease the controller recognizes the turn in the world's history or fast-forwards to its
-final revision, and completes the source and proposed task effect in SQL. Success can be rendered
-only after acceptance; replay reads that receipt.
+final revision, and completes the source in SQL. World success can be rendered
+only after that acceptance; replay reads its receipt. Live task calls use their own
+[Git acceptance boundary](git-native-tasks.md#live-conversation-task-calls), so admitted
+tasks survive a later failure of this world boundary.
 
 Cognition happens outside the world lease in an owning checkout. World conflict
 resolution uses the configured Git reconciler outside the lease, then rechecks the world
@@ -462,7 +464,7 @@ whatsoever about the UID boundary; only `scripts/linux-boundary-acceptance.sh` d
 Test totals are not evidence. A suite has to state what it establishes.
 
 Required outcomes include isolated native work, retained interruption evidence, world
-acceptance before dependent admission, clean exact-revision gates, remote-safe
+acceptance and independent durable task admission, clean exact-revision gates, remote-safe
 publication, truthful withdrawal, artifact verification, rollback to a prior release or
 absence, and an observable result at the owning transport. The open edges are listed
 honestly in the [README](../README.md#where-it-actually-is).

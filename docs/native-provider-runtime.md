@@ -131,7 +131,8 @@ world preparation remains retained evidence, not permission to repeat it.
 Unresolved delivery remains retained for inspection. Explicit rejection proves
 that the offered input was not applied: once the old writer stops, only that
 rejected linkage is removed and the original durable source can retry through
-the ordinary path. No accepted world or task effect exists for that linkage.
+the ordinary path. No accepted world effect exists for that linkage; unlinking
+it does not undo independently accepted task calls.
 
 `RuntimeInput` carries `origin` and `author` in a JSON text envelope so controller
 observations remain visibly attributed. Codex maps this through `turn/steer`;
@@ -249,8 +250,9 @@ command requires its terminal result and completion before input closes.
 The [native probes](../experiments/native_sessions/README.md) exercise this against
 installed CLIs, including fresh and resumed task calls and a real writer deadline.
 
-Conversation prompts carry a concise current task/action and transport marker
-interface on every execution. Interface changes do not clear native history.
+Eligible conversation prompts describe the live task tool and transport markers
+on every execution. Task operations use the tool, not final-output markers.
+Interface changes do not clear native history.
 Filesystem orientation remains in the turn. Agents read their
 [brief and Git history](provenance-discovery.md) directly; no history map
 or controller task-state snapshot is generated for cognition. The one exception is
@@ -479,8 +481,8 @@ installed model catalogue and upgraded safely. That is a per-installation
 override, not a generic model default, and no `gpt-6-luna` alias is supplied.
 
 `desk.access` defaults to `operator`, which keeps full desk and phone authority.
-`read-only` rejects both task proposals and task actions at controller completion
-acceptance, including replay of an unaccepted prepared completion. It applies to
+`read-only` receives no native task-call capability. Unaccepted final task
+markers, including historical prepared completions, are refused. It applies to
 every desk topic, private bearer ingress included, and no client can override
 it. Telegram conversations keep their configured authority. Public inputs and
 replies are not appended to the shared Git world, and a writable world turn

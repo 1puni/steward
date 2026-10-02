@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from steward_harness.runtime.task_call_mcp import codex_arguments
+
 import json
 import os
 from collections.abc import Mapping
@@ -116,13 +118,15 @@ class CodexAppServerRuntime:
             try:
                 output = self._controller.run(
                     [str(self.executable), "app-server", "--stdio", "-c",
-                     "sqlite_home=" + json.dumps(str(workspace.home))],
+                     "sqlite_home=" + json.dumps(str(workspace.home)),
+                     *codex_arguments(request.task_call_socket)],
                     cwd=request.cwd,
                     env=environment,
                     timeout_seconds=request.timeout_seconds,
                     on_stdout_line=turn.consume,
                     on_input_ready=turn.connect,
                     on_started=request.on_started,
+                    on_process_started=request.on_process_started,
                     on_stop=turn.stop,
                 )
                 if output.returncode != 0:

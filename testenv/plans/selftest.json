@@ -20,7 +20,16 @@
     },
     {
       "match": "SELF-IMPROVE-PROPOSAL",
-      "reply": "I will open one task on the harness repository for the proof.\nTASK_PROPOSAL: {\"repository\": \"steward-harness\", \"title\": \"Record the self-improvement proof\", \"brief\": \"Write docs/self-improve-proof.md containing the line SELF-IMPROVE-PROOF-MARKER plus wording requested from the operator, then finish the task.\"}"
+      "reply": "I will open one task on the harness repository for the proof.",
+      "task_calls": [
+        {
+          "operation": "submit",
+          "key": "self-improve-proof",
+          "repository": "steward-harness",
+          "title": "Record the self-improvement proof",
+          "brief": "Write docs/self-improve-proof.md containing the line SELF-IMPROVE-PROOF-MARKER plus wording requested from the operator, then finish the task."
+        }
+      ]
     },
     {
       "match": "OPERATOR-ANSWER-D9",

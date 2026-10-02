@@ -462,7 +462,7 @@ class GitTaskStore:
             definition = Definition(repository=spec.repository, title=spec.title,
                                     origin=kind, source=source, owner=owner,
                                     priority=spec.priority, hold=hold, reason=reason, procedure=procedure)
-            self._commit(task_id, None, definition, spec.brief, "steward: accept task",
+            self._commit(task_id, None, definition, spec.brief, "steward: accept task" + (f"\n\nSteward-Source: {source}" if source else ""),
                          (procedure.candidate,) if procedure else ())
         return task_id, True
 
@@ -576,13 +576,13 @@ class GitTaskStore:
             self.input(task_id, "retry", self._text(note, "task retry note"), decide=retry, source=source)
         return self.get(task_id)
 
-    def cancel(self, task_id, reason=None) -> Task:
+    def cancel(self, task_id, reason=None, *, source=None) -> Task:
         reason = "operator requested cancellation" if reason is None else reason.strip()
         if not reason:
             raise ValueError("task cancellation reason must be nonblank")
         if self.get(task_id).status is TaskStatus.DONE:
             raise RuntimeError("completed task cannot be cancelled")
-        self.hold(task_id, "cancelled", reason)
+        self.hold(task_id, "cancelled", reason, source=source)
         return self.get(task_id)
 
     def cancelled(self, task_id) -> bool:
@@ -617,7 +617,7 @@ class GitTaskStore:
             lock.release()
         return self.get(task_id)
 
-    def hold(self, task_id, hold, reason) -> bool:
+    def hold(self, task_id, hold, reason, *, source=None) -> bool:
         """Hold the task with a reason; blocking never overrides an operator's hold."""
         if not reason.strip():
             raise ValueError("a held task requires a reason")
@@ -628,7 +628,7 @@ class GitTaskStore:
                 return d
             changed = True
             return d.model_copy(update={"hold": hold, "reason": reason.strip()})
-        self.change(task_id, decide, message=f"{'block' if hold == 'blocked' else 'cancel'} task\n\n{reason.strip()}")
+        self.change(task_id, decide, message=f"{'block' if hold == 'blocked' else 'cancel'} task\n\n{reason.strip()}\n", source=source)
         return changed
 
     def finish_slice(self, task_id, *, disposition, opened_at, detail=None,
