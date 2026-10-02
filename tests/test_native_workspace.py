@@ -173,7 +173,13 @@ def test_concurrent_owner_homes_and_generations_do_not_share_runtime_state(setup
         assert not (cleared.home / 'goals.sqlite').exists()
     with mapped(setup, native_owner='one', resolved=resolve_model('claude', 'fast')) as switched:
         assert switched.home not in {first.home, second.home, cleared.home}
-    assert (first.home / 'goals.sqlite').read_text() == 'owner one'
+    # A persistent owner whose schedule never idles long enough for whole-owner
+    # retirement (e.g. a frequent rhythm) must not accumulate one directory per
+    # lineage switch: each new generation retires that owner's other generations.
+    assert not first.home.exists()
+    assert not cleared.home.exists()
+    assert switched.home.exists()
+    assert second.home.exists()
 
 
 

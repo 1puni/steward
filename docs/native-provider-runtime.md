@@ -348,6 +348,15 @@ selects a new generation. The home is selected on every adapter attempt,
 fallback and recovery included. A checkout path or a per-turn execution ID is
 never an owner. Anonymous conflict-resolution calls use temporary launch homes.
 
+Preparing a new generation for a persistent owner immediately retires that
+owner's other generation directories beneath the same seed home, keeping only
+the one just prepared. This runs independently of [idle session
+retention](world-turn-durability.md#idle-session-retention) and [task
+retention](execution-lifecycle.md#cancellation-and-retained-work), which only
+retire a whole owner once its conversation or task goes idle; a rhythm whose
+schedule never leaves it idle for `world_session_idle_seconds` would otherwise
+accumulate one native home per lineage-switching generation forever.
+
 Only native configuration, authentication and integration entries are linked in
 from the configured seed home. SQLite, caches, queues, goals and jobs stay
 provider-owned inside the owner home. If a configured Codex `auth.json` link is

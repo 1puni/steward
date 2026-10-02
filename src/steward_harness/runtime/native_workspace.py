@@ -245,6 +245,20 @@ for home in map(pathlib.Path, homes):
                 print(entry)
 """
 
+# Removes one owner's other generation directories, keeping the one just
+# prepared. rmtree unlinks the links into the seed home; it never follows them.
+_RETIRE_STALE_GENERATIONS = """
+import pathlib, shutil, sys
+home, prefix, current = sys.argv[1], sys.argv[2], sys.argv[3]
+root = pathlib.Path(home)
+if root.is_dir():
+    for entry in root.iterdir():
+        if (entry.name.startswith(prefix) and entry.name != current
+                and entry.is_dir() and not entry.is_symlink()):
+            shutil.rmtree(entry)
+            print(entry)
+"""
+
 
 def _owner_prefix(owner: str) -> str:
     return ".steward-owner-" + hashlib.sha256(owner.encode()).hexdigest()[:32] + "-"
@@ -260,6 +274,24 @@ def retire_native_owner(broker: UntrustedExecutionBroker, homes: Iterable[Path],
         raise RuntimeError("native owner home retirement failed: " + retired.stderr.strip()[-500:])
     for path in retired.stdout.split():
         log.info("retired native owner home %s", path)
+
+
+def _retire_stale_generations(broker: UntrustedExecutionBroker, home: Path, owner: str, current_key: str) -> None:
+    """Delete an owner's non-current generation directories beneath one home.
+
+    Called right after a new generation is prepared, so a persistent owner
+    whose conversation never idles long enough for whole-owner retirement
+    (a frequent rhythm) does not accumulate one directory per lineage switch.
+    """
+    retired = broker.run(
+        [broker.python_executable, "-I", "-c", _RETIRE_STALE_GENERATIONS,
+         str(home), _owner_prefix(owner), ".steward-owner-" + current_key],
+        cwd="/", timeout=30,
+    )
+    if retired.returncode:
+        raise RuntimeError("native owner generation retirement failed: " + retired.stderr.strip()[-500:])
+    for path in retired.stdout.split():
+        log.info("retired stale native owner generation %s", path)
 
 
 @dataclass(frozen=True)
@@ -319,6 +351,13 @@ def native_workspace(
                 "Native workspace setup exceeded execution deadline",
                 session_id=request.provider_session_id,
             )
+    owner_key = None if request.native_owner is None else (
+        # One prefix per owner lets retirement find every generation.
+        _owner_prefix(request.native_owner)[len(".steward-owner-"):]
+        + hashlib.sha256(json.dumps([
+            request.resolved.provider, request.native_generation,
+        ]).encode()).hexdigest()[:16]
+    )
     try:
         prepared = broker.run(
             [broker.python_executable, "-I", "-c", _PREPARE], cwd=request.cwd,
@@ -327,12 +366,8 @@ def native_workspace(
                 str(home), dict(mappings), request.provider_session_id, resume_pattern,
                 {p.parent.name: p.read_text() for p in
                  (Path(__file__).resolve().parents[1] / "skills").glob("*/SKILL.md")},
-                None if request.native_owner is None else {
-                    # One prefix per owner lets retirement find every generation.
-                    "key": _owner_prefix(request.native_owner)[len(".steward-owner-"):]
-                    + hashlib.sha256(json.dumps([
-                        request.resolved.provider, request.native_generation,
-                    ]).encode()).hexdigest()[:16],
+                None if owner_key is None else {
+                    "key": owner_key,
                     "writable": request.sandbox_mode == "workspace-write",
                     "shared": ["auth.json", "config.toml", "requirements.toml", "plugins", "AGENTS.md",
                                "AGENTS.override.md", "rules", "prompts", "hooks.json", "agents"]
@@ -354,6 +389,12 @@ def native_workspace(
             session_id=request.provider_session_id,
         )
     record = json.loads(prepared.stdout)
+    if owner_key is not None:
+        # A long-lived owner (e.g. a rhythm whose schedule never idles for
+        # world_session_idle_seconds) would otherwise accumulate one directory
+        # per lineage-switching generation forever; retire its other
+        # generations now instead of waiting on whole-owner idle retirement.
+        _retire_stale_generations(broker, home, request.native_owner, owner_key)
     workspace = NativeWorkspace(Path(record["home"]), record["resume"], deadline)
     try:
         yield workspace
