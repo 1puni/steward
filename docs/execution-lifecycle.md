@@ -149,10 +149,13 @@ warning in the controller log. A retry can rematerialize accepted work.
 
 ## Recurring work and world recovery
 
-Rhythms create ordinary procedure tasks over captured inputs. They have no
-separate world-turn execution or default policy seeding. One run per interval and
-no overlap with incomplete runs are derived from accepted task records. See the
-[convergence journeys](../tests/test_rewrite_convergence.py).
+Repository rhythms create ordinary procedure tasks over captured inputs. One run
+per interval and no overlap with incomplete runs are derived from accepted task
+records. Rhythms configured with `input: world` instead run through conversation
+world-turn acceptance, keyed by rhythm and interval; an interrupted world turn
+consumes that interval. See [rhythms](rhythms.md), the
+[convergence journeys](../tests/test_rewrite_convergence.py) and
+[world-rhythm tests](../tests/test_world_rhythms.py).
 
 ## Running release identity
 

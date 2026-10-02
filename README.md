@@ -337,11 +337,11 @@ What that does **not** mean:
   nothing about the UID boundary. Only
   [`scripts/linux-boundary-acceptance.sh`](docs/execution-boundary.md#enforcement-and-verification)
   does.
-- **Native session persistence is unfinished.** Native processes restart between
-  turns. Writable turns keep their original transcripts in Git and resume the same
-  session, but launch homes are disposable and the provider's own runtime databases
-  are not carried over. Native queues, goals and background jobs do not survive a
-  turn yet. See the
+- **Native processes restart between turns.** Retained owners keep private native
+  homes, including provider runtime databases, across invocations. Writable turns
+  keep their original transcripts in Git and resume the same session. No provider
+  process runs queues, goals or background jobs between invocations; retained state
+  alone does not establish that a native job will resume. See the
   [storage boundary](docs/native-provider-runtime.md#native-workflows-and-storage-boundary).
 - **Not a hosted service.** You provision the host, the execution account, the
   provider logins and the Telegram bot. The guide walks it; none of it is one
