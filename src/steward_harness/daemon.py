@@ -581,7 +581,8 @@ class StewardDaemon:
                 execution_id=f"world-reconcile:{turn.branch}:{uuid.uuid4().hex}",
                 profile=self.config.provider.default_profile,
                 prompt=prompt, cwd=turn.worktree,
-                timeout_seconds=self.config.provider.timeout_seconds,
+                **(procedure.limits(self.config.provider.timeout_seconds) if procedure
+                   else dict(timeout_seconds=self.config.provider.timeout_seconds)),
                 **(procedure.routing(self.config.provider.family_order) if procedure
                    else dict(provider_order=self.config.provider.family_order)),
                 sandbox_mode="workspace-write"))

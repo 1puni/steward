@@ -537,6 +537,11 @@ class ProcedureConfig(BaseModel):
     models: tuple[ModelEntry, ...] | None = None
     access: Literal["read-only", "workspace-write"] = "read-only"
     fallback: bool = True
+    # A procedure is bounded by its work: output tokens, reasoning included.
+    # Its own deadline then only has to catch a stalled provider, so it may
+    # be longer than the conversational `provider.timeout_seconds`.
+    token_budget: int | None = Field(default=None, ge=1000)
+    timeout_seconds: int | None = Field(default=None, ge=10, le=7200)
 
     @model_validator(mode="after")
     def validates_preference(self) -> "ProcedureConfig":
@@ -571,6 +576,13 @@ class ProcedureConfig(BaseModel):
             return tuple(entry.provider for entry in self._entries())
         return (self.provider, *(family for family in family_order
                                  if self.fallback and family != self.provider))
+
+    def limits(self, timeout_seconds: int | None) -> dict:
+        """The cognition request bounds: its own, else the caller's deadline."""
+        return dict(
+            timeout_seconds=self.timeout_seconds or timeout_seconds,
+            token_budget=self.token_budget,
+        )
 
     def routing(self, family_order: tuple[ProviderFamily, ...]) -> dict:
         """The cognition request fields that carry this procedure's preference."""

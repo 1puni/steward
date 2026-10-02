@@ -56,6 +56,32 @@ class RuntimeExecutionError(RuntimeError):
         super().__init__(message)
 
 
+class TokenMeter:
+    """Output tokens a provider reported for one execution, against its budget.
+
+    Providers report running totals per stream (a message, a thread), so each
+    report replaces that stream's count rather than adding to it. Reasoning is
+    output: both providers count it there.
+    """
+
+    def __init__(self, budget: int | None) -> None:
+        self.budget = budget
+        self._counts: dict[object, int] = {}
+
+    def report(self, stream: object, output_tokens: object) -> None:
+        if type(output_tokens) is int and output_tokens >= 0:
+            self._counts[stream] = max(output_tokens, self._counts.get(stream, 0))
+
+    @property
+    def used(self) -> int:
+        return sum(self._counts.values())
+
+    def exhausted(self) -> str | None:
+        if self.budget is None or self.used < self.budget:
+            return None
+        return f"provider used {self.used} output tokens of its {self.budget} budget"
+
+
 class MissingProviderSession(RuntimeExecutionError):
     """Raised when a provider explicitly reports a missing saved session."""
 
@@ -199,6 +225,9 @@ class RuntimeRequest:
     timeout_seconds: int | None
     native_owner: str | None = None
     native_generation: int = 1
+    # Output tokens, reasoning included, after which the run is stopped the
+    # way a deadline stops it. None means unmetered.
+    token_budget: int | None = None
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
     writable_roots: tuple[Path, ...] = ()
@@ -226,6 +255,8 @@ class RuntimeRequest:
             raise ValueError("Working directory must be absolute")
         if self.timeout_seconds is not None and self.timeout_seconds < 1:
             raise ValueError("Timeout must be at least 1 second")
+        if self.token_budget is not None and self.token_budget < 1:
+            raise ValueError("Token budget must be at least 1 token")
         if any(not image.is_absolute() for image in self.images):
             raise ValueError("Images must be absolute files")
         if self.read_scope is not None and (self.sandbox_mode != "read-only" or self.images):

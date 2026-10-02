@@ -679,8 +679,9 @@ class TaskRunner:
             ),
             cwd=execution_cwd,
             # Task cognition may work for days. A procedure run is a
-            # finite review and keeps the provider deadline.
-            timeout_seconds=self.timeout_seconds if procedure else None,
+            # finite review: its own bounds, else the provider deadline.
+            **(procedure.limits(self.timeout_seconds) if procedure
+               else dict(timeout_seconds=None)),
             **(procedure.routing(self.provider_fallbacks) if procedure
                else dict(provider_order=order)),
             provider_session_id=lineage.provider_session_id,

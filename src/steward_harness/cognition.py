@@ -42,6 +42,8 @@ class CognitionRequest:
     # None means no routine deadline; cancellation still applies.
     timeout_seconds: int | None
     provider_order: tuple[ProviderFamily, ...]
+    # Output tokens after which the run stops; None means unmetered.
+    token_budget: int | None = None
     # The accepted lineage owns storage, not a turn id or a checkout path.
     native_owner: str | None = None
     native_generation: Callable[[ProviderFamily], int] = lambda _provider: 1
@@ -74,6 +76,8 @@ class CognitionRequest:
             raise ValueError("Cognition cwd must be absolute")
         if self.timeout_seconds is not None and self.timeout_seconds <= 0:
             raise ValueError("Cognition timeout must be positive")
+        if self.token_budget is not None and self.token_budget <= 0:
+            raise ValueError("Cognition token budget must be positive")
         if not self.provider_order:
             raise ValueError("Cognition request requires a provider")
         if any(not provider.strip() for provider in self.provider_order):
@@ -213,6 +217,7 @@ class Cognition:
                         prompt=request.prompt,
                         cwd=request.cwd,
                         timeout_seconds=request.timeout_seconds,
+                        token_budget=request.token_budget,
                         images=request.images,
                         sandbox_mode=request.sandbox_mode,
                         read_scope=request.read_scope,

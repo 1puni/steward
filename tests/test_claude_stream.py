@@ -424,3 +424,44 @@ def test_an_ordinary_late_input_still_owns_the_final_word(tmp_path):
 def test_only_a_controller_notice_can_be_a_receipt():
     with pytest.raises(ValueError, match="receipt"):
         RuntimeInput("x", "y", receipt=True)
+
+
+def partial(stream, native, agent=None):
+    emit(stream, type="stream_event", parent_tool_use_id=agent, event=native)
+
+
+def test_partial_messages_meter_final_output_per_message_and_agent(tmp_path):
+    stream, _wire, root, _ = start(tmp_path)
+    stream.meter.budget = 1000
+    for identity, agent, used in (("msg_a", None, 400), ("msg_b", "toolu_1", 300), ("msg_c", None, 299)):
+        partial(stream, {"type": "message_start", "message": {"id": identity, "usage": {"output_tokens": 4}}}, agent)
+        partial(stream, {"type": "message_delta", "usage": {"output_tokens": used}}, agent)
+    # The complete event repeats starting usage and must not be counted.
+    emit(stream, type="assistant", parent_tool_use_id=None,
+         message={"content": [{"type": "text", "text": "x"}], "usage": {"output_tokens": 4}})
+    assert stream.meter.used == 999 and stream.meter.exhausted() is None
+    partial(stream, {"type": "message_delta", "usage": {"output_tokens": 300}})
+    assert "1000 output tokens of its 1000 budget" in stream.meter.exhausted()
+    result(stream, root)
+    command(stream, root, "completed")
+    stream.finish()
+
+
+def test_partial_message_from_another_session_is_refused(tmp_path):
+    stream, *_ = start(tmp_path)
+    with pytest.raises(RuntimeExecutionError, match="changed session identity"):
+        stream.consume(json.dumps({"type": "stream_event", "session_id": "22222222-2222-4222-8222-222222222222",
+                                   "event": {"type": "message_start", "message": {"id": "m"}}}))
+
+
+def test_only_a_budgeted_request_asks_for_partial_messages(tmp_path):
+    from steward_harness.runtime.providers.claude import ClaudeRuntime
+    adapter = ClaudeRuntime.__new__(ClaudeRuntime)
+    adapter._controller = SimpleNamespace(broker=SimpleNamespace(enabled=False))
+    adapter.executable, adapter.family = "claude", "claude"
+    def request(budget):
+        return RuntimeRequest(execution_id="x", resolved=resolve_model("claude", "fast"),
+                              provider_session_id=None, prompt="p", cwd=tmp_path,
+                              timeout_seconds=5, token_budget=budget)
+    assert "--include-partial-messages" not in adapter._command(request(None), None)
+    assert "--include-partial-messages" in adapter._command(request(5000), None)
