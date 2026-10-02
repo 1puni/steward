@@ -584,3 +584,17 @@ def test_moving_or_deleting_an_episode_is_not_new_input(tmp_path):
     # A new episode is.
     _world_commit(root, "episodes/2026-09-29.md")
     assert checkpoint.world.changed(cursor, ("episodes/",))
+
+
+def test_a_world_rhythm_is_bounded_by_its_procedure_budget_and_own_deadline(tmp_path):
+    seen = []
+    config, state, checkpoint, service, cognition, procedures = _rhythm(
+        tmp_path, EditingCognition(before_return=seen.append))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    # Unconfigured, a rhythm keeps the conversational deadline and is unmetered.
+    assert seen[-1].token_budget is None and seen[-1].timeout_seconds == service._timeout_seconds
+
+    sleep = config.procedures["sleep"].model_copy(update={"token_budget": 250_000, "timeout_seconds": 5400})
+    procedures.config = config.model_copy(update={"procedures": {"sleep": sleep}})
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
+    assert (seen[-1].token_budget, seen[-1].timeout_seconds) == (250_000, 5400)

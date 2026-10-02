@@ -231,3 +231,34 @@ def test_success_cleans_descendants_with_grace_after_leader_exits(tmp_path):
     result = controller().run([sys.executable, "-c", parent], cwd=tmp_path, env=os.environ, timeout_seconds=10)
     assert result.returncode == 0
     assert marker.read_text() == "saved"
+
+
+def test_exhausted_budget_stops_like_a_deadline_and_drains(tmp_path):
+    from steward_harness.runtime.process import TokenBudgetExhausted
+    writers, observed = [], []
+    with pytest.raises(TokenBudgetExhausted, match="of its 10 budget"):
+        controller().run(
+            [sys.executable, "-c", "import sys; print('READY',flush=True); assert input() == 'interrupt'; print('CHECKPOINT',flush=True)"],
+            cwd=tmp_path, env=os.environ, timeout_seconds=30,
+            on_input_ready=writers.append,
+            on_stop=lambda: writers[0].write("interrupt\n"), on_stdout_line=observed.append,
+            over_budget=lambda: "provider used 12 output tokens of its 10 budget" if observed else None,
+        )
+    assert observed == ["READY", "CHECKPOINT"]
+
+
+def test_unretained_stream_is_consumed_without_counting_against_the_limit(tmp_path, monkeypatch):
+    from steward_harness.runtime import process
+    monkeypatch.setattr(process, "_STREAM_LIMIT_BYTES", 1000)
+    lines = []
+    output = controller().run(
+        [sys.executable, "-c", "[print('x' * 100) for _ in range(50)]"],
+        cwd=tmp_path, env=os.environ, timeout_seconds=30,
+        on_stdout_line=lines.append, retain_stdout=False,
+    )
+    assert output.returncode == 0 and output.stdout == "" and len(lines) == 50
+    with pytest.raises(RuntimeExecutionError, match="exceeded safe limit"):
+        controller().run(
+            [sys.executable, "-c", "[print('x' * 100) for _ in range(50)]"],
+            cwd=tmp_path, env=os.environ, timeout_seconds=30, on_stdout_line=lines.append,
+        )

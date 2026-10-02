@@ -405,7 +405,8 @@ class ConversationService:
                 prompt=prompt,
                 cwd=(worktree.path if worktree else self._workspace.world.root
                      if isinstance(self._workspace, WorldTurnCheckpoint) else self._workspace),
-                timeout_seconds=self._timeout_seconds,
+                **(procedure.limits(self._timeout_seconds) if procedure
+                   else dict(timeout_seconds=self._timeout_seconds)),
                 # A procedure's model pins only its own provider; fallbacks run their own.
                 **(procedure.routing(self._provider_order) if procedure
                    else dict(provider_order=self._order_from(conversation.provider))),

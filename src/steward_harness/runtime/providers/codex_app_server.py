@@ -22,6 +22,7 @@ from steward_harness.runtime.contracts import (
     RuntimeRequest,
     RuntimeResult,
     RuntimeUnavailable,
+    TokenMeter,
     validated_uuid,
 )
 from steward_harness.runtime.process import ProcessController, ProcessInput
@@ -128,6 +129,7 @@ class CodexAppServerRuntime:
                     on_started=request.on_started,
                     on_process_started=request.on_process_started,
                     on_stop=turn.stop,
+                    over_budget=turn.meter.exhausted if request.token_budget else None,
                 )
                 if output.returncode != 0:
                     raise turn.failure or RuntimeExecutionError(
@@ -174,6 +176,9 @@ class _AppServerTurn:
         self.stopping = False
         self.failure: RuntimeExecutionError | RuntimeUnavailable | None = None
         self.closed = False
+        self.meter = TokenMeter(request.token_budget)
+        # A resumed thread's totals include earlier turns; count from here.
+        self.usage_base: dict[str, int] = {}
         self.lock = RLock()
 
     def connect(self, writer: ProcessInput) -> None:
@@ -268,6 +273,9 @@ class _AppServerTurn:
                 self.response(event)
                 return
             params = event.get("params", {})
+            if event.get("method") == "thread/tokenUsage/updated":
+                self._meter(params)
+                return
             if params.get("threadId") != self.thread_id:
                 return
             method = event.get("method")
@@ -319,6 +327,22 @@ class _AppServerTurn:
                         "Codex emitted invalid agent message text", session_id=self.thread_id,
                     )
                 self.output = item["text"].strip()[-64_000:]
+
+    def _meter(self, params: dict) -> None:
+        """Count this execution's output across its thread and native children."""
+        thread = params.get("threadId")
+        # Unbudgeted runs never depend on the usage protocol's shape.
+        if self.meter.budget is None or thread is None or (thread != self.thread_id and thread not in self.child_threads):
+            return
+        usage = params.get("tokenUsage")
+        total = usage.get("total") if isinstance(usage, dict) else None
+        last = usage.get("last") if isinstance(usage, dict) else None
+        if not isinstance(total, dict) or type(total.get("outputTokens")) is not int:
+            raise RuntimeExecutionError("Codex reported malformed token usage", session_id=self.thread_id)
+        if thread not in self.usage_base:
+            before = last.get("outputTokens") if isinstance(last, dict) else 0
+            self.usage_base[thread] = total["outputTokens"] - (before if type(before) is int else 0)
+        self.meter.report(thread, total["outputTokens"] - self.usage_base[thread])
 
     def response(self, event: dict) -> None:
         pending = self.pending.get(event["id"])

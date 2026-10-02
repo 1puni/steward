@@ -25,6 +25,7 @@ from steward_harness.runtime.contracts import (
     RuntimeRequest,
     RuntimeResult,
     RuntimeUnavailable,
+    TokenMeter,
     validated_uuid,
 )
 from steward_harness.runtime.native_workspace import native_workspace
@@ -308,6 +309,9 @@ class ClaudeInputStream:
         # Commands that carried a controller receipt. A native turn answering
         # one is the session acknowledging a notice, not the execution's word.
         self.receipts: set[str] = set()
+        self.meter = TokenMeter(request.token_budget)
+        # The message each (sub)agent is streaming: a usage delta names no message.
+        self.streaming: dict[object, object] = {}
         self.lock = RLock()
 
     def connect(self, writer: ProcessInput) -> None:
@@ -360,6 +364,9 @@ class ClaudeInputStream:
         # identity separately until the ordinary lifecycle establishes it.
         event = self.lifecycle.decode(line)
         with self.lock:
+            if event.get("type") == "stream_event":
+                self._meter(event)
+                return
             if event.get("type") == "control_response":
                 response = event.get("response", {})
                 if (not isinstance(response, dict) or self.interrupt_id is None
@@ -413,6 +420,27 @@ class ClaudeInputStream:
                          or (self.expected_results and self.results == self.expected_results))):
                 self.closed = True
                 self.writer.close()
+
+    def _meter(self, event: dict[str, Any]) -> None:
+        """Count a partial message's output; it carries no lifecycle.
+
+        Only `message_delta` reports a message's final output, thinking
+        included; the complete `assistant` event repeats its starting usage.
+        """
+        identity = event.get("session_id")
+        if self.lifecycle.session_id is not None and identity != self.lifecycle.session_id:
+            raise RuntimeExecutionError("native stream changed session identity", session_id=self.session_id)
+        native = event.get("event")
+        if not isinstance(native, dict):
+            raise RuntimeExecutionError("native stream reported a malformed partial message", session_id=self.session_id)
+        agent = event.get("parent_tool_use_id")
+        if native.get("type") == "message_start":
+            message = native.get("message")
+            self.streaming[agent] = message.get("id") if isinstance(message, dict) else None
+        elif native.get("type") == "message_delta":
+            usage = native.get("usage")
+            if isinstance(usage, dict):
+                self.meter.report((agent, self.streaming.get(agent)), usage.get("output_tokens"))
 
     def _continuation(self, event: dict[str, Any]) -> bool:
         """Whether a result belongs to a native turn a background notice opened.
@@ -588,6 +616,10 @@ class ClaudeRuntime:
                 on_started=request.on_started,
                 on_process_started=request.on_process_started,
                 on_stop=stream.stop,
+                over_budget=stream.meter.exhausted if request.token_budget else None,
+                # Partial messages are only requested to meter; nothing reads
+                # the retained stream, and they would crowd its limit.
+                retain_stdout=request.token_budget is None,
             )
         except RuntimeExecutionError as error:
             if error.session_id is None:
@@ -695,6 +727,9 @@ class ClaudeRuntime:
         if session_id is not None:
             command.extend(("--resume", session_id))
         command.extend(("-p", "--input-format", "stream-json", "--replay-user-messages"))
+        if request.token_budget is not None:
+            # The only native source of a message's final output count.
+            command.append("--include-partial-messages")
         return command
 
     @staticmethod

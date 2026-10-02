@@ -262,6 +262,35 @@ Precedence and validation, all at config load:
   gateway family such as `glm` is not promised to accept it.
 - Without `models`, behaviour is exactly the single preference above.
 
+### Bounds
+
+A procedure run is bounded by its work, not by how long it takes:
+
+```yaml
+procedures:
+  sleep:
+    instructions: /etc/steward/procedures/sleep.md
+    provider: claude
+    model: {model: configured-night-model}
+    token_budget: 250000
+    timeout_seconds: 7200
+```
+
+`token_budget` counts output tokens, reasoning included, as the provider reports
+them: Claude (and `glm` through the same CLI) per finished message, so a run can
+pass its budget by at most one response; Codex as running totals for the turn's
+thread and its native children. At the budget the run is stopped exactly as a
+deadline stops it: a native interrupt, then containment. The run fails with
+`provider used N output tokens of its B budget`. A world rhythm consumes its
+interval and its uncommitted work stays in the rhythm's retained workspace; it
+is not offered to a fallback provider. Unset, a run is unmetered, and Claude is
+not asked for the partial messages metering needs.
+
+`timeout_seconds` replaces `provider.timeout_seconds` for this procedure only.
+With a budget, it only has to catch a provider that has stalled, so it can be far
+longer than the conversational deadline. Without either, a procedure keeps
+`provider.timeout_seconds`.
+
 ## World rhythms
 
 A rhythm over `input: world` consolidates the world itself, such as a nightly

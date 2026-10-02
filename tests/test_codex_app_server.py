@@ -565,3 +565,33 @@ def test_public_scope_unsupported_provider_protocol_stops_before_model_turn(tmp_
     with pytest.raises(RuntimeExecutionError, match="confirm"):
         response(turn, wire, {"thread": {"id": SESSION}})
     assert not any(m.get("method") == "turn/start" for m in wire.messages)
+
+
+def usage(turn, total, last, thread_id=SESSION):
+    event(turn, "thread/tokenUsage/updated", thread_id=thread_id,
+          tokenUsage={"total": {"outputTokens": total}, "last": {"outputTokens": last}})
+
+
+def test_token_usage_counts_this_turn_of_a_resumed_thread_and_its_children(tmp_path):
+    turn, *_ = start(tmp_path, token_budget=1000)
+    # The thread already spent 5000 output tokens in earlier turns.
+    usage(turn, 5200, 200)
+    usage(turn, 5600, 400)
+    event(turn, "item/started", item={"type": "subAgentActivity", "kind": "started", "agentThreadId": "child"})
+    usage(turn, 300, 300, thread_id="child")
+    usage(turn, 900, 900, thread_id="unrelated")
+    assert turn.meter.used == 900 and turn.meter.exhausted() is None
+    usage(turn, 5700, 100)
+    assert "1000 output tokens of its 1000 budget" in turn.meter.exhausted()
+
+
+def test_malformed_token_usage_fails_closed(tmp_path):
+    turn, *_ = start(tmp_path, token_budget=1000)
+    with pytest.raises(RuntimeExecutionError, match="malformed token usage"):
+        event(turn, "thread/tokenUsage/updated", tokenUsage={"total": {}})
+
+
+def test_unbudgeted_turn_ignores_token_usage_entirely(tmp_path):
+    turn, *_ = start(tmp_path)
+    event(turn, "thread/tokenUsage/updated", tokenUsage={"total": {}})
+    assert turn.meter.used == 0
