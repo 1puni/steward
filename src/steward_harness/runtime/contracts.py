@@ -203,6 +203,8 @@ class RuntimeRequest:
     sandbox_mode: SandboxMode = "read-only"
     writable_roots: tuple[Path, ...] = ()
     read_scope: ReadScope | None = None
+    task_call_socket: str | None = None
+    on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None
     on_session_started: Callable[[str], None] = lambda _session_id: None
     on_started: Callable[[Callable[[], None]], None] | None = None
     on_input_ready: Callable[[Callable[[RuntimeInput], None]], None] | None = None
@@ -212,6 +214,8 @@ class RuntimeRequest:
     allow_empty_output: bool = False
 
     def __post_init__(self) -> None:
+        if self.read_scope is not None and self.task_call_socket is not None:
+            raise ValueError("public read scopes cannot operate on tasks")
         if self.native_owner is not None and (not self.native_owner.strip() or len(self.native_owner) > 512):
             raise ValueError("Native owner must be nonblank and bounded")
         if type(self.native_generation) is not int or self.native_generation < 1:

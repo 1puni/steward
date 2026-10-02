@@ -1,17 +1,19 @@
 """Successive outcomes return to the same owner without replaying old assessments."""
 
 from state_fixtures import prepare_turn, FakeRemote, close_task_slice
-from test_conversations import FakeCognition, _reply, _service, _turn
+from test_conversations import FakeCognition, _reply, _service, _turn, _task_reply
 import pytest
+from steward_harness.state import TaskId
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 
 
 def admitted(tmp_path):
     facts = FakeRemote()
-    cognition = FakeCognition([_reply('On it.\nTASK_PROPOSAL: {"repository":"app","title":"Fix the receipt","brief":"Report each outcome."}')])
+    submit = _task_reply(dict(operation='submit', key='receipt', repository='app', title='Fix the receipt', brief='Report each outcome.'))
+    cognition = FakeCognition([submit])
     service = _service(tmp_path, cognition)
     first = _turn(service, 'admit')
-    return service, facts, cognition, first.conversation_id, first.task_admission.task_id
+    return service, facts, cognition, first.conversation_id, TaskId(submit.receipts[0]['task_id'])
 
 
 def test_two_questions_then_publication_each_return_once(tmp_path):
@@ -149,9 +151,7 @@ def test_waiting_task_keeps_notes_without_treating_them_as_answers(tmp_path):
     state = service._state
     close_task_slice(state, task_id, 'ask', detail='Which source?')
     state.tasks.note(task_id, 'Operator context.')
-    cognition.replies.append(_reply(
-        f'Context recorded.\nTASK_ACTION: {{"task_id":"{task_id}","action":"note","text":"Additional evidence."}}'
-    ))
+    cognition.replies.append(_task_reply(dict(operation='note', key='evidence', task_id=str(task_id), text='Additional evidence.')))
     result = _turn(service, 'note-waiting')
     assert result.task_rejection is None
     assert state.tasks.get(task_id).status.value == 'waiting'
@@ -178,9 +178,9 @@ def test_pending_action_replays_with_repository_authority(tmp_path, allowed):
     restarted._state.tasks.transports = {"app": facts}
     result = restarted.accept_prepared(str(turn.turn_id))
     assert restarted._state.prepared_turn(str(turn.turn_id))["state"] == "completed"
-    assert (result.task_rejection is None) == bool(allowed)
+    assert "markers are retired" in result.task_rejection
     notes = tuple((k, t) for _, k, t, _ in state.tasks.get(task_id).pending)
-    assert bool(notes) == bool(allowed)
+    assert not notes
     restarted.accept_prepared(str(turn.turn_id))
     assert tuple((k, t) for _, k, t, _ in state.tasks.get(task_id).pending) == notes
 

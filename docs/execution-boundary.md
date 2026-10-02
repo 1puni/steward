@@ -74,6 +74,14 @@ to prevent an agent deliberately editing another granted directory. Edits outsid
 execution's checkout are not included in its world checkpoint and must use the owning
 repository/world's acceptance path.
 
+Conversation task calls use the [native MCP task tool](git-native-tasks.md#live-conversation-task-calls).
+Its Unix socket is controller-owned. Linux `SO_PEERCRED` identifies the connecting
+process, whose cgroup must equal the provider's owned invocation. The endpoint
+is unavailable until the process launcher binds it and is closed when execution
+returns. Socket-path knowledge alone grants no authority. macOS local development
+uses [Darwin peer PID](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/un.h)
+and the provider process session; it does not establish Linux host isolation.
+
 ## Execution ownership
 
 On Linux, a configured host execution identity requires a root controller,

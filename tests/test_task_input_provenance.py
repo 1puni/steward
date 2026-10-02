@@ -6,7 +6,7 @@ import pytest
 from state_fixtures import close_task_slice
 from steward_harness.runtime.contracts import RuntimeInputResult
 from steward_harness.state import StateDatabase, TaskSpec
-from test_conversations import _reply, _turn
+from test_conversations import _reply, _turn, _task_reply
 from test_git_tasks import harness
 from test_task_no_changes import InvestigationAdapter
 from test_task_result_delivery import admitted
@@ -17,17 +17,14 @@ def test_accepted_assistant_answer_retains_its_source_after_restart(tmp_path):
     service, facts, cognition, _, task = admitted(tmp_path)
     state = service._state
     close_task_slice(state, task, "ask", detail="Can missing deployment evidence be waived?")
-    cognition.replies.append(_reply(
-        f'Use the existing limitation.\nTASK_ACTION: {{"task_id":"{task}",'
-        '"action":"answer","text":"Operator clarification: retain the limitation."}'
-    ))
+    cognition.replies.append(_task_reply(dict(operation='answer', key='clarification', task_id=str(task), text='Operator clarification: retain the limitation.')))
     result = _turn(service, "answer-with-context", operator_id="harness:task-result")
     assert result.task_rejection is None
     fresh = StateDatabase(state.path)
     [(commit, kind, text, source)] = fresh.tasks.get(task).pending
     assert kind == "answer" and text.startswith("Operator clarification:")
-    assert source == str(result.turn_id)
-    assert f"source: assistant {source}" in fresh.tasks.git("show", "-s", "--format=%B", commit)
+    assert source.startswith("controller:task-call:") and source.endswith(str(result.turn_id))
+    assert f"source: {source}" in fresh.tasks.git("show", "-s", "--format=%B", commit)
     assert fresh.tasks.git("show", "-s", "--format=%(trailers:key=Steward-Source,valueonly)", commit) == source
 
 

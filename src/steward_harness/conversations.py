@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal, cast
 
+from steward_harness.task_calls import TaskCalls, TaskCallServer
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.notify import notification
 from steward_harness.config.schema import ProcedureConfig
@@ -370,8 +371,9 @@ class ConversationService:
         worktree = None
         result = None
         withdrawn = False
+        task_calls = None
         def prepare_request() -> CognitionRequest:
-            nonlocal worktree, withdrawn
+            nonlocal worktree, withdrawn, task_calls
             prompt = build_prompt()
             if checkpoint is not None:
                 try:
@@ -389,8 +391,14 @@ class ConversationService:
                 world_root=str(checkpoint.world.root) if checkpoint else None,
                 base_sha=worktree.base_sha if worktree else None,
             )
+            if (conversation.conversation_id.kind != "rhythm"
+                    and not self._read_only_desk(conversation.conversation_id)):
+                task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel))
+                prompt += task_calls.prompt
             return CognitionRequest(
                 execution_id=event_id,
+                task_call_socket=task_calls.path if task_calls else None,
+                on_process_started=task_calls.bind if task_calls else (lambda _pid, _unit: None),
                 native_owner=str(conversation.conversation_id),
                 native_generation=lambda provider: lineage_generation + (provider != lineage_provider),
                 profile=cast(ProviderProfile, conversation.profile),
@@ -421,7 +429,11 @@ class ConversationService:
                 ) if live_input else (lambda _evidence: None),
             )
         try:
-            result = self._cognition.run(prepare_request, execution_id=event_id)
+            try:
+                result = self._cognition.run(prepare_request, execution_id=event_id)
+            finally:
+                if task_calls is not None:
+                    task_calls.close()
             release_input()
             if not result.output.strip() and not allow_empty_output:
                 # A returned provider failure like any other: nothing to
@@ -620,21 +632,11 @@ class ConversationService:
             rejection = (
                 f"Malformed task proposal: {parsed.error}." if parsed.error else None
             )
-            spec = parsed.spec
-            action = parsed.action
-            if self._read_only_desk(turn.conversation_id) and (spec is not None or action is not None):
-                rejection = "Read-only desk cannot admit or change tasks."
-                spec, action = None, None
-            if turn.conversation_id.kind == "rhythm" and (spec is not None or action is not None):
-                # A task's result returns to its owner, and a rhythm is not one.
-                rejection = "A rhythm cannot admit or change tasks."
-                spec, action = None, None
-            configured = self._state.tasks.repositories
-            if spec is not None and spec.repository not in (configured or ()):
-                rejection, spec = (
-                    f"Task proposal for {spec.repository!r} was not authorized.",
-                    None,
-                )
+            # Completed historical turns replay their existing receipt above.
+            # Unaccepted markers never gain authority on upgrade or recovery.
+            spec = action = None
+            if parsed.spec is not None or parsed.action is not None:
+                rejection = "Final task markers are retired; use a live task call and its receipt. No operation was performed."
             return self._state.accept_turn(
                 event_id,
                 visible_reply=parsed.reply_text,

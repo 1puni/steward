@@ -376,7 +376,7 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
     def unavailable(text, key):
         # The run's own message, and the follow-up the assessment admitted.
         assert text.startswith("The private consumer handoff is still outstanding.")
-        assert "Investigation saved." not in text and "Task admitted:" in text
+        assert "Investigation saved." not in text
         assert "Task done:" not in text
         receipt = world_state.result_receipt(key)
         assert "Evidence SHA:" in receipt["result_text"] and "Landed SHA:" not in receipt["result_text"]
@@ -474,7 +474,7 @@ def test_rhythm_result_assessment_cannot_expand_repository_authority(tmp_path):
     with world_state.connect() as connection:
         rejection, reply = connection.execute(
             "SELECT rejection, reply_text FROM turns WHERE operator_id='harness:task-result'").fetchone()
-    assert "not authorized" in rejection and "not authorized" not in reply
+    assert rejection is None and "not authorized" in reply
 
 
 

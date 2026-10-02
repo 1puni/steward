@@ -68,22 +68,16 @@ board, so it is spelled out rather than opaque. You will be typing it into
 
 ### From a conversation
 
-This is the ordinary route. Talk to the steward in a Telegram topic or at the
-desk, agree on what the work is, and let its reply end with a single final line:
+Talk to the steward in a Telegram topic or at the operator desk. During its
+native execution it calls the `steward_tasks` MCP `task` tool with a `submit`
+operation, a distinct operation key, and the repository, title and complete
+brief. The tool returns the durable task ID and accepted Git revision immediately.
+It can submit several independent tasks without ending the conversation or
+waiting for an earlier task. See the [call contract](git-native-tasks.md#live-conversation-task-calls).
 
-```text
-TASK_PROPOSAL: {"repository":"app","title":"Retire the CSV importer","brief":"Remove the CSV importer and move its two callers to the streaming reader. Keep the existing fixtures passing. If a caller needs behaviour the streaming reader does not have, stop and ask rather than widening the reader's contract."}
-```
-
-Three constraints decide whether that becomes a task:
-
-- The marker must be the **last** line of the reply, and there must be exactly
-  one marker in it. A turn proposes at most one task.
-- `repository` must name a configured repository. Configuring a repository is
-  the authority to work in it; anything else is refused with a visible
-  rejection. A conversation cannot grant itself a repository it was not given.
-- `repository`, `title` and `brief` are all required and all strings. The title
-  is capped at 256 characters, the brief at 8000.
+The repository must be configured; configuring it is the authority to work in
+it. Title and brief are required strings, capped at 256 and 8000 characters.
+Read-only desk conversations and rhythms receive no task tool.
 
 An admitted conversation task is **queued immediately**. There is no
 confirmation step for it — `/task confirm` exists for tasks that arrive held as

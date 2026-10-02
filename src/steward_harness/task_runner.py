@@ -7,7 +7,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from steward_harness.cognition import Cognition, CognitionRequest
@@ -35,7 +35,8 @@ from steward_harness.state import (
     StateDatabase,
     TaskId,
 )
-from steward_harness.task_query import is_task_query, ownership_answer
+from steward_harness.task_query import OwnershipCalls, is_task_query, ownership_answer
+from steward_harness.task_calls import TaskCallServer
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
 from steward_harness.task_store import Task
@@ -672,6 +673,7 @@ class TaskRunner:
                 event_id=execution_id,
                 operator_context=operator_context,
                 read_only=bool(procedure and procedure.access == "read-only"),
+                live_task_queries=procedure is None,
                 understanding=None if procedure else (
                     OFFER_REF.format(task_id=task.task_id), live.baseline),
             ),
@@ -699,6 +701,7 @@ class TaskRunner:
                 raise RuntimeExecutionError("controller is stopping")
             return request
 
+        task_calls = None
         watcher = None if procedure else threading.Thread(
             target=self._watch_offers, args=(task.task_id, live),
             name=f"offers-{task.task_id}", daemon=True)
@@ -707,8 +710,14 @@ class TaskRunner:
         try:
             if watcher:
                 watcher.start()
+            if procedure is None:
+                task_calls = TaskCallServer(OwnershipCalls(self.state.tasks, task.task_id, self.repositories))
+                request = replace(request, task_call_socket=task_calls.path,
+                                  on_process_started=task_calls.bind)
             result = self.cognition.run(prepared, execution_id=execution_id)
         finally:
+            if task_calls is not None:
+                task_calls.close()
             with self._input_lock:
                 self._executions.discard(execution_id)
                 self._native_inputs.pop(task.task_id, None)

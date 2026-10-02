@@ -39,7 +39,7 @@ def test_transport_examples_respect_enabled_capabilities():
     assert "[[telegram_pin_message:123]]" in enabled
     assert "Photo roots: <configured absolute photo delivery root>" in enabled
     assert "[[send_image:" not in desk and "telegram_pin" not in desk
-    assert "TASK_ACTION:" in desk and "TASK_PROPOSAL:" in desk
+    assert "TASK_ACTION:" not in desk and "TASK_PROPOSAL:" not in desk
 
 
 def test_configured_reconciliation_adds_policy_to_the_entry_prompt():

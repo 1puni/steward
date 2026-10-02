@@ -50,6 +50,7 @@ def test_startup_recovers_world_edits_before_starting_services(tmp_path, monkeyp
     from test_world_durability import Crash, run, runtime
 
     state, checkpoint, inbound, cognition = runtime(tmp_path)
+    cognition.submit = False  # This fixture tests world recovery, not task dispatch.
     prepare = state.record_candidate
 
     def crash_after_prepare(*args, **kwargs):

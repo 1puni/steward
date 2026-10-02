@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from steward_harness.runtime.task_call_mcp import server_config
+
 import json
 import os
 from collections.abc import Mapping
@@ -584,6 +586,7 @@ class ClaudeRuntime:
                 on_stdout_line=stream.consume,
                 on_input_ready=stream.connect,
                 on_started=request.on_started,
+                on_process_started=request.on_process_started,
                 on_stop=stream.stop,
             )
         except RuntimeExecutionError as error:
@@ -671,6 +674,7 @@ class ClaudeRuntime:
                 "acceptEdits" if request.sandbox_mode == "workspace-write" else "dontAsk"),
             *([] if unrestricted else ["--allowed-tools",
                 *(_WORKSPACE_TOOLS if request.sandbox_mode == "workspace-write" else _READ_ONLY_TOOLS),
+                *(["mcp__steward_tasks__task"] if request.task_call_socket else []),
                 *(["Agent"] if request.sandbox_mode == "workspace-write" else [])]),
             "--model",
             request.resolved.model,
@@ -683,6 +687,9 @@ class ClaudeRuntime:
                 else ()
             ),
         ]
+        if request.task_call_socket:
+            command.extend(("--mcp-config", json.dumps({"mcpServers": {
+                "steward_tasks": server_config(request.task_call_socket)}})))
         for root in request.writable_roots:
             command.extend(("--add-dir", str(root)))
         if session_id is not None:

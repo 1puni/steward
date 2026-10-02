@@ -181,13 +181,14 @@ def task_journey_probe(
         transport="telegram", transport_key="1", source_event_key="disposable-intent", operator_id="probe",
         text=("In configured repository app, create result.txt containing completed followed by a newline. "
               "Leave app.py unchanged. This is the entire task. Its configured gate, publication and local "
-              "deployment are authorized. Propose the repository task now; do not implement it in your "
+              "deployment are authorized. Submit the repository task now using the live task tool; do not implement it in your "
               "conversation world or request further approval. No additional tasks are needed after it succeeds."),
     )
     try:
         admitted = conversations.run_turn(**intent)
-        assert admitted.task_admission is not None, admitted.reply_text
-        task_id = admitted.task_admission.task_id
+        [task] = state.tasks.all()
+        assert task.owner == str(admitted.conversation_id), admitted.reply_text
+        task_id = task.task_id
         owner_session = state.find_conversation(intent["transport"], intent["transport_key"]).provider_session_id
         print("native owning-session admission", task_id, owner_session, flush=True)
         runner = TaskRunner(
@@ -290,7 +291,8 @@ def task_journey_probe(
         assert list((root / "current").glob(f"artefacts/{family}/**/*.jsonl"))
         assert not list(world.rglob("auth.json"))
         replay = conversations.run_turn(**intent)
-        assert replay.task_admission.task_id == task_id
+        assert replay.reply_text == admitted.reply_text
+        assert [task.task_id for task in state.tasks.all()] == [task_id]
         reopened = StateDatabase(state.path)
         assert DeploymentConvergence(reopened, boundary).converge(deployment_id).desired_sha == sha
         drain = ResultDeliveryDrain(reopened, {"telegram": received.append}, review=lambda _: (_ for _ in ()).throw(AssertionError("assessment repeated")))

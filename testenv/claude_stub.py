@@ -21,7 +21,7 @@ plan's `files` land in the candidate exactly as a real model's edits would.
 
 Plans are JSON: {"steps": [{"match": "substring of the prompt",
 "reply": "...", "files": {"path": "content"}, "sleep": seconds,
-"fail": "message"}]}. First matching step wins; a step with no "match"
+"fail": "message", "task_calls": [{"operation": "submit", ...}]}]}. First matching step wins; a step with no "match"
 is the default. Looked up from $STUB_PLAN, re-read per turn so the
 driver can swap scenarios without restarting the daemon.
 """
@@ -33,6 +33,7 @@ import os
 import pathlib
 import re
 import sys
+import subprocess
 import time
 import uuid
 
@@ -110,6 +111,22 @@ def emit(event: dict, transcript: pathlib.Path | None = None) -> None:
             handle.write(line)
 
 
+def task_calls(arguments: list[dict]) -> list[dict]:
+    if not arguments:
+        return []
+    config = json.loads(sys.argv[sys.argv.index("--mcp-config") + 1])["mcpServers"]["steward_tasks"]
+    messages = [dict(jsonrpc="2.0", id=index, method="tools/call",
+                     params=dict(name="task", arguments=argument))
+                for index, argument in enumerate(arguments)]
+    result = subprocess.run([config["command"], *config["args"]],
+                            input="".join(json.dumps(message) + "\n" for message in messages),
+                            text=True, capture_output=True, check=True)
+    receipts = [json.loads(json.loads(line)["result"]["content"][0]["text"])
+                for line in result.stdout.splitlines()]
+    assert len(receipts) == len(arguments) and all(receipt["accepted"] for receipt in receipts)
+    return receipts
+
+
 def main() -> int:
     resume, model = parse_argv(sys.argv[1:])
     session = resume or str(uuid.uuid4())
@@ -149,6 +166,9 @@ def main() -> int:
         emit({"type": "command_lifecycle", "session_id": session,
               "command_uuid": command, "state": "started"}, transcript)
 
+        receipts = task_calls(step.get("task_calls", []))
+        for receipt in receipts:
+            reply += "\nTask admitted: " + receipt["task_id"]
         delay = float(step.get("sleep", 0) or 0)
         if delay:
             time.sleep(delay)

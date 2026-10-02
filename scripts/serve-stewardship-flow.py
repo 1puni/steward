@@ -64,7 +64,7 @@ def render_prompt(stage: str) -> dict:
     importlib.reload(orientation)
     read_text = "Read AGENTS.md, README.md, the world's charter, docs/README.md, episodes.md and Git history in the actual workspace. These are separate files, not an injected context block."
     source = []
-    output = "World edits and an optional TASK_PROPOSAL or TASK_ACTION cross controller acceptance."
+    output = "World edits cross conversation acceptance; live MCP task calls have independent Git receipts."
     mode = "Runtime utility output with placeholder inputs"
     source_files = {Path(__file__).resolve()}
     if stage.startswith("old-"):
