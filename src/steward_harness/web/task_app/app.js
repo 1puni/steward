@@ -124,7 +124,7 @@ async function refresh() {
     snapshot = body;
     const total = Object.values(body.counts).reduce((sum, n) => sum + n, 0);
     const needs = [...attention].reduce((sum, status) => sum + (body.counts[status] || 0), 0);
-    const listed = body.tasks.length < total ? " (" + body.tasks.length + " most recent listed)" : "";
+    const listed = body.tasks.length < total ? " (" + body.tasks.length + " listed; all open tasks included)" : "";
     el("counts").textContent = total + " tasks" + listed + " · " + needs + (needs === 1 ? " needs your attention" : " need your attention") + (body.paused ? " · Scheduling paused" : "");
     render();
   } catch (error) { fail(error.message); }

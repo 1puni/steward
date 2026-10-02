@@ -55,7 +55,7 @@ _RANK = {
     TaskStatus.CANCELLED: 6,
 }
 
-#: The most rows one listing carries; what falls past it is the oldest finished work.
+#: A soft listing budget: open work is never omitted; only finished work is capped.
 _LISTED = 200
 _FINISHED = (TaskStatus.DONE, TaskStatus.CANCELLED)
 
@@ -136,9 +136,9 @@ class TaskBoard:
         There is no page, no offset and no server-side filter. The SQL those
         were written in had a `status` column and no longer does, and the
         Python that would replace it buys an offset that goes stale between
-        requests and a token covering one page of it. The board lists at most
-        `_LISTED` rows, which is the ceiling this relies on; `counts` covers
-        every task, so the browser can say how many it was not sent.
+        requests and a token covering one page of it. The board keeps all open
+        work, filling any remaining `_LISTED` budget with finished work.
+        `counts` covers every task, including omitted finished work.
         """
         tasks = sorted(self.state.tasks.all(),
                        key=lambda task: (task.created_at, str(task.task_id)), reverse=True)
@@ -146,7 +146,9 @@ class TaskBoard:
         counts: dict[str, int] = {}
         for task in tasks:
             counts[task.status.value] = counts.get(task.status.value, 0) + 1
-        listed = sorted(tasks[:_LISTED], key=lambda task: (_RANK[task.status], -task.priority))
+        open_count = sum(count for status, count in counts.items() if TaskStatus(status) not in _FINISHED)
+        listed = sorted(tasks[:max(_LISTED, open_count)],
+                        key=lambda task: (_RANK[task.status], -task.priority))
         rows = [self._summary(task) for task in listed]
         return {"paused": self.state.paused(), "counts": counts, "tasks": rows}
 

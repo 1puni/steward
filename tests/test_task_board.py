@@ -399,3 +399,71 @@ def test_board_and_chat_link_back_to_the_same_admitted_topic_without_app_config(
     assert model.detail(task_id)["discussion_url"] == url
     assert f"]({url})" in task_card(task, chat_id=-100123456)
     assert reference_entities(board.state.tasks, str(task_id), None, -100123456)[str(task_id)] == (task_id.short, url)
+
+
+def test_waiting_work_survives_more_open_tasks_than_the_listing_budget(board, monkeypatch):
+    waiting = board.admit("Old question")
+    board.slice(str(waiting.task_id), "ask", reason="Which account should own this?")
+    for index in range(4):
+        board.admit(f"New queued work {index}")
+    real = GitTaskStore.all
+    monkeypatch.setattr(GitTaskStore, "all", lambda self: [
+        replace(task, created_at="2020-01-01T00:00:00Z")
+        if task.task_id == waiting.task_id else task for task in real(self)
+    ])
+    monkeypatch.setattr("steward_harness.web.tasks._LISTED", 3)
+
+    document = json.loads(board.read()[2])
+    assert document["counts"] == {"waiting": 1, "queued": 4}
+    assert len(document["tasks"]) == 5
+    assert document["tasks"][0]["task_id"] == str(waiting.task_id)
+
+
+def test_waiting_question_and_answer_refresh_across_a_completed_backlog(board):
+    waiting = board.admit("Choose the account")
+    question = "Which account should own this?"
+    board.slice(str(waiting.task_id), "ask", reason=question)
+    blocked = board.admit("Missing dependency")
+    board.state.tasks.hold(blocked.task_id, "blocked", "Dependency unavailable")
+    running = board.admit("Working now")
+    board.admit("Queued work")
+    _completed_backlog(board)
+    lock = task_lock(board.locks, running.task_id)
+    assert lock.acquire()
+    try:
+        _, headers, body = board.read()
+        document = json.loads(body)
+        assert document["counts"] == {"waiting": 1, "blocked": 1, "running": 1, "queued": 1, "done": 201}
+        assert len(document["tasks"]) == 200
+        assert [row["status"] for row in document["tasks"][:4]] == ["waiting", "blocked", "running", "queued"]
+        query = f"?task={waiting.task_id}"
+        _, detail_headers, detail_body = board.read(query)
+        detail = json.loads(detail_body)
+        assert detail["status"] == "waiting"
+        assert detail["reason"] == question
+        assert detail["checkpoints"][0]["question"] == question
+        # Reading and adding context must not resume waiting work.
+        board.state.tasks.note(waiting.task_id, "Additional context")
+        assert board.model.detail(waiting.task_id)["status"] == "waiting"
+        board.state.tasks.answer(waiting.task_id, "Use the shared account")
+        status, resumed_headers, resumed_body = board.read(**{"If-None-Match": headers["ETag"]})
+        assert status == 200
+        assert resumed_headers["ETag"] != headers["ETag"]
+        resumed = json.loads(resumed_body)
+        assert resumed["counts"] == {"queued": 2, "blocked": 1, "running": 1, "done": 201}
+        status, _, detail_body = board.read(query, **{"If-None-Match": detail_headers["ETag"]})
+        assert status == 200
+        assert json.loads(detail_body)["status"] == "queued"
+    finally:
+        lock.release()
+
+
+def _completed_backlog(board, count=201):
+    # Real finished slices and observed landings, not fabricated status fields.
+    parent = "main"
+    for index in range(count):
+        done = board.admit(f"Completed {index}")
+        work = board.slice(str(done.task_id), "idle")
+        parent = _git("commit-tree", f"{work}^{{tree}}", "-p", parent,
+                      "-m", f"accepted\n\nSteward-Work: {work}", cwd=board.clone)
+    _git("update-ref", "refs/steward/remote/main", parent, cwd=board.clone)
