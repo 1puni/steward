@@ -385,14 +385,45 @@ predecessor whose run is still going when its interval ends takes the chain
 with it, because the dependent is always asked about the current interval.
 `after` must name a configured world rhythm, and configuration refuses a cycle.
 
-World rhythms run one at a time. They all write the same world, and two
-started together make the later one's candidate a replay over a world that
-moved under it: correct, because acceptance holds the world lease, but wasted.
-The controller schedules them as a single owner. While one runs, the others
-wait, and on the first poll after it finishes the first due rhythm in configured
-order starts. No interval is lost by waiting, because a rhythm stays due until
-its interval ends. A night of Sleep, REM and Dream Away with an hourly Staging
-therefore runs Sleep, REM, Dream Away and then Staging, never Staging beside REM.
+World rhythms run one at a time because they all write the same world. The
+controller schedules them as a single owner within its shared worker budget.
+When that owner runs, it chooses the eligible current interval with the earliest
+start; configured order breaks ties, including members of a night chain. This
+keeps a short-interval inbox from continually jumping ahead of due hourly or
+nightly work. Selection is recomputed when the worker starts, so time spent in
+the shared queue cannot launch an expired bucket. There is no catch-up queue or
+second scheduling cursor. A rhythm can still miss an interval if the shared
+worker budget or world writer remains occupied through its end.
+
+Failures before cognition, including an unreadable policy file, are retained as
+interrupted turns and consume the interval just like provider failures. Ordinary
+world/conversation lease deferrals remain eligible for retry. A completed turn
+without its result receipt is eligible for replay to finish that receipt, not a
+second model invocation.
+
+`/rhythm list` reports the current world admission state and observation time.
+The existing `/healthz` endpoint also carries `world_rhythms`: the controller's
+last admission observation, its age and freshness, pause state, shared worker
+pressure, and each world rhythm's effective interval/offset or predecessor,
+input paths, current source key, latest execution start/completion times and
+evidence age. The snapshot derives from the same evaluator as dispatch; it
+never controls scheduling. It becomes stale after the greater of 60 seconds
+and three controller polls. A missing sample is unknown, not healthy.
+
+`scheduled` means a result receipt settled this interval; `active` means a turn
+is running, and `receipt_pending` means acceptance needs its receipt completed.
+`failed` and `predecessor_failed` expose consumed failures, while
+`awaiting_input` and `awaiting_predecessor` explain why admission owes no run.
+`due`/`overdue` means eligible now with no current turn. `due_at` is the interval
+boundary, and `overdue_seconds` is its age, not proof of continuous eligibility:
+new input can arrive partway through a bucket. Neither an old completion nor
+absent history alone establishes missed execution. An offline observer unable
+to read the path guard or receipts says `input_unobserved` or
+`accepted_receipt_unobserved` instead of inventing a due/settled verdict.
+
+Health `ok` and `sha` still attest only the loaded release. They do not certify
+scheduler freshness, successful firing, or the quality of a reflection. Verify
+release identity, current admission state, and accepted execution separately.
 
 The turn cannot propose or steer tasks, because a rhythm has no transport to
 receive their results; it records suggested work in world files instead.

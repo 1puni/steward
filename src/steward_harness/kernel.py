@@ -73,6 +73,14 @@ class Dispatch:
         if key not in self._inflight:
             self._inflight[key] = self._pool.submit(work)
 
+    def observation(self) -> dict:
+        """Current worker pressure, derived from the executor's existing futures."""
+        return {"running": sum(job.running() for job in self._inflight.values()),
+                "queued": sum(not job.running() and not job.done() for job in self._inflight.values()),
+                "world": ("running" if self._inflight[("rhythm", "world")].running() else "queued")
+                if ("rhythm", "world") in self._inflight and not self._inflight[("rhythm", "world")].done()
+                else "idle"}
+
     def stop(self) -> None:
         # Queued owners remain derivable from durable state after restart.
         # Drain writers that started; shutdown must not start another one.

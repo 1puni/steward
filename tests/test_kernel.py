@@ -369,3 +369,32 @@ def test_only_one_process_advances_a_repository_at_once(tmp_path: Path) -> None:
     advanced = sorted(tmp_path.glob("advanced-*"))
     assert len(advanced) == 1, [item.name for item in advanced]
     assert advanced[0].read_text() == "app"
+
+
+def test_dispatch_observation_distinguishes_world_queue_from_running_work():
+    dispatch = Dispatch(1)
+    occupied, release, world_started, finish = (threading.Event() for _ in range(4))
+
+    def busy():
+        occupied.set()
+        assert release.wait(5)
+
+    def world():
+        world_started.set()
+        assert finish.wait(5)
+
+    try:
+        dispatch.submit(('task', 'fixture'), busy)
+        assert occupied.wait(5)
+        for _ in range(20):
+            dispatch.submit(('rhythm', 'world'), world)
+        assert dispatch.observation() == {'running': 1, 'queued': 1, 'world': 'queued'}
+        release.set()
+        assert world_started.wait(5)
+        assert dispatch.observation() == {'running': 1, 'queued': 0, 'world': 'running'}
+    finally:
+        release.set()
+        finish.set()
+        dispatch.stop()
+    dispatch.reap()
+    assert dispatch.observation() == {'running': 0, 'queued': 0, 'world': 'idle'}
