@@ -239,12 +239,16 @@ including what happens when a process dies at each boundary.
 
 ## One budget, no scheduler
 
-`controller.workers` (default **8**, range 1–32) is the entire scheduling policy.
+`controller.workers` (default **8**, range 1–32) bounds background cognition and work.
 Task slices, publication, deployment, rhythms, desk messages, probes and result
 assessment all compete for the same slots, first asked, first served. No
 per-lane reservation, no fairness ordering, because both of those are a
 scheduler, and a scheduler wants a starvation story and a tuning knob that
 nothing here has needed yet.
+
+Retained results have one separate transport worker. They reach their owner without
+waiting for assessment or a free cognition slot; assessment may follow and add
+judgment. See the [delivery latency contract](docs/kernel-contract.md#task-results).
 
 A live conversation never waits in that queue. The operator talking to their
 steward is answered on the thread that received the message, so the budget can be

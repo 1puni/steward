@@ -111,7 +111,7 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
         key = f"task_result:{item}:{state.tasks.get(item).outcome}:done"
         state.save_result_receipt(dict(owner=state.tasks.read(item)[1].owner, task_id=str(item), source_key=key, done=True))
     owner = ConversationId("telegram:17")
-    # Live is stated plainly; only the failure costs the owner a model turn.
+    # Retained observations arrive before any optional model assessment.
     sent = []
     assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == (
         f"production is live at {revision[:12]}.")
@@ -123,7 +123,10 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
         service.deliver_task_result(owner, send=fail)
     restarted = _service(root, cognition)
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert sent[1] == sent[2] and sent[1][0] == "Deployment requires repair."
+    assert sent[1] == sent[2] and "repair required" in sent[1][0]
+    assert "Desired revision: " + revision in sent[1][0]
+    assert cognition.requests == []
+    restarted.assess_task_result(owner)
     assert len(cognition.requests) == 1
     assert "Desired revision: " + revision in cognition.requests[-1].prompt
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))

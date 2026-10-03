@@ -267,23 +267,12 @@ def _bounded_brief(brief: str) -> str:
 
 def build_result_assessment_request(brief: str, result_text: str, *, quiet: bool,
                                     notice: str = "") -> str:
-    """Compose the controller observation consumed by the ordinary world turn.
-
-    A scheduled run reaches this only when it asked to notify; `notice` is
-    what it asked to send, and it is sent unless this turn sends its own.
-    """
+    """Assess evidence already delivered through its independent receipt."""
     delivery_instruction = (
-        f"The run asked to tell the operator:\n{notice}\n\n"
-        "That message is sent as written. To send your own message in its place, "
-        f"start a line with `{NOTIFY_MARKER}`: everything from that line on is sent instead. "
-        "Anything else you write is recorded, not sent. "
-        if notice else
-        "This is an automatic observation. Its full evidence is retained. "
-        "Notify only about a material new finding, changed outcome, or needed operator decision. "
-        "Already-owned unchanged findings need no notification. Complete without a final "
-        "message when nothing needs the operator's attention; otherwise write a concise update. "
-        if quiet else
-        "Keep any final reply short. Complete without a final message if the task receipt needs no addition. "
+        "The retained result has already been delivered to its owner. "
+        "Your final prose is retained assessment, not another notification. "
+        "Do not repeat the result. Further notification requires a separate explicit "
+        "delivery decision for new judgment that materially needs the operator's attention. "
     )
     return (
         "## Harness task result\n"

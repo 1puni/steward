@@ -180,9 +180,9 @@ revision is exactly the commit that landed that conversation's task.
 The controller retains the dated driver observation and desired SHA in an ordinary
 result receipt. A live outcome carries its plain reply ("`<target>` is live at
 `<sha>`"), because the observation already says everything the owner's model
-could. A failing outcome carries no reply and goes through the same assessment
-and world-acceptance path as task results, where the owner can act or propose an
-authorized follow-up. Readiness still requires external observation and exact
+could. A failing outcome delivers the retained observation first, independently
+of cognition. Optional assessment follows through the world-acceptance path, where
+the owner can act or propose an authorized follow-up. Readiness still requires external observation and exact
 evidence; the assessment does not confer deployment authority.
 
 Driver prose and error text vary between polls and are not new outcomes.

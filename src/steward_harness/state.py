@@ -1295,10 +1295,6 @@ class StateDatabase:
             key = f"task_result:{task.task_id}:{task.outcome}:{status.value}"
             if self.result_receipt(key).get("done"):
                 continue
-            with self.connect() as connection:
-                if connection.execute("SELECT 1 FROM turns WHERE conversation_id=? AND source_event_key=?",
-                                      (task.owner, key)).fetchone():
-                    continue
             yield task, key
 
     def pending_task_result_conversations(self):
@@ -1381,6 +1377,11 @@ class StateDatabase:
             key=lambda receipt: (receipt.get("target", ""), receipt.get("task_id") or "",
                                  receipt.get("sequence", 0), receipt["source_key"]),
         )
+
+    def pending_result_assessments(self) -> list[dict]:
+        return [receipt for path in self.result_receipt_path("").parent.glob("*.json")
+                if (receipt := json.loads(path.read_text())).get("done")
+                and receipt.get("assess") and not receipt.get("assessment_done")]
 
     def pending_task_result_for(self, conversation_id):
         for receipt in self.pending_result_receipts():

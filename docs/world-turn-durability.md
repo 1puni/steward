@@ -123,8 +123,9 @@ recorded receipts.
 
 The world commit records the attributed exchange; SQL records the controller's
 decision. Read-only conversations use the same completion and effect transaction
-without a Git application. Transport sending follows acceptance and has its own
-failure semantics; see [task results](kernel-contract.md#task-results).
+without a Git application. Conversation replies follow acceptance. Retained task
+results already have their own accepted evidence and are delivered independently of
+assessment/world acceptance; see [task results](kernel-contract.md#task-results).
 
 ## Recovery and workspace retention
 

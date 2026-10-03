@@ -24,7 +24,7 @@ rhythm → procedure → accepted Git task                   │          │
                                                          ▼          │
                               collapsed outcome → integrate → gates/reviews → push
                                                          │          │
-                                      owned result → assessment ────┘
+                                      owned result → delivery + assessment ────┘
                                       observed refs → named target drivers
 ```
 
@@ -261,31 +261,45 @@ Telegram results return to the admitted owner's topic in the configured chat,
 including topics absent from `telegram.topics`. That mapping names configured
 destinations; it is not an allow-list for ordinary conversations or their results.
 
-Assessment uses the ordinary world-turn path and current authority. A typed
-The [live task tool](git-native-tasks.md#live-conversation-task-calls) can answer, retry, note or cancel an authorized task; prose alone cannot resume it.
-A turn proposes at most one action or one new task. A rhythm explicitly names its
-configured result owner, or null for retained evidence only. Owned rhythm task findings
-that ask to notify (`NOTIFY:`) use this same assessment path, including world
-knowledge and authorized follow-up admission; findings that do not are evidence only
-and cost no turn. An assessment cannot steer tasks owned by another conversation. A
-world rhythm is itself a world turn: it admits no task, and its reply is a receipt for
-its owner that sends only what it asked to send
-([what a rhythm sends](rhythms.md#what-a-rhythm-sends)).
+Delivery and assessment have separate decisions and completion receipts. Delivery
+freezes the selected outcome and existing owner/source in the private result receipt,
+sends it, then marks it delivered. A busy or cleared owning conversation cannot
+block that send. A receipt already selected for transport remains owed even if the
+task advances; it describes the retained outcome. Before later assessment the
+controller rechecks current task outcome and owner, skipping obsolete task questions
+or reassigned work. Assessment uses the ordinary world-turn path and current
+authority. The [live task tool](git-native-tasks.md#live-conversation-task-calls)
+can answer, retry, note or cancel authorized work; prose cannot resume it.
 
-Accepted assessment and external delivery are separate facts. A private task-result
-receipt retains the selected outcome before assessment and remains pending until
-transport succeeds. A completed scheduled rhythm run, review or writing, reaches
-assessment only when its findings asked to notify, and it then sends the run's message, or the
-assessment's own `NOTIFY:` replacement; assessment cannot silence it. Full evidence remains in the
-task ref and receipt. Explicitly requested runs, questions, blocked/cancelled work,
-and assessment failures retain their outcome reports. Transport retries replay the
-saved reply, including silence, without repeating assessment. Checkpoints are local
-Git/log evidence; they have no separate broadcast channel. Accepted world work is replayed without another model turn;
-failed assessment still delivers the retained task findings with its interruption.
-Telegram reuses per-piece receipts across retry and restart. Preserve both adjacent
-receipt directories during upgrades. A crash between the transport accepting a send
-and the local receipt write can still duplicate that piece: this is at-least-once
-delivery with receipts, not exactly-once.
+Automatic runs remain quiet unless they explicitly request notification; null owners
+retain evidence only. A requested message is delivered as retained. Assessment cannot
+replace or silence it, and assessment final prose does not send a second notification.
+New operator-facing judgment requires a separate explicit notification decision
+through the same result receipt transport. Full evidence remains in Git and the receipt.
+
+**Latency expectation:** with a running controller, healthy local storage and an
+available route, a newly reportable outcome is queued on the next controller pass
+(default 5 seconds). One dedicated transport worker drains these jobs independently
+of all cognition slots and conversation execution. With no transport backlog the
+send starts within that polling interval plus discovery overhead. With a backlog,
+add the service time of jobs ahead; each owner has at most one queued attempt, and
+failed attempts yield before retrying on a later pass. This is a capacity guarantee,
+not a remote-service availability SLA. Telegram result attempts send at most 12,000
+characters of text, use the API's 30-second I/O timeout per piece, and never sleep
+through rate-limit waits or execute attachment/action markers embedded in evidence.
+A failing route remains pending with diagnostics; unavailable transport cannot have
+a promised successful-delivery deadline. Host stalls and actual transport latency
+require deployed measurement.
+
+Transport retries replay saved replies, including historical silence, without
+repeating cognition. Existing accepted assessment alone is not proof of delivery.
+Optional assessment follows delivery through the shared worker budget. Its accepted
+world receipt survives restart; provider failure is recorded as an assessment error
+and cannot retract the delivered evidence. Checkpoints have no separate broadcast
+channel. Telegram reuses per-piece receipts across retry and restart. Preserve both
+adjacent receipt directories during upgrades. A crash between remote acceptance and
+the local receipt write can duplicate that piece: delivery is at-least-once,
+not exactly-once.
 
 ### Telegram ingress
 
@@ -361,12 +375,11 @@ files. See [world durability](world-turn-durability.md).
 ## Concurrent dispatch
 
 `controller.workers` is one shared budget — default **8**, range **1–32** — and it is
-the whole scheduling policy. Tasks, repository convergence, probes, desk messages,
+the budget for background cognition and work. Tasks, repository convergence, probes, desk messages,
 rhythms and task-result assessment all compete for the same slots. The executor's own
-queue is the assignment: first asked, first served. There is no per-lane reservation and
-no fairness ordering, because both are a scheduler, and this does not have one. A
-scheduler wants a fairness policy, a starvation story and a tuning knob; nothing here
-has yet needed any of the three.
+queue is the assignment: first asked, first served, without per-lane reservation or
+fairness ordering among cognition jobs. Retained result transport has one separate worker as
+described in [task results](#task-results); it cannot run cognition.
 
 In-flight keys are not the exclusion. They exist only so one pass does not enqueue a
 second copy of a job already queued, which would grow the backlog by an entry per poll;

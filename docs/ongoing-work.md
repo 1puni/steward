@@ -272,10 +272,10 @@ different candidate.
 A configured `telegram:<topic-id>` or `desk:<conversation>` becomes the
 protected result owner of every task that rhythm creates. A run that asks or
 fails, or finishes with findings carrying a `NOTIFY:` line, goes through the
-ordinary task-result assessment path in that conversation: the owner's session
-sees the brief and the findings as *evidence*, can record what matters in the
-world, can propose a follow-up task within the repository authority it already
-has, and sends the run's message or its own replacement. A run that finishes
+ordinary retained-result transport path. Delivery does not wait for the owning
+conversation. Its later optional assessment sees the brief and findings as
+*evidence*, can record what matters in the world, and can propose follow-up work
+within its existing authority. Assessment prose does not send a second message. A run that finishes
 without asking to notify never reaches assessment at all. Its findings stay on
 its task ref, and a writing run's work lands, but no turn runs and no message is
 sent. Assessment cannot grant
