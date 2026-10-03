@@ -18,8 +18,6 @@ from steward_harness.landing.checkpoint import (
     TickClosure,
     WorktreeCheckpointer,
     WorktreeCheckpointError,
-    commit_subject,
-    parse_tick_closure,
 )
 from steward_harness.landing.worktree import WorktreeError, WorktreeManager
 from steward_harness.prompts import RHYTHM_FINDINGS, build_task_prompt, build_procedure_scope
@@ -35,8 +33,7 @@ from steward_harness.state import (
     StateDatabase,
     TaskId,
 )
-from steward_harness.task_query import OwnershipCalls, is_task_query, ownership_answer
-from steward_harness.task_calls import TaskCallServer
+from steward_harness.task_calls import TaskCallServer, TaskExecutionCalls
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
 from steward_harness.task_store import Task
@@ -379,29 +376,12 @@ class TaskRunner:
         except Busy:
             return task_id
         try:
-            self._answer_query(task_id)
             task = self.state.tasks.get(task_id)
             if not task.dispatchable:
                 return task_id
             return self._run_owned(task_id, task.revision)
         finally:
             lock.release()
-
-    def _answer_query(self, task_id):
-        # The caller holds the task lock, so the task reads as running here.
-        task = self.state.tasks._record(task_id)
-        if (task.disposition != "ask" or task.definition.hold or task.dispatchable
-                or not is_task_query("waiting", task.reason)):
-            return
-        answer = ownership_answer(self.state.tasks, task_id, task.reason, self.repositories)
-        try:
-            self.state.tasks.answer(task_id, answer, source=f"controller:task-query:{task.revision}")
-        except RuntimeError:
-            # An operator answer or cancellation may win while the read runs.
-            # It owns the task; a stale query must not reopen it.
-            current = self.state.tasks.get(task_id)
-            if is_task_query(current.status.value, current.reason):
-                raise
 
     def reconcile_worktrees(self) -> None:
         """Retain task environments; prune only missing Git registrations."""
@@ -470,7 +450,6 @@ class TaskRunner:
                 ),
                 consumed_input_ids=frozenset(live.consumed),
             )
-            self._answer_query(task_id)
 
         except (RuntimeExecutionError, RuntimeUnavailable, ExecutionBoundaryUnavailable) as error:
             if _boundary_failed(error):
@@ -673,7 +652,6 @@ class TaskRunner:
                 event_id=execution_id,
                 operator_context=operator_context,
                 read_only=bool(procedure and procedure.access == "read-only"),
-                live_task_queries=procedure is None,
                 understanding=None if procedure else (
                     OFFER_REF.format(task_id=task.task_id), live.baseline),
             ),
@@ -689,6 +667,7 @@ class TaskRunner:
                 lineage.provider if lineage.provider_session_id is not None else None
             ),
             sandbox_mode=procedure.access if procedure else "workspace-write",
+            allow_empty_output=True,  # The close operation owns disposition, not narration.
             on_session_started=session_started,
             on_session_invalidated=session_invalidated,
             on_input_ready=input_ready,
@@ -703,6 +682,7 @@ class TaskRunner:
             return request
 
         task_calls = None
+        calls = TaskExecutionCalls(self.state, task.task_id, self.repositories)
         watcher = None if procedure else threading.Thread(
             target=self._watch_offers, args=(task.task_id, live),
             name=f"offers-{task.task_id}", daemon=True)
@@ -711,10 +691,12 @@ class TaskRunner:
         try:
             if watcher:
                 watcher.start()
-            if procedure is None:
-                task_calls = TaskCallServer(OwnershipCalls(self.state.tasks, task.task_id, self.repositories))
-                request = replace(request, task_call_socket=task_calls.path,
-                                  on_process_started=task_calls.bind)
+            task_calls = TaskCallServer(calls)
+            def writer_started(pid, unit):
+                calls.start_writer()
+                task_calls.bind(pid, unit)
+            request = replace(request, task_call_socket=task_calls.path,
+                              on_process_started=writer_started)
             result = self.cognition.run(prepared, execution_id=execution_id)
         finally:
             if task_calls is not None:
@@ -740,10 +722,10 @@ class TaskRunner:
 
         closure_error = None
         try:
-            closure = parse_tick_closure(result.output, task.title)
+            closure = calls.closure(result.output)
         except ValueError as error:
             closure_error = str(error)
-            closure = TickClosure(commit_subject(None, task.title), "continue")
+            closure = TickClosure("steward: retain work without accepted closure", "continue", findings=result.output)
 
         # Staging rejects an unfinished Git operation or a switched branch.
         checkpointer.stage(expected_branch=task.branch)
@@ -755,6 +737,8 @@ class TaskRunner:
             disposition=closure.disposition,
             reason=closure.blocking_question,
             findings=closure.findings,
+            execution=calls.execution,
+            task_revision=calls.revision,
         )
         log.info("Task %s checkpoint: %s", task.task_id, closure.subject)
 

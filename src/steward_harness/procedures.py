@@ -15,7 +15,6 @@ from datetime import datetime
 
 from steward_harness.git_transport import GitTransportError
 from steward_harness.lease import Busy
-from steward_harness.notify import notification
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.state import ConversationBusy, ConversationId, TaskId, TaskSpec, TaskStatus
 from steward_harness.task_store import ProcedureRun
@@ -42,17 +41,6 @@ def captured(runs):
     """
     return {sha for task in runs if task.status is TaskStatus.DONE
             for sha in (task.procedure.candidate, *(task.procedure.activity or {}).values())}
-
-
-#: A delivered world file is a message, not an attachment: past this it is
-#: cut, and the rest stays in the world.
-DELIVERY_LIMIT = 12_000
-
-
-def _bounded_delivery(text, path):
-    if len(text) <= DELIVERY_LIMIT:
-        return text
-    return text[:DELIVERY_LIMIT] + f"\n\n[{path} continues in the world.]"
 
 
 def interval(rhythms, name, now):
@@ -353,7 +341,7 @@ class Procedures:
         return last is None or self.world.changed(last, paths)
 
     def run_world_rhythm(self, conversations, name, key):
-        """Run one interval as a world turn, then hand any reply to its owner."""
+        """Run one interval as a world turn and retain its final evidence."""
         rhythm = self.config.rhythms[name]
         procedure = self.config.procedures[rhythm.procedure]
         owner = ConversationId(f"rhythm:{name}")
@@ -368,7 +356,7 @@ class Procedures:
                 transport="rhythm", transport_key=name, source_event_key=key,
                 operator_id="harness:rhythm", text=Path(procedure.instructions).read_text(),
                 episode_input=f"Scheduled {name} rhythm ({key}).",
-                allow_empty_output=True, procedure=procedure,
+                allow_empty_output=True, procedure=procedure, notify_owner=rhythm.owner,
             )
         except (Busy, ConversationBusy, WorldContentConflict, WorldUpdatePending) as error:
             log.info("world rhythm %s deferred: %s", key, error)
@@ -384,23 +372,13 @@ class Procedures:
             log.error("world rhythm %s failed: %s", key, error)
             return
         recorded = result.reply_text.strip()
-        # Silence is the default: a run sends only what it asked to send.
-        message = notification(recorded)
-        if rhythm.deliver is not None and self.world is not None:
-            try:
-                changed = self.world.turn_file(str(result.turn_id), rhythm.deliver)
-            except (OSError, subprocess.SubprocessError, ValueError) as error:
-                # The reply and the world both keep the file; an unreadable
-                # one costs this delivery, never the run.
-                log.warning("world rhythm %s: %s unreadable: %s", key, rhythm.deliver, error)
-                changed = None
-            if changed and changed.strip():
-                message = _bounded_delivery(changed.strip(), rhythm.deliver)
-        if recorded and not message:
+        if recorded:
             log.info("world rhythm %s: reply recorded, not delivered", key)
-        # The ordinary result lane delivers a pending receipt to its owner.
+        # Record completion independently of any notification operation.
         self.state.save_result_receipt({
             "owner": rhythm.owner, "task_id": None, "source_key": key,
-            "result_text": recorded, "reply": message, "done": not (message and rhythm.owner),
-            "recorded_only": bool(recorded and not message), "recorded_at": time.time(),
+            "result_text": recorded, "reply": "", "done": True,
+            "recorded_only": bool(recorded
+                                  and str(result.turn_id) not in self.state.notification_sources()),
+            "recorded_at": time.time(),
         })

@@ -22,7 +22,7 @@ is also what a broken monitor produces.
   outage with a heartbeat.
 - Count restarts.
 - Count what rhythms recorded without sending. Rhythms are silent unless they
-  write `NOTIFY:` ([what a rhythm sends](rhythms.md#what-a-rhythm-sends)), so a
+  call `notify` ([what a rhythm sends](rhythms.md#what-a-rhythm-sends)), so a
   quiet topic proves nothing either way. `/status` gives the 24-hour count, and each
   silent world-rhythm reply logs `reply recorded, not delivered`. This proves
   recorded execution, not useful reflection. Absence from a bounded count or

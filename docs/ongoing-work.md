@@ -51,7 +51,7 @@ stored in SQL. The frontmatter fields are `repository`, `title`, `origin`,
 **The work branch** lives in the product repository's agent-side clone, named
 `tasks/<task-id>`. The native session commits there as it likes, and its commits
 stay on the branch. Each slice ends with one checkpoint commit the harness
-makes: its subject is the session's `COMMIT:` line, its message body is the
+makes: its subject comes from the session's typed close operation, its message body is the
 session's findings, and its `Disposition:` and `Reason:` trailers record the
 disposition. A slice that changed nothing still gets that commit, empty, so its
 findings land in history. There is no task-prose file in the product checkout;
@@ -123,22 +123,17 @@ Work happens in **slices**. One slice is one provider execution holding the
 task's lock, in a retained checkout of `tasks/<task-id>`, ending in one commit
 the harness makes.
 
-The session ends its final response with three lines:
-
-```text
-COMMIT: refactor: route reporting through the streaming reader
-DISPOSITION: continue
-QUESTION: NONE
-```
+The session calls the native `steward_tasks` tool with `operation="close"`, a
+stable `key`, a commit `subject` and an explicit `disposition`:
 
 - `continue` — more work remains on this exact task. It will be picked up again
   on a later pass, with the same branch and, when it survives, the same provider
   session.
-- `ask` — it cannot proceed without an answer, which goes in `QUESTION:`. The
+- `ask` — it cannot proceed without an answer, which goes in the call's `question` field. The
   task waits.
 - `idle` — finished. Workspace-write work now owes a publication.
 
-If the closure is malformed, the harness keeps the work, commits it, and blocks
+If the close operation is missing, invalid or conflicting, the harness keeps the work, commits it, and blocks
 the task rather than guessing what the session meant. A slice that crashes or is
 killed leaves no half-state: the lock is a `flock`, so it dies with the process,
 and the task simply never left the queue.
@@ -270,17 +265,12 @@ different candidate.
 `owner:` is required on every rhythm — you must write it, even to write `null`.
 
 A configured `telegram:<topic-id>` or `desk:<conversation>` becomes the
-protected result owner of every task that rhythm creates. A run that asks or
-fails, or finishes with findings carrying a `NOTIFY:` line, goes through the
-ordinary retained-result transport path. Delivery does not wait for the owning
-conversation. Its later optional assessment sees the brief and findings as
-*evidence*, can record what matters in the world, and can propose follow-up work
-within its existing authority. Assessment prose does not send a second message. A run that finishes
-without asking to notify never reaches assessment at all. Its findings stay on
-its task ref, and a writing run's work lands, but no turn runs and no message is
-sent. Assessment cannot grant
-itself repository access it did not have, and cannot steer tasks owned by
-another conversation.
+protected result owner of every task that rhythm creates. Questions and failures
+retain their ordinary task-result route. Completed findings are evidence only;
+a deliberate `notify` call queues a message to that owner independently of the
+final reply and without assessment. Its findings stay on its task ref, and a
+writing run's work lands whether it notifies or not.
+Assessment cannot grant itself repository access or steer another owner's tasks.
 
 `owner: null` means the run's evidence is retained in its accepted task record
 and nothing else happens: no assessment turn, no message, no follow-up
@@ -443,7 +433,7 @@ Be clear about these before you design a body of work around the harness.
 
 ## Where to go next
 
-- [Execution lifecycle](execution-lifecycle.md) — closure syntax, status
+- [Execution lifecycle](execution-lifecycle.md) — closure operations, status
   precedence, continuation and cancellation in detail.
 - [Rhythms invoke procedures](rhythms.md) — the procedure/rhythm/target
   roles and their evidence boundaries.

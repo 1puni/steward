@@ -174,12 +174,10 @@ moving for the quiet duration. Task-store bookkeeping and procedure evidence,
 the rhythm's own included, are never input. See [schedule semantics](automatic-deployment.md#git-quiet-periods-and-intervals).
 
 Manual runs are explicit new requests. Every rhythm explicitly names a configured
-result owner or `null` for retained evidence only. Owned findings enter ordinary
-world assessment, authorized follow-up admission and durable result delivery;
-there is no separate reflection notification lifecycle. A finished rhythm run
-is selected for assessment only when its findings ask to notify (`NOTIFY:`); its
-evidence, or a writing run's landed work, is kept either way.
-A checkpoint itself does not broadcast to Telegram.
+result owner or `null` for retained evidence only. Completed rhythm findings
+remain evidence. Deliberate notification calls queue delivery receipts directly,
+independently of final narration or assessment. Questions and failures retain
+ordinary result delivery. A checkpoint itself does not broadcast to Telegram.
 
 Read-only access constrains mutations; it does not turn every procedure into a
 full-tree audit. Scheduled and explicit procedure runs follow their accepted
@@ -293,17 +291,17 @@ not establish a deployed release.
 
 ### Ownership reads during task execution
 
-Ordinary repository task executions receive the same invocation-bound tool with
-only `query` authorized: `operation="query"`, `repository`, `text`. It calls the
-existing ownership query over accepted task Git and live status, returning an
-immediate bounded observation: at most ten unfinished matches and 7,500 JSON
-characters, with observation time, revision, ownership relation and truncation.
-It excludes the querying task and discloses no peer briefs or owner addresses.
-No task admission or steering authority is granted to a task execution.
-Procedures and rhythms retain their existing restrictions and do not receive
-this capability. Public read-only conversations remain excluded.
+Repository task and procedure executions receive the same invocation-bound tool.
+`query` takes `repository` and `text` and returns a bounded ownership observation:
+at most ten unfinished matches and 7,500 JSON characters, with observation time,
+revision, ownership relation and truncation. It excludes the querying task and
+discloses no peer briefs or owner addresses. `notify` queues text to the task's
+bound owner; `close` records execution intent for acceptance after writer teardown
+([execution lifecycle](execution-lifecycle.md#execution-closure-and-continuation)).
+Tasks cannot submit or steer peer work. World rhythms receive notification-only
+authority. Public read-only conversations remain excluded.
 
-The older `QUESTION: TASK_QUERY:` closure is retained for historical outputs
-and executions without this capability; ordinary task prompts teach the live
-query. Both routes use the same ownership reader. A query is evidence, not a
-lease or a grant to change another task.
+Ownership reads use this tool only. A question containing `TASK_QUERY:` is an
+ordinary operator question, never a controller command. Observations grant no
+lease or authority to change another task. Missing native tool support fails
+closed; final prose cannot substitute for a call.

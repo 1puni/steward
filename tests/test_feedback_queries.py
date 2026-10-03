@@ -8,46 +8,11 @@ from steward_harness.config.schema import TargetConfig
 from steward_harness.kernel import StewardKernel
 from steward_harness.state import ConversationId, TaskSpec, TaskStatus
 from steward_harness.targets import Targets
-from test_conversations import FakeCognition, _reply, _service
+from test_conversations import FakeCognition, _reply, _service, _task_reply
 from test_git_tasks import harness
 from test_rewrite_convergence import setup_procedures
 from test_task_no_changes import InvestigationAdapter
 from test_task_runner_kernel import _repository
-
-
-def test_query_answers_same_task_and_survives_crash_before_answer(tmp_path, monkeypatch):
-    bare, clone = _repository(tmp_path)
-    adapter = InvestigationAdapter()
-    state, runner, statuses, reconciler = harness(tmp_path / "state", bare, clone, adapter)
-    owner = "telegram:17"
-    peer, _ = state.tasks.create(TaskSpec("app", "Repair consumer", "PRIVATE BODY"), owner="telegram:other")
-    task, _ = state.tasks.create(TaskSpec("app", "Reflect", "Find current ownership"), owner=owner)
-    execute = adapter.execute
-    adapter.execute = lambda request: replace(execute(request), output=(
-        'Inspect ownership.\nCOMMIT: inspect\nDISPOSITION: ask\n'
-        'QUESTION: TASK_QUERY: {"repository":"app","text":"consumer"}'))
-    answer = runner._answer_query
-    monkeypatch.setattr(runner, "_answer_query", lambda _: None)
-    runner.prepare(task)
-    assert state.tasks.get(task).status is TaskStatus.WAITING
-    assert state.pending_task_result_for(ConversationId(owner)) is None
-    # Accepted ask survives; normal task owner supplies its answer on next pass.
-    kernel = StewardKernel(state, reconciler, runner)
-    work = dict(kernel.owners())[("task", task)]
-    monkeypatch.setattr(runner, "_answer_query", answer)
-    adapter.execute = execute
-    work()
-    kernel.stop()
-    prompt = adapter.requests[-1].prompt
-    assert str(peer) in prompt and "another conversation" in prompt
-    assert "PRIVATE BODY" not in prompt and "telegram:other" not in prompt
-    assert "accepted_revision" in prompt and "observed_at" in prompt
-    assert '"origin": "controller"' in prompt
-    assert '"author": "controller:task-query:' in prompt
-    assert any("Controller ownership observation" in text
-               for _, _, text, _ in state.tasks.get(task).inputs)
-    assert "TASK_QUERY:" not in (state.tasks.get(task).reason or "")
-    assert not tuple((k, t) for _, k, t, _ in state.tasks.get(task).pending)
 
 
 @pytest.mark.parametrize("query", ['{"repository":"secret","text":""}', '{"repository":"app","text":"","write":true}', 'not json'])
@@ -57,7 +22,7 @@ def test_query_rejects_ungranted_repository_and_bad_shape_without_leaking(tmp_pa
     state, runner, statuses, _ = harness(tmp_path / "state", bare, clone, InvestigationAdapter())
     task, _ = state.tasks.create(TaskSpec("app", "Reflect", "Query"))
     state.tasks.create(TaskSpec("secret", "Secret title", "Secret body"))
-    result = ownership_answer(state.tasks, task, "TASK_QUERY: " + query, runner.repositories)
+    result = ownership_answer(state.tasks, task, query, runner.repositories)
     assert result.startswith("Task query rejected:")
     assert "Secret title" not in result and "Secret body" not in result
 
@@ -104,7 +69,7 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     assert {r["task_id"] for r in receipts} == {str(task)}
     assert {r["owner"] for r in receipts} == {"telegram:17"}
     assert [r["observation"][1] for r in receipts] == ["satisfied", "failed", "satisfied"]
-    cognition = FakeCognition([_reply("Deployment requires repair.")])
+    cognition = FakeCognition([_task_reply(dict(operation="notify", key="repair", text="Deployment requires repair."))])
     service = _service(root, cognition)
     # Skip already-covered publication receipt: this journey exercises later target evidence.
     for item in (old, task):
@@ -131,7 +96,9 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     assert "Desired revision: " + revision in cognition.requests[-1].prompt
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
     assert len(cognition.requests) == 1
-    assert sent[-1][0] == f"production recovered and is live at {revision[:12]}."
+    restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    assert {text for text, _ in sent[-2:]} == {
+        f"production recovered and is live at {revision[:12]}.", "Deployment requires repair."}
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed")) is None
 
 
@@ -145,14 +112,14 @@ def test_query_bounds_results_and_observes_live_lock_without_exposing_content(tm
              for i in range(11)]
     with task_lock(runner.state.tasks.locks_root, peers[0]):
         answer = ownership_answer(state.tasks, requester,
-                                  'TASK_QUERY: {"repository":"app","text":"consumer"}', runner.repositories)
+                                  '{"repository":"app","text":"consumer"}', runner.repositories)
         locked = ownership_answer(state.tasks, requester,
-                                  'TASK_QUERY: {"repository":"app","text":"consumer 0"}', runner.repositories)
+                                  '{"repository":"app","text":"consumer 0"}', runner.repositories)
         assert '"status": "running"' in locked
     document = json.loads(answer.partition("\n")[2])
     assert document["truncated"] and len(document["tasks"]) == 10
     matching = ownership_answer(state.tasks, requester,
-                                'TASK_QUERY: {"repository":"app","text":"consumer 0"}', runner.repositories)
+                                '{"repository":"app","text":"consumer 0"}', runner.repositories)
     assert '"status": "queued"' in matching
     assert '"ownership": "same conversation"' in matching
     assert "Private body" not in answer and "telegram:17" not in answer

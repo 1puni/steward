@@ -10,7 +10,7 @@ from test_task_runner_kernel import (
     EditingAdapter, _repository, _git, publish_task,
 )
 from test_world_turn_checkpoint import _checkpoint, _git_world, _finish, _commit_all, _git_path
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import RepositoryConfig, UntrustedExecutionConfig
 from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.kernel import repository_lease

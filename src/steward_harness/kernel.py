@@ -9,7 +9,6 @@ from .config.schema import ControllerConfig
 from .repository_reconciler import RepositoryReconciler
 from .state import StateDatabase
 from .task_runner import TaskRunner
-from .task_query import is_task_query
 from .lease import Busy, Lease
 
 # What a lane yields: who the work belongs to, and the work.
@@ -126,7 +125,7 @@ class StewardKernel:
         """
         if not self.state.paused():
             owed = (task.task_id for task in self.state.tasks.all()
-                    if task.dispatchable or is_task_query(task.status.value, task.reason))
+                    if task.dispatchable)
             for task_id in owed:
                 yield ("task", task_id), lambda task_id=task_id: self.tasks.prepare(
                     task_id

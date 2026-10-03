@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from state_fixtures import admit_task
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import RepositoryConfig, StewardConfig, UntrustedExecutionConfig
 from steward_harness.conversations import ConversationService
 from steward_harness.daemon import KernelCommands

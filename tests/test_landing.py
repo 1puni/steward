@@ -19,8 +19,6 @@ from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.landing.merger import Tested
 from steward_harness.landing.checkpoint import (
     WorktreeCheckpointer,
-    commit_subject,
-    parse_tick_closure,
 )
 from steward_harness.landing.gates import GateRunner
 from steward_harness.landing.merger import (
@@ -136,33 +134,6 @@ def _land(engine: PromotionEngine, repo: dict, branch: str) -> str | None:
     if isinstance(prepared, ValidationFailure):
         return prepared.reason
     return None if publish(engine.transport, prepared) else "not landed"
-
-
-@pytest.mark.parametrize(
-    ("proposal", "expected"),
-    [
-        ("COMMIT: feat: preserve work", "feat: preserve work"),
-        ("COMMIT: NONE", "steward: Fallback title"),
-        ("unparseable prose", "steward: Fallback title"),
-    ],
-)
-def test_commit_subject_uses_a_deterministic_fallback(
-    proposal: str, expected: str
-) -> None:
-    assert commit_subject(proposal, "Fallback title") == expected
-
-
-def test_tick_closure_is_typed_and_rejects_questionless_ask() -> None:
-    closure = parse_tick_closure(
-        "COMMIT: feat: partial\nDISPOSITION: continue\nQUESTION: NONE",
-        "Fallback",
-    )
-    assert closure.disposition == "continue"
-
-    with pytest.raises(ValueError, match="requires a question"):
-        parse_tick_closure(
-            "COMMIT: feat: work\nDISPOSITION: ask\nQUESTION: NONE", "Fallback"
-        )
 
 
 @pytest.mark.parametrize("gate_cwd", ["..", "../../outside"])

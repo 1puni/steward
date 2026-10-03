@@ -58,11 +58,11 @@ def test_world_rhythm_runs_once_per_interval_as_a_world_turn(tmp_path):
     assert request.sandbox_mode == "workspace-write"
     assert "Consolidate the world." in request.prompt and "TASK_PROPOSAL" not in request.prompt
     # It is told that nothing is sent unless it asks.
-    assert "start a line with `NOTIFY:`" in request.prompt
+    assert 'operation="notify"' in request.prompt
     # History is the world's Git, not a section of its files.
     assert "The world is Git." in request.prompt and "delete freely" in request.prompt
-    # A rhythm receives no task endpoint and cannot admit tasks.
-    assert request.task_call_socket is None
+    # A rhythm receives a notification capability; it cannot admit tasks.
+    assert request.task_call_socket is not None
     assert state.tasks.all() == []
     # Its reply asked to notify no one: recorded, not sent.
     receipt = state.result_receipt("rhythm:sleep:20")
@@ -114,8 +114,14 @@ def test_failed_interval_is_consumed_rather_than_retried(tmp_path):
     assert not (checkpoint.world.root / "decision.md").exists()
 
 
-def _replying(output, *, write=None):
+def _replying(output, *, write=None, notify=None):
     def edit(request):
+        if notify:
+            import os
+            from test_task_calls import call
+            request.on_process_started(os.getpid(), None)
+            receipt = call(request.task_call_socket, operation="notify", key="notice", text=notify)
+            assert receipt["accepted"]
         for path, text in (write or {}).items():
             (request.cwd / path).write_text(text)
 
@@ -154,72 +160,44 @@ def test_a_world_rhythm_that_does_not_ask_to_notify_sends_nothing(tmp_path, outp
     ("**NOTIFY:** Sleep did not complete.\nREM wrote no brief.", "Sleep did not complete.\nREM wrote no brief."),
     ("- notify: One thing needs you.", "One thing needs you."),
 ])
-def test_a_world_rhythm_sends_what_follows_its_notify_line(tmp_path, output, message):
+def test_a_world_rhythm_does_not_interpret_notification_markers(tmp_path, output, message):
     config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, _replying(output))
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
     receipt = state.result_receipt("rhythm:sleep:20")
-    assert receipt["reply"] == message and not receipt["done"] and not receipt["recorded_only"]
+    assert receipt["reply"] == "" and receipt["done"] and receipt["recorded_only"]
     assert receipt["result_text"] == output.strip()
 
 
-def _delivering(tmp_path, cognition):
-    config, state, checkpoint, service, cognition, _ = _rhythm(tmp_path, cognition)
-    data = config.model_dump(mode="json")
-    data["rhythms"]["sleep"]["deliver"] = "morning_brief.md"
-    config = StewardConfig.model_validate(data)
-    return config, state, checkpoint, service, Procedures(config, state, {}, world=checkpoint.world)
-
-
-def test_a_rhythm_that_rewrote_its_deliver_file_sends_the_file(tmp_path):
-    brief = "Good morning, V.\n\nTwo days to Wednesday.\n"
-    config, state, checkpoint, service, procedures = _delivering(
-        tmp_path, _replying("<br>", write={"morning_brief.md": brief}))
+def test_writing_a_dated_brief_does_not_send_it(tmp_path):
+    brief = "2026-10-03\nGood morning, V.\n" + "x" * 12050
+    config, state, checkpoint, service, cognition, procedures = _rhythm(
+        tmp_path, _replying("Brief written.", write={"morning_brief.md": brief}))
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
-    receipt = state.result_receipt("rhythm:sleep:20")
-    assert receipt["reply"] == brief.strip() and not receipt["done"]
-    # The file is the message whatever the reply says, a NOTIFY line included.
-    state, checkpoint, service, _ = runtime(
-        tmp_path, _replying("NOTIFY: See the brief.", write={"morning_brief.md": brief + "More.\n"}))
-    procedures = Procedures(config, state, {}, world=checkpoint.world)
-    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
-    assert state.result_receipt("rhythm:sleep:21")["reply"] == (brief + "More.").strip()
+    assert (checkpoint.world.root / "morning_brief.md").read_text() == brief
+    assert state.result_receipt("rhythm:sleep:20")["reply"] == ""
+    assert not state.pending_result_receipts()
 
 
-def test_an_unchanged_deliver_file_is_not_resent(tmp_path):
-    brief = "Good morning, V.\n"
-    config, state, checkpoint, service, procedures = _delivering(
-        tmp_path, _replying("", write={"morning_brief.md": brief}))
-    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
-    assert state.result_receipt("rhythm:sleep:20")["reply"] == brief.strip()
-    # The next night leaves it as it was: only an explicit notification is sent.
-    state, checkpoint, service, _ = runtime(
-        tmp_path, _replying("NOTIFY: Sleep did not complete.", write={"morning_brief.md": brief}))
-    procedures = Procedures(config, state, {}, world=checkpoint.world)
-    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
-    assert state.result_receipt("rhythm:sleep:21")["reply"] == "Sleep did not complete."
-
-
-def test_a_long_deliver_file_is_cut_with_a_pointer(tmp_path):
-    from steward_harness.procedures import DELIVERY_LIMIT
-    config, state, checkpoint, service, procedures = _delivering(
-        tmp_path, _replying("", write={"morning_brief.md": "x" * (DELIVERY_LIMIT + 50)}))
-    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
-    reply = state.result_receipt("rhythm:sleep:20")["reply"]
-    assert reply.startswith("x" * DELIVERY_LIMIT)
-    assert reply.endswith("[morning_brief.md continues in the world.]")
-
-
-def test_deliver_names_a_file_inside_the_world(tmp_path):
+def test_removed_deliver_key_is_not_silently_accepted(tmp_path):
     (tmp_path / "world").mkdir()
     data = _config(tmp_path, tmp_path / "world").model_dump(mode="json")
-    data["rhythms"]["sleep"]["deliver"] = "../outside.md"
-    with pytest.raises(ValueError, match="inside the world"):
+    data["rhythms"]["sleep"]["deliver"] = "morning_brief.md"
+    with pytest.raises(ValueError, match="Extra inputs"):
         StewardConfig.model_validate(data)
+
+
+def test_shipped_1puni_configuration_has_no_retired_delivery_key():
+    from pathlib import Path
+    import yaml
+    config = StewardConfig.model_validate(yaml.safe_load(
+        Path("instances/1puni/steward.yaml").read_text()))
+    assert config.rhythms["rem"].after == "sleep"
+    assert all("deliver" not in rhythm.model_dump() for rhythm in config.rhythms.values())
 
 
 def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path):
     config, state, checkpoint, service, cognition, procedures = _rhythm(
-        tmp_path, _replying("Investigation saved.\nNOTIFY: Investigation saved for the morning."))
+        tmp_path, _replying("Investigation saved.", notify="Investigation saved for the morning."))
     daemon = StewardDaemon(config, tmp_path / "steward.yaml")
     daemon._procedures = procedures
     sent = []
@@ -242,7 +220,7 @@ def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path
     assert state.tasks.all() == []
     assert len(sent) == 1
     chat, topic, text, source = sent[0]
-    assert (chat, topic) == (1, 3) and source.startswith("rhythm:sleep:")
+    assert (chat, topic) == (1, 3) and source.startswith("notify:")
     assert text == "Investigation saved for the morning."
     assert state.lineage(ConversationId("rhythm:sleep")).provider == "codex"
 

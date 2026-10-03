@@ -301,6 +301,14 @@ adjacent receipt directories during upgrades. A crash between remote acceptance 
 the local receipt write can duplicate that piece: delivery is at-least-once,
 not exactly-once.
 
+Notification calls use the existing private result receipts. Stable owner/source
+and key identify one intent; exact replay returns its receipt and changed-payload
+replay is rejected. Accepted queuing survives provider failure and world
+acceptance failure. Zero calls send nothing; several calls remain distinct.
+A provider without a working tool channel records evidence only. Neither final
+reply parsing nor assessment is a fallback send mechanism.
+
+
 ### Telegram ingress
 
 Each update is written to its receipt under `<state_db>.telegram-receipts/<chat>/` before

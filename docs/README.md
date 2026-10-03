@@ -33,7 +33,7 @@ one of them is wrong, and that is worth fixing.
 | --- | --- |
 | [Kernel](kernel-contract.md) | Authority, configuration, sources of truth, the two acceptance paths, Telegram ingress, deliberate limits, concurrency, crash rules and the validation map |
 | [Git-native tasks](git-native-tasks.md) | The task document, admission, procedures and targets, privacy, integration and recurrence |
-| [Execution lifecycle](execution-lifecycle.md) | Task files, status, closure syntax, continuation and cancellation |
+| [Execution lifecycle](execution-lifecycle.md) | Task files, status, closure operations, continuation and cancellation |
 | [Durable world turns](world-turn-durability.md) | Candidate custody, world application, dependent effects and replay |
 | [Live task understanding](live-task-understanding.md) | How a running agent's account becomes durable without ending its turn |
 | [Rhythms](rhythms.md) | Procedures on a schedule or after quiet periods, world rhythms (`input: world`), due calculation, result owners and operator controls |

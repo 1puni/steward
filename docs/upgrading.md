@@ -139,6 +139,25 @@ old database, adjacent files, task history, turn and source identities, and nati
 lineage; and writes `epoch50-conversion.json`, which must say `complete: true`
 before the result is deployable.
 
+## Callable notifications and task closure
+
+Drain active executions through the existing release path before switching code;
+`/pause` alone is not a writer barrier. New invocations receive the native tool
+and updated procedure instructions together. Remove any rhythm `deliver` keys
+from installed configuration before startup; unknown keys remain a validation
+error. The checked-in 1puni config removes its REM key in the same release. Preserve task refs, native homes,
+world-turn records and adjacent result/transport receipts. Existing prepared
+messages replay exactly; unprepared final markers acquire no sending authority.
+A retained query-shaped waiting question is now ordinary operator input, so
+inspect any such waiting tasks and answer or retry them deliberately.
+
+New world rhythms and procedure tasks use callable notification and task closure.
+No tool capability means recorded-only notification and no inferred idle intent.
+Verify tonight's schedule, current procedure files, provider MCP startup, a
+notification receipt, settled task closure and brief document freshness on
+the deployed host. Local scripted-provider tests do not establish those live
+facts. Do not manually replay accepted messages to test delivery.
+
 ## Report the outcome
 
 Say what version now runs, what was converted, what evidence survived, what

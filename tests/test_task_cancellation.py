@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import StewardConfig
 from steward_harness.conversations import ConversationService
 from steward_harness.daemon import KernelCommands

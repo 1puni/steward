@@ -163,7 +163,7 @@ class RuntimeInput:
     #: A controller notice that asks nothing of the session, such as an
     #: understanding offer's acceptance. The session may answer it, but that
     #: answer is not the execution's word: its final response stays the one
-    #: that ended the work, closure lines and all.
+    #: that ended the work. Disposition is a separate native operation.
     receipt: bool = False
 
     def __post_init__(self) -> None:

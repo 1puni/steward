@@ -79,32 +79,6 @@ class GitWorld:
         except (OSError, subprocess.TimeoutExpired):
             return True
 
-    def turn_file(self, event_id: str, path: str) -> str | None:
-        """`path` as the accepted commit of turn `event_id` left it, if that commit changed it.
-
-        The accepted commit is found by its turn trailer, not by the turn's
-        candidate: a turn that landed behind another is replayed onto the
-        world as a new commit. None when no accepted commit names the turn,
-        when it did not change `path`, or when it removed it.
-        """
-        validate_turn_id(event_id)
-        commit = next((sha for sha in self._git(
-            "log", "--format=%H", "--fixed-strings", f"--grep={TURN_TRAILER}: {event_id}", "HEAD", "--",
-        ).split() if self.trailers(sha).get(TURN_TRAILER) == event_id), None)
-        if commit is None:
-            return None
-        changed = run_agent_git(
-            self.execution_broker, "diff", "--quiet", f"{commit}^", commit, "--", path,
-            cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
-        ).returncode != 0
-        if not changed:
-            return None
-        shown = run_agent_git(
-            self.execution_broker, "show", f"{commit}:{path}",
-            cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
-        )
-        return shown.stdout if shown.returncode == 0 else None
-
     def finish(self, event_id: str, user_text: str, reply_text: str, *,
                base: str, source: str) -> None:
         """Commit this attempt's files as the turn, its exchange as the message.

@@ -113,8 +113,8 @@ rhythm's input; the world is read by its owner's assessment, not observed for
 admission. A failed fetch skips that rhythm for the poll without changing its
 quiet state; other rhythms remain eligible.
 
-A finished rhythm run whose findings do not ask to notify (`NOTIFY:`) owes its
-owner nothing. A review's checkpoint is retained evidence, a writing run's work
+A finished rhythm run records its findings without sending them. Notification
+calls queue independent delivery receipts. A review's checkpoint is retained evidence, a writing run's work
 lands, and the result lane never selects either for assessment or delivery; see
 [rhythms](rhythms.md).
 

@@ -4,17 +4,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-PREFIX = "TASK_QUERY:"
-
-
-def is_task_query(status, reason):
-    return status == "waiting" and bool(reason and reason.startswith(PREFIX))
-
-
 def ownership_answer(tasks, task_id, question, repositories):
     """Return bounded metadata only; titles are evidence, never authority."""
     try:
-        query = json.loads(question.removeprefix(PREFIX).strip())
+        query = json.loads(question)
         if (not isinstance(query, dict) or set(query) != {"repository", "text"}
                 or not isinstance(query["repository"], str)
                 or not isinstance(query["text"], str) or len(query["text"]) > 100):

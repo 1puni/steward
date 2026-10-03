@@ -16,6 +16,7 @@ from textwrap import dedent
 
 import pytest
 
+from task_tool_fixtures import NATIVE_CALL
 from steward_harness.runtime.process import ProcessController
 from steward_harness.runtime.providers.claude import ClaudeRuntime
 from test_quiet_rhythms import commit, quiet_harness, refresh
@@ -35,12 +36,12 @@ _HEARTBEAT = (
 )
 
 
-def _native(tmp_path, *, finish_after=None):
+def _native(tmp_path, *, finish_after=None, final="Worked past the provider deadline."):
     """A stream-json Claude that spawns a heartbeat child, then either closes
     after ``finish_after`` seconds or waits for the native interrupt."""
     pids, heartbeat = tmp_path / "native.pids", tmp_path / "heartbeat"
     executable = tmp_path / "long-provider"
-    executable.write_text(f"#!{sys.executable}\n" + dedent(f'''
+    executable.write_text(f"#!{sys.executable}\n" + NATIVE_CALL + dedent(f'''
         import json, os, pathlib, subprocess, sys, time
         def emit(**event):
             print(json.dumps({{'session_id': {SESSION!r}, **event}}), flush=True)
@@ -52,10 +53,9 @@ def _native(tmp_path, *, finish_after=None):
         if {finish_after!r} is not None:
             time.sleep({finish_after!r})
             pathlib.Path('result.txt').write_text('completed past the former deadline\\n')
+            assert steward_call(operation='close', key='finish', subject='feat: long native work', disposition='idle')['pending']
             emit(type='result', user_message_uuid=command['uuid'], subtype='success',
-                 terminal_reason='completed', usage={{}}, result=(
-                     'Worked past the provider deadline.\\n'
-                     'COMMIT: feat: long native work\\nDISPOSITION: idle\\nQUESTION: NONE'))
+                 terminal_reason='completed', usage={{}}, result={final!r})
         else:
             interrupt = json.loads(sys.stdin.readline())
             assert interrupt['request'] == {{'subtype': 'interrupt'}}
@@ -230,3 +230,13 @@ def test_a_finite_deadline_must_still_be_positive(tmp_path, timeout):
             execution_id="turn", resolved=resolve_model("claude", "balanced"),
             provider_session_id=None, prompt="work", cwd=tmp_path, timeout_seconds=timeout,
         )
+
+
+def test_native_tool_close_accepts_no_final_narration(tmp_path):
+    state, runner, task_id, bare, adapter, pids, heartbeat = _native(
+        tmp_path, finish_after=0.1, final="")
+    run_task(runner)
+    assert state.tasks.get(task_id).status.value == "done"
+    assert state.tasks.get(task_id).findings is None
+    assert adapter.requests[0].allow_empty_output
+    assert _git(f"--git-dir={bare}", "show", "main:result.txt", cwd=tmp_path) == "completed past the former deadline"

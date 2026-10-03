@@ -340,13 +340,15 @@ def test_unaccepted_live_sources_cannot_grant_authority(tmp_path, disposition):
     assert not service._state.tasks.all()
 
 
-def test_source_receipt_replays_after_restart_but_cannot_authorize_new_work(tmp_path):
+@pytest.mark.parametrize("operation", ["submit", "notify"])
+def test_source_receipt_replays_after_restart_but_cannot_authorize_new_work(tmp_path, operation):
     state = StateDatabase(tmp_path / 'state.db')
     state.tasks.repositories = {'app'}
     owner = state.open_conversation(ConversationId('telegram:owner'), provider='codex', profile='balanced')
     turn, _ = state.start_turn(owner.conversation_id, 'first', 'operator', 'work')
     calls = TaskCalls(state, turn.turn_id)
-    request = submission(source_id=str(turn.turn_id))
+    request = (submission(source_id=str(turn.turn_id)) if operation == "submit" else
+               dict(operation="notify", key="notice", text="A message", source_id=str(turn.turn_id)))
     receipt = calls(request)
     state.interrupt_turn(turn.turn_id, 'lost parent')
     with pytest.raises(ValueError, match='active execution'):
@@ -359,4 +361,55 @@ def test_source_receipt_replays_after_restart_but_cannot_authorize_new_work(tmp_
     state.clear_conversation(owner.conversation_id)
     with pytest.raises(ValueError, match='active execution'):
         calls(submission('after-clear', source_id=str(second.turn_id)))
-    assert len(state.tasks.all()) == 1
+    assert len(state.tasks.all()) == int(operation == "submit")
+
+
+@pytest.mark.parametrize('count', [0, 1, 3])
+def test_notifications_are_independent_calls_and_final_reply_is_not_a_send(tmp_path, count):
+    receipts = []
+    def during(request):
+        for n in range(count):
+            receipt = call(request.task_call_socket, operation='notify', key=f'message-{n}', text=f'Notice {n}')
+            assert receipt['accepted'] and not receipt['replayed']
+            receipts.append(receipt)
+            assert call(request.task_call_socket, operation='notify', key=f'message-{n}', text=f'Notice {n}')['replayed']
+    service = _service(tmp_path, CallingCognition(during))
+    _turn(service, 'notify')
+    pending = service._state.pending_result_receipts()
+    assert len(pending) == count
+    assert {r['reply'] for r in pending} == {f'Notice {n}' for n in range(count)}
+    assert {r['source_key'] for r in pending} == {r['receipt'] for r in receipts}
+
+
+def test_notification_survives_crash_before_receipt_and_exact_replay(tmp_path, monkeypatch):
+    state = StateDatabase(tmp_path / 'state.db')
+    owner = state.open_conversation(ConversationId('telegram:owner'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'event', 'operator', 'work')
+    calls = TaskCalls(state, turn.turn_id)
+    original = state.save_result_receipt
+    def crash(receipt):
+        original(receipt)
+        raise OSError('lost response after durable intent')
+    monkeypatch.setattr(state, 'save_result_receipt', crash)
+    request = dict(operation='notify', key='notice', text='A decision is needed.')
+    with pytest.raises(OSError):
+        calls(request)
+    fresh = StateDatabase(state.path)
+    recovered = TaskCalls(fresh, turn.turn_id)(request)
+    assert recovered['accepted'] and recovered['replayed']
+    assert len(fresh.pending_result_receipts()) == 1
+    with pytest.raises(ValueError, match='different text'):
+        TaskCalls(fresh, turn.turn_id)(request | {'text': 'Changed intent'})
+
+
+def test_rhythm_notification_is_bound_to_configured_owner_and_cannot_mutate_tasks(tmp_path):
+    state = StateDatabase(tmp_path / 'state.db')
+    owner = state.open_conversation(ConversationId('rhythm:sleep'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'rhythm:sleep:1', 'harness:rhythm', 'work')
+    calls = TaskCalls(state, turn.turn_id, notify_owner='telegram:world')
+    receipt = calls(dict(operation='notify', key='notice', text='Sleep needs help.'))
+    assert receipt['owner'] == 'telegram:world' and receipt['source_id'] == str(turn.turn_id)
+    with pytest.raises(ValueError, match='only notify'):
+        calls(submission())
+    with pytest.raises(ValueError, match='incorrect fields'):
+        calls(dict(operation='notify', key='notice', text='Sleep needs help.', owner='telegram:elsewhere'))

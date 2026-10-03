@@ -30,10 +30,11 @@ for line in sys.stdin:
             result = {}
         elif method == 'tools/list':
             result = {'tools': [{'name': 'task',
-                'description': 'Operate on authorized Steward tasks; task executions only permit query (repository, text), a bounded ownership observation. Mutations require a stable, distinct key per intent; retry identical requests with the same key. Accepted Git receipts survive parent failure.',
+                'description': 'Operate on authorized Steward tasks; Notify queues text to the bound owner using a stable key. Task executions permit query (repository, text), notify (key, text), and close (key, subject, disposition; question only for ask). Close returns pending intent, accepted only after writer teardown. Mutations require a stable, distinct key per intent; retry identical requests with the same key. Accepted Git receipts survive parent failure.',
                 'inputSchema': {'type': 'object', 'required': ['operation'],
-                    'properties': {'operation': {'type': 'string', 'enum': ['submit', 'list', 'show', 'answer', 'retry', 'note', 'cancel', 'query']},
-                        **{k: {'type': 'string'} for k in ['source_id', 'key', 'repository', 'title', 'brief', 'task_id', 'text']}},
+                    'properties': {'operation': {'type': 'string', 'enum': ['submit', 'list', 'show', 'answer', 'retry', 'note', 'cancel', 'query', 'notify', 'close']},
+                        **{k: {'type': 'string'} for k in ['source_id', 'key', 'repository', 'title', 'brief', 'task_id', 'text', 'subject', 'question']},
+                        'disposition': {'type': 'string', 'enum': ['continue', 'idle', 'ask']}},
                     'additionalProperties': False}}]}
         elif method == 'tools/call' and message.get('params', {}).get('name') == 'task':
             data = json.dumps(message['params'].get('arguments', {})).encode()
@@ -45,7 +46,7 @@ for line in sys.stdin:
             with response:
                 receipt = json.loads(response.read())
             result = {'content': [{'type': 'text', 'text': json.dumps(receipt)}],
-                      'isError': receipt.get('accepted') is False or 'error' in receipt}
+                      'isError': (receipt.get('accepted') is False and not receipt.get('pending')) or 'error' in receipt}
         else:
             print(json.dumps({'jsonrpc': '2.0', 'id': message['id'],
                 'error': {'code': -32601, 'message': 'Unknown method or tool'}}), flush=True)

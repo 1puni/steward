@@ -15,6 +15,7 @@ from pathlib import Path
 from socketserver import UnixStreamServer
 import sqlite3
 import uuid
+import time
 from http.server import BaseHTTPRequestHandler
 from threading import Thread
 
@@ -26,10 +27,48 @@ def _digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+NOTIFY_DIRECTIVE = """Final replies from automatic runs are recorded only. To notify this run's
+owner, call the native steward_tasks task tool with operation="notify", key and
+text. Use a distinct key per message; retry an identical request with the same
+key after a lost receipt. A receipt confirms durable queuing, not transport
+completion. You may call during execution. Without a working tool, keep findings
+in the final reply; they will not be sent. Most runs should notify no one."""
+
+
+def queue_notification(state, *, owner, source, key, text, require_current=lambda: None):
+    """The existing delivery receipt is the durable send intent and replay identity.
+
+    Callers serialize acceptance and supply controller-resolved owner/source.
+    Transport may still duplicate a send after losing its delivery receipt.
+    """
+    if not owner:
+        raise ValueError("this run has no notification owner")
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", key):
+        raise ValueError("key must be 1-128 ASCII letters, digits, or _ . : -")
+    if not isinstance(text, str) or not text.strip() or len(text) > 12000:
+        raise ValueError("notification text must contain 1-12000 characters")
+    identity = "notify:" + _digest(json.dumps([str(owner), source, key]))
+    receipt = state.result_receipt(identity)
+    replayed = bool(receipt)
+    if receipt:
+        if receipt["result_text"] != text:
+            raise ValueError("notification key already used with different text")
+    else:
+        require_current()
+        state.save_result_receipt({
+            "owner": str(owner), "task_id": None, "source_key": identity,
+            "notification_source": source, "key": key,
+            "result_text": text, "reply": text, "done": False,
+            "recorded_at": time.time(),
+        })
+    return {"operation": "notify", "accepted": True, "receipt": identity,
+            "owner": str(owner), "source_id": source, "replayed": replayed}
+
+
 class TaskCalls:
     """Authority is captured by the controller, never supplied by the caller."""
 
-    def __init__(self, state, turn_id, *, cancel=lambda _execution: False):
+    def __init__(self, state, turn_id, *, cancel=lambda _execution: False, notify_owner=None):
         self.state = state
         self.cancel = cancel
         self.turn_id = str(turn_id)
@@ -39,8 +78,7 @@ class TaskCalls:
         if row is None:
             raise ValueError("task calls require a running conversation")
         self.owner = ConversationId(row["conversation_id"])
-        if self.owner.kind == "rhythm":
-            raise ValueError("rhythms cannot operate on tasks")
+        self.notify_owner = notify_owner if self.owner.kind == "rhythm" else str(self.owner)
         self.operator_id = row["operator_id"]
         self.generation = state.lineage(self.owner).generation
 
@@ -65,6 +103,7 @@ class TaskCalls:
             raise ValueError("request must be an object")
         operation = request.get("operation")
         fields = {
+            "notify": {"operation", "key", "text"},
             "submit": {"operation", "key", "repository", "title", "brief"},
             "list": {"operation"}, "show": {"operation", "task_id"},
             **{kind: {"operation", "key", "task_id", "text"}
@@ -74,6 +113,8 @@ class TaskCalls:
             raise ValueError("unknown operation or incorrect fields")
         if not all(isinstance(value, str) for value in request.values()):
             raise ValueError("fields must be strings")
+        if self.owner.kind == "rhythm" and operation != "notify":
+            raise ValueError("rhythms may only notify their owner")
         tasks = self.state.tasks
         with self.state.connect(write=True) as connection, tasks.lease:
             context_id = request.get("source_id", self.turn_id)
@@ -100,6 +141,10 @@ class TaskCalls:
                         "SELECT 1 FROM turns WHERE execution_turn_id=? LIMIT 1", (self.turn_id,)).fetchone():
                     raise ValueError("mixed-input execution requires an explicit source_id")
 
+            if operation == "notify":
+                return queue_notification(self.state, owner=self.notify_owner,
+                                          source=context_id, key=request["key"], text=request["text"],
+                                          require_current=require_current_source)
             if operation in {"list", "show"}:
                 require_current_source()
             if operation == "list":
@@ -264,6 +309,7 @@ class TaskCallServer:
     def prompt(self):
         return '''\n## Live task operations
 Use the native steward_tasks task tool during this execution. Arguments:
+- notify: operation, key, text (durably queue a message to this run's owner)
 - submit: operation, key, repository, title, brief
 - show: operation, task_id
 - list: operation
@@ -288,3 +334,78 @@ acceptance failure. Parent cancellation does not cancel admitted tasks. Inspect
 or cancel tasks explicitly. Results return to this conversation through the normal
 result delivery path. The tool capability expires when execution ends. Use the newly supplied tool after restart.
 Final TASK_PROPOSAL/TASK_ACTION lines do not execute operations.\n'''
+
+
+class TaskExecutionCalls:
+    """Task-scoped calls; the native invocation supplies no owner or authority."""
+
+    def __init__(self, state, task_id, repositories):
+        from steward_harness.task_query import OwnershipCalls
+        self.state = state
+        self.task_id = task_id
+        self.owner = state.tasks.get(task_id).owner
+        self.query = OwnershipCalls(state.tasks, task_id, repositories)
+        self.start_writer()
+
+    def start_writer(self):
+        """A replacement native invocation cannot inherit pending closure intent."""
+        self.execution = uuid.uuid4().hex
+        self.intent = None
+        self.conflicted = False
+        self.revision = None
+
+    def closure(self, findings):
+        """Resolve only after the native writer and its descendants are torn down.
+
+        The caller commits this decision onto the settled tree. A lost execution
+        has no accepted closure; its intent cannot be replayed into a new writer.
+        """
+        from dataclasses import replace
+        if self.intent is None or self.conflicted:
+            raise ValueError("missing or conflicting close operation")
+        if self.state.tasks.read(self.task_id)[0] != self.revision:
+            raise ValueError("task changed after close intent; work retained for continuation")
+        return replace(self.intent[1], findings=findings or "")
+
+    def _close(self, request):
+        from steward_harness.landing.checkpoint import TickClosure
+        if self.conflicted:
+            raise ValueError("close intent is conflicted; work will be retained without publication")
+        if self.intent is not None and self.intent[0] != request:
+            self.conflicted = True
+            raise ValueError("conflicting close intents; no disposition will be accepted")
+        required = {"operation", "key", "subject", "disposition"}
+        if (not required <= set(request) or set(request) - required - {"question"}
+                or not all(isinstance(value, str) for value in request.values())):
+            raise ValueError("close requires key, subject, disposition and an optional question")
+        subject, disposition, question = (request["subject"], request["disposition"], request.get("question"))
+        if (not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request["key"])
+                or not subject.strip() or len(subject) > 120 or any(ord(c) < 32 or ord(c) == 127 for c in subject)
+                or disposition not in {"continue", "idle", "ask"}
+                or (disposition == "ask" and (not question or not question.strip() or len(question) > 1000))
+                or (disposition != "ask" and question is not None)):
+            raise ValueError("invalid close intent: bounded subject and explicit disposition; only ask takes a question")
+        replayed = self.intent is not None
+        if not replayed:
+            self.revision = self.state.tasks.read(self.task_id)[0]
+            self.intent = (dict(request), TickClosure(subject, disposition, question))
+        return {"operation": "close", "pending": True, "accepted": False,
+                "task_id": str(self.task_id), "execution": self.execution,
+                "task_revision": self.revision, "key": request["key"], "replayed": replayed,
+                "message": "Intent recorded for this execution only. Acceptance requires writer teardown and a settled checkpoint."}
+
+    def __call__(self, request):
+        if isinstance(request, dict) and request.get("operation") == "close":
+            with self.state.tasks.lease:
+                if self.state.tasks.cancelled(self.task_id):
+                    raise ValueError("task was cancelled")
+                return self._close(request)
+        if not isinstance(request, dict) or request.get("operation") != "notify":
+            return self.query(request)
+        if set(request) != {"operation", "key", "text"}:
+            raise ValueError("notify requires operation, key, text")
+        with self.state.connect(write=True), self.state.tasks.lease:
+            if self.state.tasks.cancelled(self.task_id):
+                raise ValueError("task was cancelled")
+            return queue_notification(self.state, owner=self.owner,
+                                      source=str(self.task_id), key=request["key"], text=request["text"])

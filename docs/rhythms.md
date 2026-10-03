@@ -177,8 +177,7 @@ configured repository authority. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
 repeating accepted world edits or follow-up admission.
 
-A finished rhythm run owes its owner a message only when its findings carry a
-`NOTIFY:` line ([what a rhythm sends](#what-a-rhythm-sends)). Its prompt says so.
+A finished rhythm run queues a message only through a native `notify` call ([what a rhythm sends](#what-a-rhythm-sends)). Its prompt says so.
 Otherwise the result lane never selects it: no assessment turn, no model call,
 no message. What it did is kept either way. A review's findings are its evidence
 commit, retained on the task ref. A writing run's work publishes like any task's,
@@ -433,35 +432,29 @@ exists to prevent.
 
 ## What a rhythm sends
 
-A rhythm is silent unless it asks. Its reply reaches `owner` only from a line
-that starts with `NOTIFY:`: everything from that line to the end is the message.
-The marker is forgiving to write, in any case and behind Markdown emphasis, a
-bullet or a quote, and `NOTIFY: NONE` asks for nothing. A reply without the
-marker is recorded and sent to no one, and so is any reply when `owner` is null.
-Nothing blocks on a missing or malformed marker; the reply is still kept.
+A rhythm's final reply is recorded only. To send, it calls the native
+`steward_tasks` task tool with `operation="notify"`, `key` and `text`. The
+controller binds the owner and source; the caller cannot choose a destination.
+An owner of `null` rejects sending while preserving the findings.
 
-Silence had to become the default. When any reply that was not blank was sent,
-models told to stay silent answered `SILENT`, `(empty)`, `<br>`, a lone word
-joiner, or a sentence saying there was nothing to say, and each of those reached
-the owner's topic. A filter can drop one of these, but a model finds the next.
-With an explicit marker, sending is something the model does, and an evasion
-only fails to send.
+The key distinguishes independent messages. Exact retries reuse the existing
+receipt; a changed payload under the same key is rejected. A receipt confirms
+durable queuing, not transport completion. Calls can occur anywhere during the
+execution, zero, one or several times. A provider failure after queuing does not
+withdraw the message. A provider without a working tool channel records its
+reply and sends nothing. Final markers, silence tokens and trailing narration
+have no notification meaning.
 
-A world rhythm can name a file as its message:
+Notification intents use the existing controller-owned result receipts, with
+at-least-once transport semantics: a crash after external send but before the
+transport receipt may duplicate delivery. Replay of the operation itself does
+not create another intent. The native invocation capability expires when the
+execution ends; a later execution must use its current tool.
 
-```yaml
-rhythms:
-  rem: {after: sleep, procedure: rem, input: world, owner: telegram:5,
-        deliver: morning_brief.md}
-```
-
-When the accepted turn changed `deliver`, the owner receives the file as that
-turn left it, whatever the reply says. The accepted commit is found by its
-`Steward-Turn` trailer, so a turn that was replayed behind another still counts.
-A file the turn did not change is not sent again; that night's reply falls back
-to the ordinary `NOTIFY:` rule. The file is cut at 12,000 characters with a note
-that it continues in the world, and Telegram splits it into pieces as it does any
-long reply.
+A rhythm's document is read by its consumers. For example, `morning_brief.md`
+contains its own committed date; the voice host, dashboard and operator judge
+freshness from that document. A file change never instructs the harness to send
+it. The rhythm may deliberately notify its owner when a message is needed.
 
 Every reply is kept. The turn keeps it in state and the world commit keeps its
 text. Its result receipt keeps it as `result_text` and marks the interval
@@ -470,15 +463,13 @@ without sending in the last 24 hours, rhythm reviews below included, so an absen
 message can be told apart from a run that never happened. The controller also logs
 `world rhythm <key>: reply recorded, not delivered`.
 
-A procedure rhythm's findings follow the same rule. Findings above the closure
-lines are the run's evidence commit, and they notify no one unless they contain a
-`NOTIFY:` line. Until then the result costs no model turn: no assessment runs and
-nothing is sent. The run's own message is delivered independently of the owning
-conversation's optional assessment. Assessment cannot replace or silence that
-message, and its final narration does not send another notification. An explicit request, a question and a failure still report as they
-always did, and so does a harness-prepared result that already carries its reply.
-A refused proposal or action in any automatic turn (`harness:*`) is kept on the
-turn and logged, not appended to the owner's message.
+A procedure rhythm's full final narration is its evidence commit. Notification
+calls queue their own receipts without an assessment turn; they neither replace
+nor depend on that narration. Questions, failures and explicitly requested runs
+keep their outcome-report route. Already prepared delivery receipts replay their
+frozen messages through upgrades. An automatic assessment's final reply is also
+recorded only; any additional message requires its own notification call.
+A refused task operation in an automatic turn is retained and logged.
 
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
 harness never invents a schedule for you. A world rhythm is configured like any

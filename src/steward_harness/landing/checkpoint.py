@@ -30,52 +30,8 @@ class TickClosure:
     subject: str
     disposition: Literal["continue", "idle", "ask"]
     blocking_question: str | None = None
-    # Everything the session said before its three closure lines. For a tick
-    # that stages no diff this is the whole product of the task.
+    # Final narration is evidence only, independent of the close operation.
     findings: str = ""
-
-
-def parse_tick_closure(proposal: str | None, fallback_title: str) -> TickClosure:
-    """Validate the working session's final closure; never infer publication intent."""
-    body = (proposal or "").strip().splitlines()
-    lines = body[-3:]
-    names = ("COMMIT", "DISPOSITION", "QUESTION")
-    if len(lines) != 3 or any(
-        not line.startswith(f"{name}:") for name, line in zip(names, lines)
-    ):
-        raise ValueError("Final response must end with COMMIT, DISPOSITION and QUESTION")
-    fields = {
-        name: _one_line(line.partition(":")[2])
-        for name, line in zip(names, lines)
-    }
-    disposition = fields["DISPOSITION"]
-    if disposition not in {"continue", "idle", "ask"}:
-        raise ValueError("Task disposition must be continue, idle or ask")
-    question = fields["QUESTION"]
-    if (not question or len(question) > 1000
-        or (disposition == "ask" and question == "NONE")
-        or (disposition != "ask" and question != "NONE")):
-        raise ValueError("Task closure requires a question for ask, otherwise NONE")
-    return TickClosure(
-        subject=commit_subject("\n".join(lines), fallback_title),
-        disposition=disposition,  # type: ignore[arg-type]
-        blocking_question=question if disposition == "ask" else None,
-        findings="\n".join(body[:-3]).strip(),
-    )
-
-
-def commit_subject(proposal: str | None, fallback_title: str) -> str:
-    """Accept one bounded COMMIT line, or derive a safe deterministic fallback."""
-    if proposal:
-        for line in proposal.splitlines():
-            if not line.startswith("COMMIT:"):
-                continue
-            candidate = _one_line(line.removeprefix("COMMIT:"))
-            if candidate and candidate.upper() != "NONE":
-                return candidate[:120].rstrip()
-            break
-    title = _one_line(fallback_title) or "checkpoint provider work"
-    return f"steward: {title}"[:120].rstrip()
 
 
 def _one_line(value: str) -> str:
@@ -158,6 +114,8 @@ class WorktreeCheckpointer:
         disposition: str | None = None,
         reason: str | None = None,
         findings: str | None = None,
+        execution: str | None = None,
+        task_revision: str | None = None,
     ) -> None:
         """Save the staged tree — and the slice with it.
 
@@ -172,6 +130,10 @@ class WorktreeCheckpointer:
             message += ("-m", findings.strip())
         if disposition is not None:
             trailers = f"{DISPOSITION_TRAILER}: {disposition}"
+            if execution:
+                trailers += f"\nSteward-Execution: {execution}"
+            if task_revision:
+                trailers += f"\nSteward-Task-Revision: {task_revision}"
             if reason and reason.strip():
                 trailers += f"\n{REASON_TRAILER}: {_one_line(reason)}"
             message += ("-m", trailers)
