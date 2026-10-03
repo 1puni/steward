@@ -11,7 +11,7 @@ import pytest
 
 from state_fixtures import admit_task, advance
 from steward_harness.repository_reconciler import RepositoryReconciler
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import CommandSpec, RepositoryConfig, UntrustedExecutionConfig
 from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.kernel import Dispatch, StewardKernel, repository_lease

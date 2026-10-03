@@ -3,6 +3,7 @@ still publish real work — their findings, appended to the task's own file —
 and never claim a landing the harness did not perform."""
 
 from dataclasses import replace
+from task_tool_fixtures import TaskOutput
 from steward_harness.deploy.config import SystemdReleaseConfig
 
 import os
@@ -15,7 +16,7 @@ from textwrap import dedent
 import pytest
 
 from state_fixtures import accept_conversation_turn, advance
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import (
     RepositoryConfig,
     UntrustedExecutionConfig,
@@ -65,10 +66,10 @@ class InvestigationAdapter(EditingAdapter):
             )
         self.work_turns += 1
         question = "Which consumer is authoritative?" if self.disposition == "ask" else "NONE"
-        output = (
-            "The public consumer still reads the old feed. Evidence: src/feed.py.\n"
-            f"COMMIT: steward: inspect consumer\nDISPOSITION: {self.disposition}\nQUESTION: {question}"
-        )
+        output = TaskOutput(
+            "The public consumer still reads the old feed. Evidence: src/feed.py.",
+            subject="steward: inspect consumer", disposition=self.disposition,
+            question=question if self.disposition == "ask" else None)
         return replace(result, output=output)
 
 

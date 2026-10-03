@@ -11,6 +11,7 @@ from steward_harness.daemon import StewardDaemon
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.state import StateDatabase, TaskSpec
 from test_task_no_changes import InvestigationAdapter
+from task_tool_fixtures import TaskAdapter
 from test_task_runner_kernel import _git, _repository
 
 
@@ -39,7 +40,7 @@ else:
     Path(config.provider.workdir).mkdir()
     state = StateDatabase(config.provider.state_db)
     task, _ = state.tasks.create(TaskSpec("app", "Investigate", "Find the consumer"))
-    daemon = StewardDaemon(config, tmp_path / "config.yaml", adapters={"claude": InvestigationAdapter()},
+    daemon = StewardDaemon(config, tmp_path / "config.yaml", adapters={"claude": TaskAdapter(InvestigationAdapter())},
                            broker=UntrustedExecutionBroker(UntrustedExecutionConfig()))
     with daemon._daemon_lease():
         step = daemon._start_owned()

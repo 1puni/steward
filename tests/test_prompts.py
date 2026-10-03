@@ -59,10 +59,9 @@ def test_task_execution_supplies_its_own_bounded_closure() -> None:
         title="Change behavior", repository="app", procedure_scope="",
         brief="Do the thing.",
     )
-    assert "End your final response with exactly these three lines" in prompt
-    assert "COMMIT: <one concise conventional-commit subject" in prompt
-    assert "DISPOSITION: <continue|idle|ask>" in prompt
-    assert "QUESTION: <one blocking question, or NONE>" in prompt
+    assert 'operation="close"' in prompt
+    assert 'Your final response is retained as findings' in prompt
+    assert 'DISPOSITION:' not in prompt and 'QUESTION:' not in prompt
     assert "configured gates, publication and deployment" in prompt
 
 

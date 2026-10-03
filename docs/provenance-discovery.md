@@ -63,13 +63,10 @@ Historical Git evidence cannot prove who owns work now. An ordinary task calls
 the native `steward_tasks` task tool with `operation="query"`, `repository="app"`
 and `text="consumer"`. The bounded observation returns during the same execution
 through the [existing task-call bridge](git-native-tasks.md#ownership-reads-during-task-execution).
-The task endpoint permits observations only, not submission or steering.
-
-For historical output and procedures without the tool, the retained
-`DISPOSITION: ask` / `QUESTION: TASK_QUERY: {"repository":"app","text":"consumer"}`
-route uses the same reader. A crash after that question leaves a waiting task
-whose next dispatch supplies the answer on its accepted input. Neither route
-creates a query task, parallel registry or snapshot directory.
+Task execution cannot submit or steer peer work. It can also notify its bound
+owner and declare its own closure intent. Historical query-shaped questions are
+ordinary questions; there is no final-prose query fallback. No query task,
+parallel registry or snapshot directory is created.
 
 The configured repository set bounds the read. Results include up to ten accepted
 unfinished tasks whose titles contain every requested word, their observed status,

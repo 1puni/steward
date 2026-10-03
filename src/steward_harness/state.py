@@ -1285,12 +1285,10 @@ class StateDatabase:
 
     def _undelivered_task_results(self):
         """Each owned task that stopped at an outcome its owner has not been given."""
-        from steward_harness.task_query import is_task_query
         for task in self.tasks.all():
             status = task.status
             if (not task.owner or task.dispatchable or task.quiet or status not in {
-                    TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}
-                    or (status is TaskStatus.WAITING and is_task_query(status.value, task.reason))):
+                    TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}):
                 continue
             key = f"task_result:{task.task_id}:{task.outcome}:{status.value}"
             if self.result_receipt(key).get("done"):
@@ -1317,7 +1315,6 @@ class StateDatabase:
         route for everything else. The day is the idempotency key, so a
         restart or a second pass sends nothing new. Returns digests recorded.
         """
-        from steward_harness.task_query import is_task_query
         now = datetime.now(UTC).timestamp() if now is None else now
         day = int(now // self.OPEN_TASK_REMINDER_SECONDS)
         verbs = {
@@ -1328,8 +1325,7 @@ class StateDatabase:
         routes: dict[str | None, list[str]] = {}
         for task in self.tasks.all():
             status = task.status
-            if status not in verbs or (status is TaskStatus.WAITING
-                                       and is_task_query(status.value, task.reason)):
+            if status not in verbs:
                 continue
             age = now - datetime.fromisoformat(task.updated_at).timestamp()
             if age < self.OPEN_TASK_REMINDER_SECONDS:
@@ -1392,18 +1388,24 @@ class StateDatabase:
                 return task.task_id, self._task_result_text(task), key
         return None
 
+    def notification_sources(self) -> set[str]:
+        return {receipt["notification_source"] for receipt in (
+            json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
+            if receipt.get("notification_source")}
+
     def recorded_not_sent(self, since: float) -> list[str]:
         """What automatic runs recorded since `since` without notifying anyone.
 
         Silence is the default for rhythms, so it has to be countable: a world
-        rhythm's reply that asked for no delivery, and a rhythm run whose
-        findings asked for none. A run that wrote nothing at all is not here.
+        rhythm's recorded reply and a procedure run's findings, excluding
+        sources with an accepted notification call. A run that wrote nothing at all is not here.
         """
+        notified = self.notification_sources()
         world = [receipt["source_key"] for receipt in (
             json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
             if receipt.get("recorded_only") and receipt.get("recorded_at", 0) >= since]
         tasks = [task.procedure.event for task in self.tasks.all()
-                 if task.quiet and task.findings
+                 if task.quiet and task.findings and str(task.task_id) not in notified
                  and datetime.fromisoformat(task.updated_at).timestamp() >= since]
         return sorted(world) + sorted(tasks)
 

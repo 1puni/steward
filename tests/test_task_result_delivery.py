@@ -165,7 +165,7 @@ FLAGGED = ("Existing finding remains owned; full retained evidence.\n"
            "NOTIFY: The receipt regressed and needs repair.")
 
 
-def completed_review(tmp_path, *, event="rhythm:light:1", disposition="idle", findings=FLAGGED):
+def completed_review(tmp_path, *, event="rhythm:light:1", disposition="idle", findings=FLAGGED, notify=False):
     from steward_harness.task_store import ProcedureRun
     service, facts, cognition, owner, task_id = admitted(tmp_path)
     close_task_slice(service._state, task_id, disposition,
@@ -177,6 +177,10 @@ def completed_review(tmp_path, *, event="rhythm:light:1", disposition="idle", fi
                              identity="a" * 64, candidate=work, base=work)
     service._state.tasks.change(task_id, lambda definition: definition.model_copy(
         update={"procedure": procedure}), message="retain review verdict")
+    if notify:
+        from steward_harness.task_calls import TaskExecutionCalls
+        TaskExecutionCalls(service._state, task_id, {"app"})(dict(
+            operation="notify", key="finding", text="The receipt regressed and needs repair."))
     return service, facts, cognition, owner, task_id
 
 
@@ -184,7 +188,7 @@ def completed_review(tmp_path, *, event="rhythm:light:1", disposition="idle", fi
     "Existing finding remains owned; full retained evidence.",
     # What the launch reflections wrote when told to write nothing.
     "Nothing material has changed since the last reflection, so I'm reporting no findings.",
-    "NOTIFY: NONE",
+    "NOTIFY: NONE", FLAGGED,
 ])
 def test_unflagged_scheduled_review_keeps_evidence_and_costs_no_turn(tmp_path, findings):
     import time
@@ -202,22 +206,8 @@ def test_unflagged_scheduled_review_keeps_evidence_and_costs_no_turn(tmp_path, f
     assert len(cognition.requests) == 1
 
 
-@pytest.mark.parametrize("assessment", ["", "SILENT", "Nothing new."])
-def test_flagged_review_is_sent_as_the_run_wrote_it_unless_replaced(tmp_path, assessment):
-    service, facts, cognition, owner, task_id = completed_review(tmp_path)
-    cognition.replies.append(_reply(assessment))
-    sent = []
-    assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == \
-        "The receipt regressed and needs repair."
-    assert [text for text, _ in sent] == ["The receipt regressed and needs repair."]
-    service.assess_task_result(owner)
-    assert "already been delivered" in cognition.requests[-1].prompt
-    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('second notification')) is None
-
-
-def test_material_scheduled_review_sends_owner_summary_and_retries_exactly(tmp_path):
-    service, facts, cognition, owner, task_id = completed_review(tmp_path)
-    cognition.replies.append(_reply("Reading it.\nNOTIFY: A new failure needs repair."))
+def test_callable_notification_retries_without_assessment(tmp_path):
+    service, facts, cognition, owner, task_id = completed_review(tmp_path, notify=True)
     attempted = []
     def unavailable(text, key):
         attempted.append((text, key))
@@ -241,8 +231,37 @@ def test_explicit_review_and_scheduled_question_still_deliver_evidence(tmp_path,
     assert len(sent) == 1 and "full retained evidence" in sent[0][0]
 
 
+def test_notification_crash_after_send_keeps_at_least_once_semantics(tmp_path, monkeypatch):
+    service, facts, cognition, owner, task_id = completed_review(tmp_path, notify=True)
+    original = service._state.save_result_receipt
+    def crash(receipt):
+        if receipt.get("done"):
+            raise OSError("crash after send")
+        original(receipt)
+    monkeypatch.setattr(service._state, "save_result_receipt", crash)
+    sent = []
+    with pytest.raises(OSError):
+        service.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    restarted = _service(tmp_path, cognition)
+    restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    assert len(sent) == 2 and sent[0] == sent[1]
+    assert len(cognition.requests) == 1
+
+
+@pytest.mark.parametrize("narration", ["", "SILENT", "NOTIFY: extra message", "DISPOSITION: idle\ntrailing prose"])
+def test_assessment_narration_never_sends_again(tmp_path, narration):
+    service, facts, cognition, owner, task_id = completed_review(tmp_path, event="manual:review")
+    cognition.replies.append(_reply(narration))
+    sent = []
+    service.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    service.assess_task_result(owner)
+    assert len(sent) == 1 and "full retained evidence" in sent[0][0]
+    assert "already been delivered" in cognition.requests[-1].prompt
+    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("second send")) is None
+
+
 def test_assessment_failure_does_not_send_again(tmp_path):
-    service, facts, cognition, owner, task_id = completed_review(tmp_path)
+    service, facts, cognition, owner, task_id = completed_review(tmp_path, event="explicit:review")
     cognition.replies.append(RuntimeUnavailable("no capacity"))
     sent = []
     service.deliver_task_result(owner, send=lambda *args: sent.append(args))
@@ -321,13 +340,13 @@ def test_a_long_task_record_cannot_push_its_result_past_the_prompt_bound():
 
     admitted = "Build the phone gateway.\n"
     record = admitted + "".join(f"## {n} — continue · slice {n}\n" + "x" * 2400 + "\n" for n in range(75))
-    request = build_result_assessment_request(record, "Target observation: satisfied", quiet=True)
+    request = build_result_assessment_request(record, "Target observation: satisfied")
 
     assert len(request) < 20_000
     assert admitted in request
     assert "Target observation: satisfied" in request
     assert "more characters on the task's branch" in request
-    short = build_result_assessment_request(admitted, "done", quiet=True)
+    short = build_result_assessment_request(admitted, "done")
     assert "task's branch" not in short
 
 
@@ -422,3 +441,12 @@ def test_reassigned_task_delivers_to_current_owner_and_skips_old_assessment(tmp_
     service.assess_task_result(other)
     assert len(cognition.requests) == 1
     assert not service._state.pending_result_assessments()
+
+
+def test_unprepared_legacy_rhythm_receipt_does_not_send_final_markers(tmp_path):
+    service, facts, cognition, owner, task_id = completed_review(tmp_path)
+    service._state.save_result_receipt(dict(owner=str(owner), task_id=str(task_id),
+        source_key="legacy:done", result_text=FLAGGED, done=False))
+    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("legacy marker sent")) == ""
+    assert not service._state.pending_result_assessments()
+    assert len(cognition.requests) == 1

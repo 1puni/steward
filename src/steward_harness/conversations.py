@@ -12,9 +12,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal, cast
 
-from steward_harness.task_calls import TaskCalls, TaskCallServer
+from steward_harness.task_calls import TaskCalls, TaskCallServer, NOTIFY_DIRECTIVE
 from steward_harness.cognition import Cognition, CognitionRequest
-from steward_harness.notify import notification
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
@@ -205,6 +204,7 @@ class ConversationService:
         ongoing_only: bool = False,
         allow_empty_output: bool = False,
         procedure: ProcedureConfig | None = None,
+        notify_owner: str | None = None,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
 
@@ -304,6 +304,7 @@ class ConversationService:
             live_input=True,
             allow_empty_output=allow_empty_output,
             procedure=procedure,
+            notify_owner=notify_owner,
         )
         assert isinstance(accepted, ConversationTurnResult)
         return accepted
@@ -319,6 +320,7 @@ class ConversationService:
         live_input: bool,
         allow_empty_output: bool = False,
         procedure: ProcedureConfig | None = None,
+        notify_owner: str | None = None,
     ) -> ConversationTurnResult | Turn:
         """Run, retain and accept one declared world-session turn.
 
@@ -391,10 +393,11 @@ class ConversationService:
                 world_root=str(checkpoint.world.root) if checkpoint else None,
                 base_sha=worktree.base_sha if worktree else None,
             )
-            if (conversation.conversation_id.kind != "rhythm"
-                    and not self._read_only_desk(conversation.conversation_id)):
-                task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel))
-                prompt += task_calls.prompt
+            if not self._read_only_desk(conversation.conversation_id):
+                task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel,
+                                                     notify_owner=notify_owner))
+                prompt += (NOTIFY_DIRECTIVE if conversation.conversation_id.kind == "rhythm"
+                           else task_calls.prompt + "\n" + NOTIFY_DIRECTIVE)
             return CognitionRequest(
                 execution_id=event_id,
                 task_call_socket=task_calls.path if task_calls else None,
@@ -537,13 +540,14 @@ class ConversationService:
         if receipt is None:
             return None
         if "reply" not in receipt:
-            receipt["reply"] = receipt["result_text"]
-            if receipt.get("task_id") and receipt["source_key"].endswith(":done"):
-                task = self._state.tasks.get(TaskId(receipt["task_id"]))
-                if task.procedure and task.procedure.event.startswith("rhythm:"):
-                    receipt["reply"] = notification(receipt["result_text"])
+            # A legacy receipt without a frozen message is not a send decision
+            # for a quiet automatic task. Only explicit notify receipts carry one.
+            quiet = bool(receipt.get("task_id") and receipt["source_key"].endswith(":done")
+                         and self._state.tasks.get(
+                TaskId(receipt["task_id"])).quiet)
+            receipt["reply"] = "" if quiet else receipt["result_text"]
             # Freeze the delivery decision before attempting external transport.
-            receipt["assess"] = bool(receipt.get("task_id"))
+            receipt["assess"] = bool(receipt.get("task_id")) and not quiet
             self._state.save_result_receipt(receipt)
         if receipt["reply"]:
             send(receipt["reply"], receipt["source_key"])
@@ -585,24 +589,14 @@ class ConversationService:
         result_text: str, source_event_key: str,
     ) -> str:
         task = self._state.tasks.get(task_id)
-        procedure = self._state.tasks.read(task_id)[1].procedure
-        # A scheduled read-only run retains evidence for its owner to assess.
-        # Explicit requests and actionable execution outcomes still owe a report.
         target_result = source_event_key.startswith("target_result:")
-        # A writing run's work has landed; like a review's evidence, it is
-        # kept whether or not anyone hears of it.
-        rhythm = bool(procedure and procedure.event.startswith("rhythm:")
-                      and source_event_key.endswith(":done"))
-        review = target_result or rhythm
-        # A scheduled run arrives here only when its findings asked to notify.
-        notice = notification(task.findings) if rhythm else ""
         self._state.open_conversation(conversation_id,
                                       provider=self._state.tasks.default_provider,
                                       profile=self._state.tasks.default_profile)
         conversation = self._state.get_conversation(conversation_id)
         prior = self._state.turn_for_source(conversation_id, source_event_key)
         text = prior.input_text if prior is not None else build_result_assessment_request(
-            task.brief, result_text, quiet=review, notice=notice,
+            task.brief, result_text,
         )
         result = self.run_turn(
             transport=conversation.transport,

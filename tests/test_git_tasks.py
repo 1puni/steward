@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import RepositoryConfig, UntrustedExecutionConfig
 from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.repository_reconciler import RepositoryReconciler

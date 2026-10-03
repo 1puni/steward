@@ -25,7 +25,6 @@ from steward_harness.state import (
 from steward_harness.task_lock import locked_tasks, task_lock
 from steward_harness.config.schema import ProcedureConfig, _require_bounded_absolute
 from steward_harness.lease import Busy, Lease
-from steward_harness.notify import notification
 
 PREFIX = "refs/heads/tasks/"
 ZERO = "0" * 40
@@ -164,11 +163,10 @@ class Task:
         """A finished rhythm run that notifies no one: its commit is all it owes.
 
         A review's findings are its evidence commit's message and a writing
-        run's work has landed, so both are kept either way; only a `NOTIFY:`
-        line in the findings asks for the owner's attention.
+        run's work has landed, so both are kept either way; notifications are independent durable calls.
         """
         return (self.status is TaskStatus.DONE and self.procedure is not None
-                and self.procedure.event.startswith("rhythm:") and not notification(self.findings))
+                and self.procedure.event.startswith("rhythm:"))
 
     @property
     def landed_nothing(self) -> bool:
@@ -323,7 +321,7 @@ class GitTaskStore:
         # Subject, findings, trailers: drop the first paragraph, and the last
         # one only if it is ours. A slice that concluded nothing has two.
         paragraphs = message.partition("\n")[2].strip().split("\n\n")
-        if paragraphs and all(line.startswith(("Disposition:", "Reason:"))
+        if paragraphs and all(line.startswith(("Disposition:", "Reason:", "Steward-Execution:", "Steward-Task-Revision:"))
                               for line in paragraphs[-1].strip().splitlines() if line.strip()):
             paragraphs.pop()
         return replace(task, disposition=disposition.strip() or None,
@@ -378,7 +376,7 @@ class GitTaskStore:
 
         Its own native session record does not count: every run writes one.
         That record and its findings stay on its task ref, as a review's do,
-        and a `NOTIFY:` line still reaches its owner; landing them would put a
+        and notification calls still reach its owner; landing them would put a
         transcript-only commit on the input branch every interval. A run that
         changed a real file publishes its session record with it. Any other
         task that changed no file still publishes its findings.

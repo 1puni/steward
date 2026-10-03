@@ -336,12 +336,33 @@ task locks, repository leases and generation fences remain necessary. Cancelling
 a task need not kill a running gate to prevent publication. Capturing files
 before containment is verified would weaken the actual safety boundary.
 
-The October 2 recommendation to keep the `NOTIFY:` mechanism is superseded by
-V's October 3 direction: quiet-by-default is the policy worth keeping; a prose
-marker is not the operation. The callable-notification sibling owns replacing that
-marker. It uses the same retained result receipt transport, rather than a second
-sender. History `b3cc8d5f` and `2807d2d2` explains the original noise problem;
-those historical decisions do not require retaining final-output syntax.
+**Decision update, 2026-10-03:** V overruled this audit's recommendation to
+retain the notification marker. Quiet automatic runs remain policy; sending is
+now a callable operation, independent of final narration. Dream Away's all-`SILENT`
+reply (`turn_1bcb357e056b442da5004d29de2f3707`) is further evidence that a prose
+ritual distorts the work. V also removed the `deliver` exception: changing a
+morning brief is document authorship, not a sending decision. Its readers own
+date-based freshness; only a callable notification sends it to an owner.
+The current contracts are [notification](rhythms.md#what-a-rhythm-sends) and
+[typed closure](execution-lifecycle.md#execution-closure-and-continuation).
+Findings D and E above retain their revision-scoped evidence; current ownership
+queries and closure now use the native tool. The former `QUESTION: TASK_QUERY`
+fallback is removed. The separate candidate-review verdict remains structured
+gate evidence, with its reason for staying recorded in the closure contract.
+
+The final-prose sweep also found two transport representations that stay in this
+change. `[[send_image:...]]` and `[[send_document:...]]` name message attachments,
+subject to existing path and receipt checks; they do not decide whether an
+automatic run sends. Configured Telegram pin directives stay with the transport
+receipt because `pin_reply` needs the actual delivered message identity and
+pin retries share that message's durable delivery record. They retain the existing
+configured-chat permission checks and operator-request policy; they do not
+select execution closure or notification opt-in. Moving these actions to a separate API must preserve that
+message/receipt binding; this change does not introduce an independent pin queue.
+The retired `TASK_PROPOSAL`/`TASK_ACTION` parser remains rejection diagnostics
+only: it cannot admit or steer work, including on recovery. Its original raw
+output remains recorded. No `SILENT`, `QUESTION: NONE`, `DISPOSITION:` or
+`NOTIFY:` token controls execution or automatic sending.
 
 Bound follow-ups by the fact they move, not by the module they edit. A and D
 belong beside the existing callable-operation work. B concerns delivery and

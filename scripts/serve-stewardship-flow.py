@@ -96,7 +96,7 @@ def render_prompt(stage: str) -> dict:
         scope = prompts.build_procedure_scope(candidate="<candidate SHA>", base="<base SHA>", read_only=procedure, full_tree=stage=="review", verdict=stage=="review")
         operator_context = {
             "repair": ("repair: <retained repair input: exact work, base and candidate revisions; gate or conflict diagnostics>",),
-            "ownership-answer": ("answer: <dated TASK_QUERY answer: matching accepted task metadata, live locks and completeness limits>",),
+            "ownership-answer": (),
         }.get(stage, ())
         prompt = prompts.build_task_prompt("<accepted task title>", "<canonical accepted task account>\n\n" + scope, "<repository>", "<task execution id>", operator_context=operator_context)
         source = [prompts.build_task_prompt]
@@ -106,7 +106,7 @@ def render_prompt(stage: str) -> dict:
         if stage == "repair":
             read_text += "\n\nThe Incoming task context block above carries an example retained repair input, supplied by TaskRunner on the resumed slice. Exact diagnostics remain in the accepted task input history."
         if stage == "ownership-answer":
-            read_text += "\n\nThe task previously closed with QUESTION: TASK_QUERY. The controller retained an answer on that same task; TaskRunner supplies it as Incoming task context on continuation. The answer is dated evidence, not authority to steer other work."
+            read_text += "\n\nThe task calls operation=query on its native tool during execution. Its receipt returns matching accepted task metadata, live locks and completeness limits. The observation is dated evidence, not authority to steer other work."
         if procedure:
             policy = "config/procedures/security-review.md"
             if stage == "reflection":
@@ -116,11 +116,11 @@ def render_prompt(stage: str) -> dict:
                 source_files.add(ROOT / policy)
             else:
                 read_text += "\n\nNo reflection policy ships with the harness: it belongs to the instance that configures the procedure. Set STEWARD_REFLECTION_POLICY to a repository-relative path to preview one."
-        output = "Findings, COMMIT, DISPOSITION and QUESTION; read-only procedures also return VERDICT. See the exact closure instructions above."
+        output = "Final findings are recorded. Native close declares disposition; candidate reviews also return VERDICT evidence. See the closure instructions above."
     else:
         request = "<operator message>"
         if not stage.startswith("conversation"):
-            request = prompts.build_result_assessment_request("<accepted task brief>", "<dated target observation>" if stage=="target-assessment" else "<accepted task findings>", quiet=stage in {"reflection-assessment", "target-assessment"})
+            request = prompts.build_result_assessment_request("<accepted task brief>", "<dated target observation>" if stage=="target-assessment" else "<accepted task findings>")
             source.append(prompts.build_result_assessment_request)
         enabled_telegram = stage == "conversation-telegram"
         prompt = prompts.build_turn_prompt(

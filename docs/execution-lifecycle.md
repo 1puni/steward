@@ -66,28 +66,44 @@ preserves exclusion across retries and publication.
 
 ## Execution closure and continuation
 
-A task's live slice owns a retained checkout under its task lock. Native commits remain
-intact. The working session ends its final response with:
+A task's live slice owns a retained checkout under its task lock. Native commits
+remain intact. The session calls the native `steward_tasks` task tool:
 
-```text
-COMMIT: <commit subject>
-DISPOSITION: continue | ask | idle
-QUESTION: <blocking question, or NONE>
+```json
+{"operation":"close","key":"finish","subject":"feat: implement the request","disposition":"idle"}
 ```
 
-For `ask`, supply the actual question. For `continue` or `idle`, use `NONE`. These are
-alternatives in the syntax example, not a literal combined value. The controller
-validates them and commits the closure with the findings as its message. `continue`,
-`ask` and `idle` apply to investigations as well as code changes. Findings remain useful
-output when product files do not change.
+`continue` means more work remains; `ask` additionally requires a `question`
+string; `idle` requests landing through the configured gates. Omit `question`
+for other dispositions. The subject is one nonempty line of at most 120
+characters; a question is at most 1,000 characters. Keys have 1–128 ASCII
+letters, digits, `_`, `.`, `:` or `-`.
 
-Malformed closure retains work and blocks the task; it cannot grant publication. Even a
-findings-only slice commits (an empty commit). An idle closure leaves the branch
-carrying its publication obligation; it can therefore run gates and trigger a release
-without changing product files. It does not enqueue a promotion record. A continued
-slice resumes through ordinary task execution; waiting work requires an answer. Notes
-received before publication remain pending and require another slice. The publisher
-rechecks this at its final decision boundary.
+The call returns **pending intent**, bound to the task, this execution and the
+accepted task revision. An identical replay returns the same intent. Conflicting
+calls invalidate the decision; no later valid call overrides them. A later task
+revision invalidates stale intent. A replacement native writer (fallback or
+session rotation) gets a new execution identity and cannot inherit pending intent. The controller revokes the native capability,
+waits for writer teardown and outstanding account acceptance, then binds the
+intent to the settled tree in its checkpoint commit. The commit carries execution
+and task-revision trailers alongside disposition. No tool call publishes mid-write.
+
+Final narration is retained verbatim as findings. Extra text, marker-like text,
+or an empty final reply cannot change the disposition. Missing or invalid intent
+retains work without granting publication; the task requires retry. A crash
+before the checkpoint cannot carry an old pending intent into a new execution.
+Even a findings-only slice commits. `idle` leaves a publication obligation;
+`continue` resumes ordinary execution; `ask` waits for an operator answer.
+Cancellation and pending operator input still prevent publication at the
+publisher's final boundary. Receipt-only native answers cannot replace the
+working result or its callable intent.
+
+Candidate review procedures still return one `VERDICT: PASS` or `VERDICT: FAIL`
+line as structured gate evidence. This is a separate candidate-bound review
+contract, with missing or duplicate verdicts failing the gate; it cannot select a
+task disposition or send a message. Replacing the review evidence schema is a
+separate gate-interface change. Ordinary procedures and rhythms have no verdict
+requirement.
 
 Ordinary task cognition has no routine invocation deadline; it ends at closure,
 cancellation, controller shutdown or containment. Procedure runs keep the provider
