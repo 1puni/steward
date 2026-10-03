@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import math
 import subprocess
 import time
@@ -15,8 +14,6 @@ from pathlib import Path
 
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeRequest
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-
-log = logging.getLogger(__name__)
 
 _PREPARE = r'''
 import json, os, pathlib, shutil, stat, sys, tempfile, uuid
@@ -87,7 +84,7 @@ def record_at(root, relative):
 
 try:
     for entry in source.iterdir():
-        if entry.name.startswith(('.steward-launch-', '.steward-owner-')) or entry.name in mappings or entry.name == 'skills':
+        if entry.name.startswith(('.steward-launch-', '.steward-owner-', '.steward-evidence')) or entry.name in mappings or entry.name in {'skills', '.steward-tmp'}:
             continue
         # Durable runtime state belongs to this owner, never the seed home.
         if persistent and entry.name not in owner['shared']:
@@ -219,44 +216,22 @@ try:
         resume = str(matches[0])
     print(json.dumps({'home': str(launch), 'resume': resume}))
 except BaseException:
-    if not persistent:
-        shutil.rmtree(launch)
+    # Setup may have created unique native state; preserve it for recovery.
     raise
 '''
 
-_REMOVE = """
-import pathlib, shutil, sys
-path = pathlib.Path(sys.argv[1])
-if not path.name.startswith('.steward-launch-') or path.is_symlink():
-    raise ValueError('not a native launch directory')
-shutil.rmtree(path)
-"""
-
-# Removes every generation and provider of one owner. rmtree unlinks the links
-# into the seed home and the world checkout; it never follows them.
-_RETIRE = """
-import json, pathlib, shutil, sys
+# Native homes contain more than Git-mapped transcripts: databases, queues,
+# tool results and provider-created files may be unique. Until independent
+# custody is established, neither these homes nor their linked checkout may
+# be reclaimed on the strength of a successful Git checkpoint.
+_CHECK_RETIREMENT = """
+import json, pathlib, sys
 homes, prefix = json.load(sys.stdin)
 for home in map(pathlib.Path, homes):
     if home.is_dir():
         for entry in home.iterdir():
-            if entry.name.startswith(prefix) and entry.is_dir() and not entry.is_symlink():
-                shutil.rmtree(entry)
-                print(entry)
-"""
-
-# Removes one owner's other generation directories, keeping the one just
-# prepared. rmtree unlinks the links into the seed home; it never follows them.
-_RETIRE_STALE_GENERATIONS = """
-import pathlib, shutil, sys
-home, prefix, current = sys.argv[1], sys.argv[2], sys.argv[3]
-root = pathlib.Path(home)
-if root.is_dir():
-    for entry in root.iterdir():
-        if (entry.name.startswith(prefix) and entry.name != current
-                and entry.is_dir() and not entry.is_symlink()):
-            shutil.rmtree(entry)
-            print(entry)
+            if entry.name.startswith(prefix):
+                raise RuntimeError('native evidence still depends on retained owner workspace')
 """
 
 
@@ -264,34 +239,35 @@ def _owner_prefix(owner: str) -> str:
     return ".steward-owner-" + hashlib.sha256(owner.encode()).hexdigest()[:32] + "-"
 
 
-def retire_native_owner(broker: UntrustedExecutionBroker, homes: Iterable[Path], owner: str) -> None:
-    """Delete an owner's durable homes; the caller holds the owner's admission fence."""
-    retired = broker.run(
-        [broker.python_executable, "-I", "-c", _RETIRE], cwd="/", timeout=60,
+def check_native_owner_retirement(broker: UntrustedExecutionBroker, homes: Iterable[Path], owner: str) -> None:
+    """Refuse checkout removal while any owner generation can depend on it."""
+    checked = broker.run(
+        [broker.python_executable, "-I", "-c", _CHECK_RETIREMENT], cwd="/", timeout=60,
         input_text=json.dumps([list(map(str, homes)), _owner_prefix(owner)]),
     )
-    if retired.returncode:
-        raise RuntimeError("native owner home retirement failed: " + retired.stderr.strip()[-500:])
-    for path in retired.stdout.split():
-        log.info("retired native owner home %s", path)
+    if checked.returncode:
+        raise RuntimeError("native owner retention blocked: " + checked.stderr.strip()[-500:])
 
 
-def _retire_stale_generations(broker: UntrustedExecutionBroker, home: Path, owner: str, current_key: str) -> None:
-    """Delete an owner's non-current generation directories beneath one home.
-
-    Called right after a new generation is prepared, so a persistent owner
-    whose conversation never idles long enough for whole-owner retirement
-    (a frequent rhythm) does not accumulate one directory per lineage switch.
-    """
-    retired = broker.run(
-        [broker.python_executable, "-I", "-c", _RETIRE_STALE_GENERATIONS,
-         str(home), _owner_prefix(owner), ".steward-owner-" + current_key],
-        cwd="/", timeout=30,
-    )
-    if retired.returncode:
-        raise RuntimeError("native owner generation retirement failed: " + retired.stderr.strip()[-500:])
-    for path in retired.stdout.split():
-        log.info("retired stale native owner generation %s", path)
+_PRIVATE_TEMP = r'''
+import os, stat, sys
+home = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    try:
+        os.mkdir('.steward-tmp', 0o700, dir_fd=home)
+    except FileExistsError:
+        pass
+    child = os.open('.steward-tmp', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=home)
+    try:
+        info = os.fstat(child)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError('native temporary directory must be private and owned by execution user')
+    finally:
+        os.close(child)
+    os.fsync(home)
+finally:
+    os.close(home)
+'''
 
 
 @dataclass(frozen=True)
@@ -318,7 +294,7 @@ def native_workspace(
     mappings: Mapping[str, str],
     resume_pattern: str,
 ) -> Iterator[NativeWorkspace]:
-    """Prepare owner state before launch; only anonymous launch homes are removed."""
+    """Prepare native state and preserve independent, private recovery archives."""
     # Setup steps stay finite even when the native turn has no deadline.
     deadline, setup_timeout = (None, 30) if request.timeout_seconds is None else (
         time.monotonic() + request.timeout_seconds, min(30, request.timeout_seconds))
@@ -341,8 +317,37 @@ def native_workspace(
             "Invalid native execution paths: " + checked.stderr.strip()[-1000:],
             session_id=request.provider_session_id,
         )
+    writable = request.sandbox_mode == "workspace-write"
+    evidence_script = Path(__file__).with_name("native_evidence.py").read_text()
+
+    def evidence(operation, native_home, records):
+        result = broker.run(
+            [broker.python_executable, "-I", "-c", evidence_script],
+            cwd=request.cwd, timeout=300,
+            input_text=json.dumps([operation, str(native_home), records,
+                                  str(request.cwd) if writable else None]),
+        )
+        if result.returncode:
+            raise RuntimeExecutionError("Native evidence preservation failed; originals retained: "
+                                        + result.stderr.strip()[-500:])
+
+    def prepare_temporary(native_home):
+        if request.resolved.provider not in {"claude", "glm"}:
+            return
+        result = broker.run([broker.python_executable, "-I", "-c", _PRIVATE_TEMP,
+                             str(native_home)], cwd=request.cwd, timeout=setup_timeout)
+        if result.returncode:
+            raise RuntimeExecutionError("Native temporary directory preparation failed; originals retained")
+
+    evidence("check", home, {"workspace": str(request.cwd)})
     if request.sandbox_mode != "workspace-write" and request.native_owner is None:
-        yield NativeWorkspace(home, request.provider_session_id, deadline)
+        prepare_temporary(home)
+        aliases = {name: str(home / name) for name in mappings}
+        evidence("snapshot-seed", home, aliases)
+        try:
+            yield NativeWorkspace(home, request.provider_session_id, deadline)
+        finally:
+            evidence("snapshot-seed-final", home, aliases)
         return
     if deadline is not None:
         setup_timeout = min(30, deadline - time.monotonic())
@@ -389,20 +394,18 @@ def native_workspace(
             session_id=request.provider_session_id,
         )
     record = json.loads(prepared.stdout)
-    if owner_key is not None:
-        # A long-lived owner (e.g. a rhythm whose schedule never idles for
-        # world_session_idle_seconds) would otherwise accumulate one directory
-        # per lineage-switching generation forever; retire its other
-        # generations now instead of waiting on whole-owner idle retirement.
-        _retire_stale_generations(broker, home, request.native_owner, owner_key)
     workspace = NativeWorkspace(Path(record["home"]), record["resume"], deadline)
+    records = {name: str(request.cwd / relative) for name, relative in mappings.items()} if writable else {}
+    if writable and request.resolved.provider in {"claude", "glm"}:
+        memory = request.cwd / "memories" / request.resolved.provider
+        # The adapter creates this path after preparation; capture it on exit.
+        # The snapshot script treats this one optional root separately below.
+        records["auto-memory"] = str(memory)
+    prepare_temporary(workspace.home)
+    evidence("snapshot", workspace.home, records)
     try:
         yield workspace
     finally:
-        if request.native_owner is None:
-            removed = broker.run(
-                [broker.python_executable, "-I", "-c", _REMOVE, str(workspace.home)],
-                cwd=request.cwd, timeout=30,
-            )
-            if removed.returncode:
-                raise RuntimeExecutionError("Native private launch cleanup failed")
+        # ProcessController has already torn down the provider and descendants.
+        # Anonymous homes are retained too; no Git result authorizes deletion.
+        evidence("snapshot-final", workspace.home, records)

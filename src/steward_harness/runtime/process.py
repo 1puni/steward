@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from steward_harness.runtime.contracts import RuntimeExecutionError
 from steward_harness.runtime.execution import UntrustedExecutionBroker
+from steward_harness.runtime.native_evidence import check_headroom
 
 _STREAM_LIMIT_BYTES = 64 * 1024 * 1024
 _DIAGNOSTIC_LIMIT_BYTES = 1024 * 1024
@@ -117,6 +118,7 @@ class ProcessController:
         command_only: bool = False,
         over_budget: Callable[[], str | None] | None = None,
         retain_stdout: bool = True,
+        storage_paths: Sequence[Path] = (),
     ) -> ProcessOutput:
         """Run a bounded child; command-only calls use the broker's credentialless policy.
 
@@ -183,6 +185,7 @@ class ProcessController:
         stop_error: RuntimeExecutionError | None = None
         stop_deadline: float | None = None
         cleaned = False
+        next_storage_check = 0.0
 
         def stop() -> None:
             # Only the execution thread touches the protocol or process. Stale
@@ -201,17 +204,25 @@ class ProcessController:
                 on_started(stop)
             while selector.get_map() or process.poll() is None:
                 now = time.monotonic()
+                storage_error = None
+                if storage_paths and stop_error is None and now >= next_storage_check:
+                    next_storage_check = now + 1.0
+                    try:
+                        check_headroom(list(storage_paths))
+                    except (OSError, RuntimeError) as error:
+                        storage_error = str(error)
                 exhausted = (
                     over_budget() if over_budget is not None and stop_error is None
                     else None
                 )
                 if stop_error is None and (
-                    cancelled.is_set() or exhausted is not None
+                    cancelled.is_set() or exhausted is not None or storage_error is not None
                     or (deadline is not None and now >= deadline)
                 ):
                     stop_error = (
                         RuntimeExecutionError("provider process was cancelled")
                         if cancelled.is_set()
+                        else RuntimeExecutionError(storage_error) if storage_error is not None
                         else TokenBudgetExhausted(exhausted) if exhausted is not None
                         else ProcessTimeout(
                             f"provider process timed out after {timeout_seconds}s"

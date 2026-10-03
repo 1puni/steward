@@ -8,7 +8,7 @@ import pytest
 from steward_harness.config.schema import UntrustedExecutionConfig
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeRequest, resolve_model
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-from steward_harness.runtime.native_workspace import native_workspace, retire_native_owner
+from steward_harness.runtime.native_workspace import native_workspace, check_native_owner_retirement
 
 SESSION = '11111111-1111-4111-8111-111111111111'
 
@@ -52,7 +52,7 @@ def test_original_records_write_directly_and_survive_private_cleanup(setup):
         record.write_text('native original\n')
         assert (request.cwd / 'artefacts/codex/sessions' / record.name).read_text() == 'native original\n'
         (native.home / 'memories/MEMORY.md').write_text('native interpretation')
-    assert not native.home.exists()
+    assert native.home.exists()
     assert (home / 'auth.json').read_text() == 'provider credential'
     assert not (home / 'sessions').exists()
     assert not list(request.cwd.rglob('auth.json'))
@@ -87,7 +87,7 @@ def test_native_mapping_rejects_symlinked_candidate_directories(setup, tmp_path,
             pytest.fail('must not launch')
     assert '[Errno' in str(failure.value)
     assert not list(outside.iterdir())
-    assert not list(home.glob('.steward-launch-*'))
+    assert list(home.glob('.steward-launch-*'))
 
 
 def test_missing_old_private_session_is_not_silently_restarted(setup):
@@ -109,7 +109,7 @@ def test_private_mapping_cleanup_does_not_erase_partial_work_on_failure(setup):
         with mapped(setup) as native:
             (native.home / 'sessions/partial.jsonl').write_text('partial native record')
             raise RuntimeError('provider failure')
-    assert not native.home.exists()
+    assert native.home.exists()
     assert (setup[1].cwd / 'artefacts/codex/sessions/partial.jsonl').exists()
 
 
@@ -123,7 +123,7 @@ def test_bundled_skill_is_available_without_mutating_native_configuration(setup,
         assert (native.home / 'skills' / name / 'SKILL.md').is_file()
         assert not (home / 'skills' / name).exists()
         assert not (request.cwd / 'skills').exists()
-    assert not native.home.exists()
+    assert native.home.exists()
     assert bundled.is_dir()
 
 
@@ -173,17 +173,16 @@ def test_concurrent_owner_homes_and_generations_do_not_share_runtime_state(setup
         assert not (cleared.home / 'goals.sqlite').exists()
     with mapped(setup, native_owner='one', resolved=resolve_model('claude', 'fast')) as switched:
         assert switched.home not in {first.home, second.home, cleared.home}
-    # A persistent owner whose schedule never idles long enough for whole-owner
-    # retirement (e.g. a frequent rhythm) must not accumulate one directory per
-    # lineage switch: each new generation retires that owner's other generations.
-    assert not first.home.exists()
-    assert not cleared.home.exists()
+    # Superseding a lineage must preserve unique database/queued state even
+    # when no Git checkpoint has captured it.
+    assert (first.home / 'goals.sqlite').read_text() == 'owner one'
+    assert cleared.home.exists()
     assert switched.home.exists()
     assert second.home.exists()
 
 
 
-def test_retiring_an_owner_removes_every_generation_and_leaves_its_links_targets(setup, tmp_path):
+def test_retirement_refuses_to_remove_native_evidence_or_link_targets(setup, tmp_path):
     broker, request, source = setup
     other = tmp_path / 'other-world'
     other.mkdir()
@@ -193,12 +192,13 @@ def test_retiring_an_owner_removes_every_generation_and_leaves_its_links_targets
         pass
     with mapped(setup, native_owner='one', resolved=resolve_model('claude', 'fast')) as switched:
         pass
-    retire_native_owner(broker, [source, tmp_path / 'absent-home'], 'one')
-    assert not first.home.exists() and not cleared.home.exists() and not switched.home.exists()
+    with pytest.raises(RuntimeError, match='native owner retention blocked'):
+        check_native_owner_retirement(broker, [source, tmp_path / 'absent-home'], 'one')
+    assert first.home.exists() and cleared.home.exists() and switched.home.exists()
     assert kept.home.is_dir()
     assert (source / 'auth.json').read_text() == 'provider credential'
     assert (request.cwd / 'artefacts/codex/sessions/one.jsonl').read_text() == 'world original'
-    retire_native_owner(broker, [source], 'one')
+    check_native_owner_retirement(broker, [source], 'absent-owner')
 
 def test_owner_home_refuses_retargeting_and_preserves_state_after_failure(setup, tmp_path):
     with pytest.raises(RuntimeError, match='provider failed'):
@@ -621,3 +621,126 @@ def test_claude_legacy_primary_refuses_visible_companion_state(setup, monkeypatc
     assert original.read_text() == 'retained parent transcript'
     assert companion.exists() or companion.is_symlink()
     assert not list(source.glob(f'.steward-owner-*/projects/*/{SESSION}.jsonl'))
+
+
+@pytest.mark.parametrize('failure', ['capture', 'commit'])
+@pytest.mark.parametrize('mode', ['workspace-write', 'read-only'])
+def test_complete_owner_evidence_survives_failed_git_capture_and_generation_change(setup, failure, mode):
+    import hashlib
+    import os
+    import subprocess
+
+    broker, request, source = setup
+    # These synthetic files model storage classes, not a provider schema. No
+    # assumption is made that an index or a queue can be rebuilt from JSONL.
+    fixtures = {
+        f'sessions/rollout-{SESSION}.jsonl': b'old rollout with tool event\n',
+        'sessions/child/tool-results/result.txt': b'complete tool result',
+        'memories/MEMORY.md': b'old native memory',
+        'state.sqlite': b'unique database fixture',
+        'thread_history/thread.json': b'unique thread history',
+        'queue/pending.json': b'unfinished native research',
+    }
+    subprocess.run(['git', 'init', '-q', str(request.cwd)], check=True)
+    if failure == 'commit':
+        hook = request.cwd / '.git/hooks/pre-commit'
+        hook.write_text('#!/bin/sh\nexit 1\n')
+        hook.chmod(0o700)
+    with mapped(setup, native_owner='one', sandbox_mode=mode) as first:
+        for relative, data in fixtures.items():
+            p = first.home / relative
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+            os.utime(p, (946684800, 946684800))  # 2000-01-01
+        if failure == 'capture':
+            (request.cwd / '.git/index.lock').write_text('simulated interrupted capture')
+            failed = subprocess.run(['git', 'add', '.'], cwd=request.cwd, capture_output=True)
+        else:
+            (request.cwd / 'work.txt').write_text('synthetic work')
+            subprocess.run(['git', 'add', '.'], cwd=request.cwd, check=True)
+            failed = subprocess.run(
+                ['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost',
+                 '-c', 'commit.gpgsign=false', 'commit', '-qm', 'must fail'],
+                cwd=request.cwd, capture_output=True)
+        assert failed.returncode != 0
+    with mapped(setup, native_owner='one', native_generation=2, sandbox_mode=mode):
+        pass
+    with pytest.raises(RuntimeError, match='native owner retention blocked'):
+        check_native_owner_retirement(broker, [source], 'one')
+    for relative, data in fixtures.items():
+        assert hashlib.sha256((first.home / relative).read_bytes()).digest() == hashlib.sha256(data).digest()
+
+
+def test_failed_final_archive_retains_anonymous_home_and_pending_checkout(setup, monkeypatch):
+    import json
+    import subprocess
+    from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
+
+    broker, request, _ = setup
+    original = broker.run
+
+    def fail_final(*args, **kwargs):
+        data = kwargs.get('input_text')
+        if data and json.loads(data)[0] == 'snapshot-final':
+            return subprocess.CompletedProcess(args, 1, '', 'simulated full backup disk')
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(broker, 'run', fail_final)
+    with pytest.raises(RuntimeExecutionError, match='originals retained'):
+        with mapped(setup) as native:
+            (native.home / 'unique.sqlite').write_bytes(b'uncaptured native queue')
+            (native.home / 'sessions/latest.jsonl').write_text('last tool result')
+    assert (native.home / 'unique.sqlite').read_bytes() == b'uncaptured native queue'
+    assert (native.home / 'sessions/latest.jsonl').read_text() == 'last tool result'
+    assert (request.cwd / EVIDENCE_PENDING).exists()
+
+
+def test_readonly_direct_seed_call_has_independent_snapshots(setup):
+    import json
+    broker, request, home = setup
+    (home / 'sessions').mkdir()
+    source = home / 'sessions/seed.jsonl'
+    source.write_text('old seed record')
+    with mapped(setup, sandbox_mode='read-only'):
+        source.write_text('new seed record')
+    snapshots = list((home / '.steward-evidence/_seed').glob('*.snapshot'))
+    assert len(snapshots) == 2
+    assert { (p / 'home/sessions/seed.jsonl').read_text() for p in snapshots } == {'old seed record', 'new seed record'}
+    assert not list(request.cwd.iterdir())
+    for p in snapshots:
+        assert 'home/sessions/seed.jsonl' in json.loads((p / 'SHA256.json').read_text())
+
+
+@pytest.mark.parametrize('provider', ['claude', 'glm'])
+@pytest.mark.parametrize('owner,access', [('one', 'workspace-write'), (None, 'workspace-write'), (None, 'read-only')])
+def test_native_temporary_output_is_private_and_snapshotted_after_failure(setup, provider, owner, access):
+    _, _, seed = setup
+    seeded = seed / '.steward-tmp'
+    seeded.mkdir(mode=0o700)
+    (seeded / 'old-output').write_bytes(b'old seed evidence')
+    with pytest.raises(RuntimeError, match='failed Git capture'):
+        with mapped(setup, native_owner=owner, sandbox_mode=access,
+                    resolved=resolve_model(provider, 'fast')) as native:
+            temporary = native.home / '.steward-tmp'
+            assert not temporary.is_symlink()
+            assert temporary.stat().st_mode & 0o777 == 0o700
+            if native.home != seed:
+                assert not (temporary / 'old-output').exists()
+            (temporary / 'task-output').write_bytes(b'unique temporary tool result')
+            raise RuntimeError('failed Git capture')
+    copies = list((seed / '.steward-evidence').glob('*/**/*.snapshot/home/.steward-tmp/task-output'))
+    assert copies and all(path.read_bytes() == b'unique temporary tool result' for path in copies)
+    assert (temporary / 'task-output').read_bytes() == b'unique temporary tool result'
+    assert (seeded / 'old-output').read_bytes() == b'old seed evidence'
+
+
+def test_direct_seed_temporary_directory_refuses_external_symlink(setup, tmp_path):
+    _, _, seed = setup
+    external = tmp_path / 'other-owner'
+    external.mkdir(mode=0o700)
+    (external / 'evidence').write_bytes(b'other owner')
+    (seed / '.steward-tmp').symlink_to(external, target_is_directory=True)
+    with pytest.raises(RuntimeExecutionError, match='temporary directory preparation failed'):
+        with mapped(setup, sandbox_mode='read-only', resolved=resolve_model('claude', 'fast')):
+            pytest.fail('must refuse a redirected private temp root')
+    assert (external / 'evidence').read_bytes() == b'other owner'

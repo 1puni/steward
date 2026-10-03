@@ -151,3 +151,47 @@ def test_world_stop_guard_bounds_multiple_conflicts(repo):
     for name in names:
         assert (candidate / name).read_text() == "work\n"
         assert _remote_tree(repo["tmp"] / "origin.git", name) == "remote"
+
+
+@pytest.mark.parametrize('failure', ['return', 'snapshot', 'interrupt'])
+def test_pending_native_evidence_survives_reconciliation_failure(repo, failure):
+    from steward_harness.runtime.contracts import RuntimeExecutionError
+    from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
+
+    clone = repo['clone']
+    native_path = Path('artefacts/codex/sessions/fixture.jsonl')
+    (clone / native_path).parent.mkdir(parents=True)
+    (clone / native_path).write_text('old synthetic native evidence\n')
+    (clone / '.gitignore').write_text(EVIDENCE_PENDING + '\n')
+    _git('add', '-A', cwd=clone)
+    _git('commit', '-qm', 'native fixture', cwd=clone)
+    _conflicted(repo, 'branch side\n', 'main side\n')
+    written = 'new synthetic tool result before failed snapshot\n'
+    candidates = []
+
+    def resolve(turn):
+        candidates.append(turn.worktree)
+        (turn.worktree / native_path).write_text(written)
+        (turn.worktree / EVIDENCE_PENDING).touch()
+        if failure == 'snapshot':
+            raise RuntimeExecutionError('synthetic final snapshot failure')
+        if failure == 'interrupt':
+            raise KeyboardInterrupt()
+
+    if failure == 'interrupt':
+        with pytest.raises(KeyboardInterrupt):
+            _resolve(repo, resolve)
+    else:
+        error, _ = _resolve(repo, resolve)
+        assert error and ('pending' in error or 'snapshot failure' in error)
+    candidate = candidates[0]
+    assert (candidate / native_path).read_text() == written
+    assert (candidate / EVIDENCE_PENDING).exists()
+    rebase_state = Path(_git('rev-parse', '--path-format=absolute', '--git-path',
+                             'rebase-merge', cwd=candidate))
+    assert rebase_state.is_dir(), 'abort must not discard unarchived resolver evidence'
+    error = reconcile_git(candidate, 'main', 'world/candidate', broker=_broker(),
+                          resolve_turn=lambda _: pytest.fail('pending evidence must block retry'))
+    assert error and 'pending' in error
+    assert (candidate / native_path).read_text() == written
+    assert rebase_state.is_dir()

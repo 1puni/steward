@@ -527,6 +527,11 @@ def test_retained_claude_project_namespace_is_fixed_inside_each_owner_home(tmp_p
 
     def capture(command, *, env, **kwargs):
         launches.append(dict(env))
+        temporary = Path(env['CLAUDE_CONFIG_DIR']) / '.steward-tmp'
+        assert env['CLAUDE_CODE_TMPDIR'] == str(temporary)
+        settings = json.loads(command[command.index('--settings') + 1])
+        assert settings['env']['CLAUDE_CODE_TMPDIR'] == str(temporary)
+        assert temporary.is_dir() and not temporary.is_symlink()
         raise RuntimeError('captured launch')
 
     monkeypatch.setattr(runtime._controller, 'run', capture)

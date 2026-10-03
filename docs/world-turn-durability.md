@@ -163,6 +163,9 @@ Finished task worktrees follow the same rule, which keeps a venv or
 Refusals due to local work or pending recovery are logged. Removal uses Git
 `worktree remove` without force and `worktree prune`, keeping accepted history and
 native session records. The next turn recreates the checkout from the world.
+Any existing owner home beneath the configured native homes also prevents
+checkout removal: it may hold unique state or links into the checkout. See
+[native evidence retention](native-session-host.md#native-evidence-retention-audit).
 [Retention tests](../tests/test_retention.py) exercise the age and custody boundaries.
 
 ## Verification
