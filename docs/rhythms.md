@@ -345,7 +345,7 @@ rhythms:
     schedule: 3600
     procedure: staging
     input: world
-    paths: [episodes/, episodes.md]
+    paths: [episodes/]
     owner: null
 ```
 
