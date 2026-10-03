@@ -2,9 +2,10 @@
 
 Revision-scoped audit, 2026-10-02. Source inspected:
 `29b968667dc4378ad9c80d9953e811974f26e2f4`; retained audit branch initially
-continued at `f9d5ace8`. Recommendations below are proposals, not implemented
-contracts or deployment claims at that revision. The October 3 correction below
-records subsequent implementation of B and V's clarification of notification policy.
+continued at `f9d5ace8`. The original audit changed documentation only.
+Recommendations remain proposals unless their section records a later correction.
+The October 3 corrections record subsequent implementation of B and C and V's
+clarification of notification policy; local validation does not establish deployment.
 Attribution: `task:task-24c4f2f2dc5f539ba93beb7bcaab5431`.
 
 The central remaining problem is that execution completion still carries facts
@@ -52,7 +53,7 @@ version, real-provider latency or Linux containment result was measured here.
 | --- | --- | --- |
 | P1 | A. First source's speaker governs later actions | Source-bound authority in the already-owned operation refactor |
 | P1 | B. Retained results wait for cognition and its worker budget | Deliver existing evidence independently of assessment |
-| P1 | C. Interrupted world execution consumes a scheduled interval | Distinguish attempt failure from obligation settlement |
+| Corrected | C. Interrupted world execution consumed a scheduled interval | Explicit continuation of held obligations; local recovery tests |
 | P2 | D. Ownership reads require ending native work | Live bounded read using the same controller interface |
 | P2 | E. Final prose syntax controls task recovery | Separate explicit disposition from final narration |
 | P2 | F. Documentation still describes superseded boundaries | Correct current claims; retain historical proposals as history |
@@ -155,46 +156,40 @@ full worker occupancy, busy/cleared conversation, failed send, crash after send 
 receipt, late assessment, ownership routing and duplicate source replay. Deployed-host
 latency and real-provider behavior are not established by those fixtures.
 
-## C. A failed world execution settles the interval without completing its work
+## C. Interrupted world attempts and open interval obligations
 
-**Evidence.** [Procedures.due_world_rhythms](../src/steward_harness/procedures.py)
-(254–277) skips an interval when its turn is interrupted, just as a receipt
-settles it. `run_world_rhythm` (293–337) logs provider failure and returns;
-each new interval resets native lineage. Dependent rhythms require a completed
-predecessor in the same interval. Conversation execution uses the provider
-deadline; procedure task execution, by contrast, can retain a bound-session
-timeout as continuation in [TaskRunner._run_owned_turn](../src/steward_harness/task_runner.py)
-(476–511).
+**Historical evidence.** At the audited revision,
+[Procedures.due_world_rhythms](../src/steward_harness/procedures.py) skipped an
+interrupted turn just as it skipped a settled receipt. `/rhythm run` refused
+world runs, and dependents only considered the current clock interval. A timeout
+after partial work therefore ended that night's chain without completing it.
+`bf2913bf` deliberately made failure consume the interval to prevent retry
+storms; `315da0ec` added chains and `26049780` serialized world rhythms.
+`517e42e9` and `efadf83a` increased provider deadlines after a consolidation
+backlog. Those reports are historical evidence, not a fresh host reproduction.
 
-**Example and impact.** A nightly consolidation reaches its deadline after
-partial work. That interval will not resume; its dependent review will not run.
-The next interval must absorb the backlog, or the operator must arrange separate
-work. `/rhythm run` refuses an extra world run in that interval. The source
-identity prevents duplicate effects but also represents “attempt made” as
-“nothing more owed.” Retained partial files are not accepted consolidation.
+**Accepted correction.** V's October 3 direction preserves deduplication and
+writer exclusion while replacing attempt-as-settlement. One captured interval
+is one obligation; failed attempts remain immutable evidence and hold it open
+for explicit continuation. The hold survives rollover and does not monopolize
+the shared world owner. The continuation keeps captured instructions and the
+retained workspace, and must reconcile possible external actions. Uncertain
+provider custody cannot be overridden by this command. Retained completion is
+accepted/replayed without native cognition. A late accepted predecessor wakes
+its original interval's dependent, including REM and Dream Away. The
+[world-rhythm contract](rhythms.md#world-rhythms) owns the operating details.
 
-**History.** `bf2913bf` deliberately made the interval source key the whole
-idempotency mechanism and specified failure consumes the interval.
-`315da0ec` added chains; `26049780` serializes world rhythms to avoid unnecessary
-reconciliation. The code states the failure policy prevents retry storms.
-Commits `517e42e9` and `efadf83a` report a real consolidation backlog and increase
-the configured provider timeout; those reports are historical evidence, not a
-fresh reproduction of that host incident.
-
-**Correction and validation.** Retain one logical obligation per captured
-interval while distinguishing accepted completion, interrupted attempt and a
-hold needing intervention. Permit explicit continuation under the same intent
-and evidence; never blindly replay a provider that may already have acted.
-Keep bounded retry/backoff or an explicit hold, stable deduplication and no
-overlap. A longer timeout alone does not correct the distinction. Validate
-timeout after edits, unavailable provider before tools, crash after world
-acceptance before receipt, interval rollover, explicit cancellation and
-dependent-chain wakeup. Review existing
-[world-rhythm tests](../tests/test_world_rhythms.py), especially
+**Validation.** The existing policies named
 `test_failed_interval_is_consumed_rather_than_retried`,
 `test_rhythm_command_reports_the_interval_and_refuses_an_extra_run` and
-`test_a_failed_predecessor_ends_the_chain_for_the_interval`, as policies to change
-deliberately rather than tests to bypass.
+`test_a_failed_predecessor_ends_the_chain_for_the_interval` have been deliberately
+revised in [world-rhythm tests](../tests/test_world_rhythms.py) to require a held
+obligation, explicit continuation and late chain wakeup. Additional cases cover
+timeout after edits, pre-tool provider unavailability, cancellation, uncertain
+crash custody, acceptance before receipt, rollover, preserved attempt evidence,
+changed policy files, and manual/automatic exclusion. These local Git/SQLite
+fixtures establish recovery policy; deployed provider behavior and host disk
+failure recovery still require host evidence.
 
 ## D. A read-only ownership query forces a task checkpoint and another execution
 

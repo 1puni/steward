@@ -89,8 +89,8 @@ fire. What does count is a real change to what the rhythm reads: a product
 task's outcome landing on the input branch, or native work retained on an
 ordinary task, is new input even though the steward made it.
 
-An integer schedule uses interval seconds. At most one run is accepted for a
-rhythm in each interval bucket, on the first poll in that bucket that sees new
+For repository and organisation procedure rhythms, an integer schedule uses
+interval seconds. At most one run is accepted for a rhythm in each interval bucket, on the first poll in that bucket that sees new
 input; a bucket without new input admits nothing and calls no model. An
 incomplete run prevents overlap with later buckets. A reopened idle run, a
 waiting run, and workspace-write work still awaiting publication remain
@@ -219,7 +219,7 @@ procedures:
 
 A pinned run tries its provider and nothing else. When that provider cannot
 take it, the run fails like any other unavailable provider: a task blocks and a
-world rhythm consumes its interval.
+world rhythm holds its interval for explicit continuation.
 
 ### Ordered model list
 
@@ -243,7 +243,7 @@ entry runs its own provider, model and effort exactly and never borrows another
 entry's model; a missing `effort` means that provider decides. Effort reaches
 Codex as reasoning effort and Claude as `--effort`, as for a single preference.
 When every entry has declined, the run fails like any unavailable provider,
-naming each entry's reason: a task blocks, a world rhythm consumes its interval.
+naming each entry's reason: a task blocks, a world rhythm holds its interval for explicit continuation.
 Nothing else changes: the change guard, blocked-run supersession, read-only rules
 and the rule that public desk cognition never falls back to unrestricted
 cognition apply as before.
@@ -280,7 +280,7 @@ them: Claude (and `glm` through the same CLI) per finished message, so a run can
 pass its budget by at most one response; Codex as running totals for the turn's
 thread and its native children. At the budget the run is stopped exactly as a
 deadline stops it: a native interrupt, then containment. The run fails with
-`provider used N output tokens of its B budget`. A world rhythm consumes its
+`provider used N output tokens of its B budget`. A world rhythm holds its
 interval and its uncommitted work stays in the rhythm's retained workspace; it
 is not offered to a fallback provider. Unset, a run is unmetered, and Claude is
 not asked for the partial messages metering needs.
@@ -293,8 +293,8 @@ longer than the conversational deadline. Without either, a procedure keeps
 ## World rhythms
 
 A rhythm over `input: world` consolidates the world itself, such as a nightly
-sleep over accumulated episodes. It is not a task. Each interval is one ordinary
-world turn in the rhythm's own conversation, `rhythm:<name>`, taking the same
+sleep over accumulated episodes. It is not a task. Each captured interval is one obligation, with ordinary
+world-turn attempts in the rhythm's own conversation, `rhythm:<name>`, taking the same
 lease, checkpoint and acceptance as an operator's message. Its text is the
 procedure's instructions, and it runs on the procedure's
 [model preference](#model-preference). Each interval starts a fresh native
@@ -326,10 +326,35 @@ rhythms:
 A world rhythm needs a configured `world`, a `workspace-write` procedure and an
 integer interval or an `after` (below); configuration refuses anything else,
 including a `workdir`.
-The source key `rhythm:<name>:<interval index>` is the whole idempotency: after a
-restart, the key replays an accepted turn rather than repeating cognition. A
-provider failure or crash consumes its interval. At most one run happens in each
-interval, and a missed interval is not made up. `86400` fires once per UTC day
+The key `rhythm:<name>:<interval index>` identifies one logical obligation and
+its result receipt. Its first attempt uses that source key; an explicit
+continuation uses `<key>:continue:<previous turn id>`. Every attempt retains its
+own input, outcome and native evidence. Only accepted completion meets the
+obligation. A returned provider failure, timeout or cancellation leaves an
+interrupted attempt and a visible hold; it does not settle the interval.
+
+`/rhythm run <name>` durably queues one continuation with the original instruction text and
+the retained workspace, naming the previous attempt and directing the provider
+to reconcile possible external effects before doing remaining work. Routing and
+limits use current procedure configuration so an operator can repair unavailable
+providers or insufficient bounds. If the policy file could not be read at all,
+its text is first captured when a continuation can read it. The command does no provider work: the ordinary rhythm worker executes the
+reserved source within the shared budget, and duplicate requests find that same
+source. A restart preserves a queued source whose checkout was never claimed.
+Each explicit request permits one attempt; polling and restarts never authorize provider
+retries. A held interval prevents newer intervals of that rhythm from replacing
+it, while unrelated rhythms remain eligible. A continuation can recover an
+already accepted notification by replaying its original `source_id`, key and
+text through the notification tool; that returns the existing receipt without
+queuing another send. Changed text is a different intent and cannot overwrite
+that receipt.
+
+An uncertain crash that retained no provider completion remains fenced for
+inspection of native evidence. `/rhythm run` cannot override that custody.
+Retained completion and accepted turns recover through the existing acceptance
+boundary without another provider call, including when the result receipt was
+not saved. Accepted obligations cannot be run again. Clock intervals never
+captured by an attempt or predecessor are not backfilled. `86400` fires once per UTC day
 on the first poll after midnight UTC; `offset: 3600` moves the start of every
 interval an hour later, so the same rhythm fires on the first poll after 01:00
 UTC. The offset must be shorter than the interval, and it works the same way
@@ -375,27 +400,29 @@ rhythms:
 ```
 
 `after` takes the place of `schedule`. The dependent shares its predecessor's
-interval index, so its key `rhythm:rem:<index>` still admits at most one run per
-interval and replays after a restart exactly as above. It becomes due once the
-predecessor's turn for that interval has been accepted. If the predecessor
-failed or was interrupted, or a `paths` gate kept it from running, the
-dependent does not run in that interval: the chain stops for the night. A
-predecessor whose run is still going when its interval ends takes the chain
-with it, because the dependent is always asked about the current interval.
+captured interval index and waits until that interval has an accepted attempt.
+An interrupted predecessor holds the chain. When explicit continuation finally
+succeeds, the dependent becomes eligible for the original interval even after
+clock rollover or a controller restart. REM then wakes Dream Away in the same
+way. A predecessor excluded by its `paths` gate captures no obligation and
+wakes no dependent.
 `after` must name a configured world rhythm, and configuration refuses a cycle.
 
 World rhythms run one at a time because they all write the same world. The
 controller schedules them as a single owner within its shared worker budget.
-When that owner runs, it chooses the eligible current interval with the earliest
+When that owner runs, it chooses the eligible captured interval with the earliest
 start; configured order breaks ties, including members of a night chain. This
 keeps a short-interval inbox from continually jumping ahead of due hourly or
 nightly work. Selection is recomputed when the worker starts, so time spent in
-the shared queue cannot launch an expired bucket. There is no catch-up queue or
-second scheduling cursor. A rhythm can still miss an interval if the shared
-worker budget or world writer remains occupied through its end.
+the shared queue cannot capture an expired, previously unseen bucket. Existing
+obligations survive that rollover. There is no catch-up queue or second
+scheduling cursor. A rhythm can still miss an uncaptured interval if the shared
+worker budget or world writer remains occupied through its end. Manual
+continuation admission takes the same world-rhythm lease as automatic execution;
+a busy owner defers the request without creating another source.
 
 Failures before cognition, including an unreadable policy file, are retained as
-interrupted turns and consume the interval just like provider failures. Ordinary
+interrupted attempts and hold the interval just like provider failures. Ordinary
 world/conversation lease deferrals remain eligible for retry. A completed turn
 without its result receipt is eligible for replay to finish that receipt, not a
 second model invocation.
@@ -404,14 +431,20 @@ second model invocation.
 The existing `/healthz` endpoint also carries `world_rhythms`: the controller's
 last admission observation, its age and freshness, pause state, shared worker
 pressure, and each world rhythm's effective interval/offset or predecessor,
-input paths, current source key, latest execution start/completion times and
-evidence age. The snapshot derives from the same evaluator as dispatch; it
+input paths, logical obligation and latest attempt source keys, source
+admission/completion times and evidence age. A queued continuation's admission
+time precedes its provider execution. The snapshot derives from the same evaluator as dispatch; it
 never controls scheduling. It becomes stale after the greater of 60 seconds
 and three controller polls. A missing sample is unknown, not healthy.
 
 `scheduled` means a result receipt settled this interval; `active` means a turn
 is running, and `receipt_pending` means acceptance needs its receipt completed.
-`failed` and `predecessor_failed` expose consumed failures, while
+`continuation_queued` names an authorized source awaiting its worker;
+`acceptance_pending` names retained completion awaiting world acceptance.
+`held` and `predecessor_held` expose interrupted obligations awaiting intervention.
+`recovery_held` means a source still owns uncertain work but no rhythm writer
+holds the execution lease; inspect its retained evidence before proceeding.
+Offline observations cannot establish that liveness distinction. Meanwhile,
 `awaiting_input` and `awaiting_predecessor` explain why admission owes no run.
 `due`/`overdue` means eligible now with no current turn. `due_at` is the interval
 boundary, and `overdue_seconds` is its age, not proof of continuous eligibility:
@@ -426,9 +459,10 @@ release identity, current admission state, and accepted execution separately.
 
 The turn cannot propose or steer tasks, because a rhythm has no transport to
 receive their results; it records suggested work in world files instead.
-`/rhythm list` shows whether the current interval ran. `/rhythm run` refuses a
-world rhythm, because a second run in the same interval is exactly what the key
-exists to prevent.
+`/rhythm list` shows both the current clock interval and the selected obligation
+key, which may be older. `/rhythm run` explicitly continues a held obligation or
+recovers retained completion; it refuses an extra accepted run. Admission pause
+also prevents manual continuation.
 
 ## What a rhythm sends
 

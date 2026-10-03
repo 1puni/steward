@@ -391,7 +391,7 @@ class KernelCommands:
                     turn = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
                     history = f"this interval: {turn.state if turn else 'not run yet'}"
                     observed = observations[name]
-                    history += (f"; {observed['progress']}, observed_at={observed['observed_at']:.0f}, "
+                    history += (f"; obligation={observed['event']}, {observed['progress']}, observed_at={observed['observed_at']:.0f}, "
                                 f"due_at={observed['due_at']:.0f}, "
                                 f"overdue_seconds={observed['overdue_seconds']:.0f}")
                 pause = "; automatic admission paused" if self.state.paused() else ""
@@ -401,7 +401,7 @@ class KernelCommands:
         if len(parts) == 2 and parts[0] == "run" and parts[1] in self.config.rhythms:
             rhythm = self.config.rhythms[parts[1]]
             if rhythm.input == "world":
-                return f"{parts[1]} is a world rhythm; it runs once per interval on its schedule."
+                return self.procedures.continue_world_rhythm(parts[1])
             repository, candidate, base, activity = self.procedures.observe(rhythm)
             task = self.procedures.request(rhythm.procedure, repository, candidate, base,
                                           event=f"rhythm:{parts[1]}:manual:{uuid.uuid4().hex}",

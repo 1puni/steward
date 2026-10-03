@@ -164,3 +164,17 @@ Say what version now runs, what was converted, what evidence survived, what
 acceptance passed and what is still open. Keep a local rehearsal, a staged release
 and a production cutover distinct. And do not carry a historical test total
 forward as evidence for a different revision.
+
+
+## World-rhythm obligations
+
+World-rhythm interruption leaves a held obligation across interval rollover.
+Existing interrupted turns also remain open on upgrade: inspect `/rhythm list`
+and retained native evidence, then use `/rhythm run <name>` to authorize one
+continuation. An accepted predecessor can wake its original interval's dependent
+after rollover. This can expose previously abandoned intervals in existing
+history; review them before resuming. No state-schema migration is needed:
+attempt source keys and ordinary turns/receipts own this behavior. Older releases
+do not understand continuation keys when deciding interval eligibility, so
+rolling back after a continuation can misreport completion or strand its chain.
+See the [world-rhythm contract](rhythms.md#world-rhythms).
