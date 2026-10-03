@@ -44,6 +44,7 @@ one of them is wrong, and that is worth fixing.
 | [Native record provenance](native-record-provenance.md) | Original records, derived memories and attributable evidence |
 | [Task files and Git history](provenance-discovery.md) | Provenance without injected snapshots or copied history, and the bounded ownership query |
 | [The world's Git store](world-git-store.md) | What makes a world Git store expensive, and what only looks expensive |
+| [Reading a world at one commit](world-read.md) | Pinned Git reading primitives for consumer adapters: freshness, content dates, discovery, history and links |
 | [Stewardship visualisation](stewardship-visualisation.md) | Inspect lifecycle signals and render prompts through the runtime's own code |
 
 ## Work on the harness
