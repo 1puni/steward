@@ -185,3 +185,12 @@ or live Telegram delivery.
 
 An upgrade must preserve owner checkouts, world refs, native originals, unfinished
 checkouts, SQL and adjacent receipts together; see [upgrading](upgrading.md).
+
+
+A world-rhythm continuation can reserve its next source before the budgeted
+worker runs. That unclaimed source survives restart and world-lease contention;
+it is authorized work waiting for its first execution. Once the source claims
+its checkout, ordinary custody applies: a crash without retained provider
+completion requires evidence inspection, and cannot replay the provider. The
+[world-rhythm contract](rhythms.md#world-rhythms) defines interval obligations and
+explicit continuation.

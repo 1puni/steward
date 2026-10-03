@@ -204,6 +204,7 @@ class ConversationService:
         ongoing_only: bool = False,
         allow_empty_output: bool = False,
         procedure: ProcedureConfig | None = None,
+        reserved_rhythm: bool = False,
         notify_owner: str | None = None,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
@@ -266,6 +267,12 @@ class ConversationService:
                     "an accepted execution; inspect retained evidence before retrying"
                 )
         event_id = str(turn.turn_id)
+        if reserved_rhythm:
+            if not turn.rhythm_continuation:
+                raise ValueError("reserved execution requires a rhythm continuation source")
+            # The rhythm lease excludes concurrent consumers. Custody is taken
+            # before tools; a claimed crash can never enter this branch.
+            started = (turn.state == "running" and self._claimed(event_id) is None)
         if not started:
             if self._state.prepared_turn(event_id) is not None:
                 accepted = self.accept_prepared(event_id)
@@ -304,6 +311,7 @@ class ConversationService:
             live_input=True,
             allow_empty_output=allow_empty_output,
             procedure=procedure,
+            keep_unclaimed=reserved_rhythm,
             notify_owner=notify_owner,
         )
         assert isinstance(accepted, ConversationTurnResult)
@@ -320,6 +328,7 @@ class ConversationService:
         live_input: bool,
         allow_empty_output: bool = False,
         procedure: ProcedureConfig | None = None,
+        keep_unclaimed: bool = False,
         notify_owner: str | None = None,
     ) -> ConversationTurnResult | Turn:
         """Run, retain and accept one declared world-session turn.
@@ -383,7 +392,8 @@ class ConversationService:
                 except Busy:
                     # No provider has received the source, so the turn never
                     # happened: its replay after contention starts it afresh.
-                    self._state.withdraw_turn(turn.turn_id)
+                    if not keep_unclaimed:
+                        self._state.withdraw_turn(turn.turn_id)
                     withdrawn = True
                     raise
             # Establish custody before a provider can change the checkout. If

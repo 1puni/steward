@@ -33,13 +33,15 @@ The desk probe prefers the controller's timestamped `world_rhythms` health
 observation over offline estimates. It reports observation age and worker
 pressure even when task-store reads fail. The watch reports stale or missing
 admission evidence separately from execution failures. With fresh evidence and
-admission unpaused, it names failed chains and eligible unstarted intervals
+admission unpaused, it names held obligations, waiting chains and eligible unstarted intervals
 older than five minutes; this is a visibility threshold, not another schedule.
 A world turn is identified by its source key, not a nonexistent task revision.
 When reading retained probes, parse anchored `rhythm_progress=` records and
 retain their observation timestamp; prose quoting that string is not a probe. For
 world Git evidence, use Git's `%(trailers:key=Steward-Source,valueonly)` formatter
-and match the complete `rhythm:<name>:<interval>` value. A body grep can select
+and match the complete attempt source: `rhythm:<name>:<interval>` or its
+`:continue:<previous turn id>` suffix. The admission observation names the
+logical obligation separately from its latest attempt. A body grep can select
 reflection prose; even a genuine commit timestamp is acceptance evidence, not
 an execution start timestamp.
 

@@ -300,6 +300,12 @@ class Turn:
     started_at: str = ""
     completed_at: str | None = None
 
+    @property
+    def rhythm_continuation(self) -> bool:
+        """A controller-reserved source, runnable only before checkout custody."""
+        return (self.conversation_id.kind == "rhythm"
+                and ":continue:turn_" in self.source_event_key)
+
 
 
 class CheckpointDisposition(StrEnum):
@@ -975,6 +981,16 @@ class StateDatabase:
             ).fetchone()
         return self._turn(row) if row is not None else None
 
+    def rhythm_turns(self, owner: ConversationId) -> list[Turn]:
+        """Retained attempts in source-admission order, including interrupted work."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT turn_id, conversation_id, source_event_key, input_text, execution_turn_id, "
+                "input_disposition, state, status_reason, started_at, completed_at FROM turns "
+                "WHERE conversation_id=? AND execution_turn_id IS NULL ORDER BY rowid", (str(owner),),
+            ).fetchall()
+        return [self._turn(row) for row in rows]
+
     def latest_rhythm_turn(self, owner: ConversationId) -> Turn | None:
         """Latest execution evidence, excluding native input children."""
         with self.connect() as connection:
@@ -1218,21 +1234,29 @@ class StateDatabase:
     def interrupt_abandoned_turns(
         self, reason: str = "daemon restarted before the turn completed"
     ) -> int:
-        """Interrupt crash-left turns and discard sessions without accepted turns."""
+        """Interrupt crash-left turns, preserving unclaimed rhythm reservations.
+
+        A reserved source has not received provider tools until it claims the
+        checkout. Its explicit authorization survives restart in that row.
+        """
         if not reason.strip():
             raise ValueError("abandoned turns require a reason")
         with self.connect(write=True) as connection:
             now = _now()
             abandoned = connection.execute(
                 "SELECT DISTINCT conversation_id FROM turns WHERE state = 'running' "
-                "AND execution_turn_id IS NULL AND episode_input IS NULL"
+                "AND execution_turn_id IS NULL AND episode_input IS NULL "
+                "AND NOT (conversation_id GLOB 'rhythm:*' "
+                "AND source_event_key GLOB 'rhythm:*:*:continue:turn_*')"
             ).fetchall()
             for owner in abandoned:
                 self._discard_unproven_lineage_in(connection, owner["conversation_id"])
             changed = connection.execute(
                 "UPDATE turns SET state = 'interrupted', status_reason = ?, "
                 "completed_at = ? WHERE state = 'running' "
-                "AND execution_turn_id IS NULL AND episode_input IS NULL",
+                "AND execution_turn_id IS NULL AND episode_input IS NULL "
+                "AND NOT (conversation_id GLOB 'rhythm:*' "
+                "AND source_event_key GLOB 'rhythm:*:*:continue:turn_*')",
                 (reason, now),
             )
             return changed.rowcount
