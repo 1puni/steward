@@ -48,7 +48,7 @@ from steward_harness.state import (
 )
 from steward_harness.task_runner import TaskRunner
 from steward_harness.task_lock import locked_tasks
-from steward_harness.telegram.service import TelegramService
+from steward_harness.telegram.service import TelegramContentRejected, TelegramService
 from steward_harness.telegram.tasks import app_link, task_card
 from steward_harness.web.health import HealthServer
 from steward_harness.web.tasks import TaskBoard, TaskWeb
@@ -836,6 +836,15 @@ class StewardDaemon:
                     raise OSError(f"result transport unavailable for {owner}")
             try:
                 conversations.deliver_task_result(owner, send=send)
+            except TelegramContentRejected as error:
+                # Telegram answers this reply the same way every time (a deleted
+                # topic, say): name it undeliverable instead of retrying each pass.
+                receipt = state.retain_pending_result(owner)
+                if receipt is not None:
+                    receipt["undeliverable"] = True
+                    receipt["delivery_error"] = str(error)
+                    state.save_result_receipt(receipt)
+                log.warning("task result for %s undeliverable: %s", owner, error)
             except (Busy, ConversationBusy, GitTransportError, TelegramAPIError,
                     OSError, subprocess.TimeoutExpired, WorldContentConflict,
                     WorldUpdatePending, subprocess.CalledProcessError) as error:
@@ -946,6 +955,9 @@ class StewardDaemon:
                 receipt.pop("delivery_error", None)
                 state.save_result_receipt(receipt)
             for owner in state.pending_task_result_conversations():
+                pending = state.pending_task_result_for(owner)
+                if pending and state.result_receipt(pending[2]).get("undeliverable"):
+                    continue  # Reported by /status; resending gets the same rejection.
                 error = route_error(owner)
                 if error:
                     receipt = state.retain_pending_result(owner)

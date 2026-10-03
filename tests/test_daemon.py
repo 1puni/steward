@@ -989,6 +989,38 @@ def test_owned_live_target_reaches_its_owner_without_a_model_turn(tmp_path):
     assert state.result_receipt("target_result:owned")["done"]
 
 
+def test_result_rejected_by_telegram_is_undeliverable_not_retried(tmp_path):
+    """A deleted topic answers every resend with the same 400."""
+    from steward_harness.telegram.service import TelegramContentRejected
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42, "work": 44}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    state.save_result_receipt({
+        "owner": "telegram:44", "task_id": "task-1", "source_key": "task_result:gone",
+        "result_text": "Task done", "reply": "Task done",
+    })
+    daemon, queued, step = _result_pass(tmp_path, config, state)
+    attempts = []
+
+    def rejected(*args):
+        attempts.append(args)
+        raise TelegramContentRejected("1 of 1 reply piece(s) failed to deliver: "
+                                      "Bad Request: message thread not found")
+    daemon._telegram = SimpleNamespace(config=config.telegram, send_result=rejected)
+    for _ in range(2):
+        queued.clear()
+        step()
+        for key, work in queued:
+            if key[0] == "result":
+                work()
+    assert len(attempts) == 1
+    receipt = state.result_receipt("task_result:gone")
+    assert receipt["undeliverable"] and "thread not found" in receipt["delivery_error"]
+    assert not receipt.get("done")
+
+
 def test_status_exposes_undeliverable_receipts(tmp_path):
     commands = _status_commands(tmp_path)
     commands.state.save_result_receipt({
