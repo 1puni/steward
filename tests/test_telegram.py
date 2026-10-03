@@ -2106,6 +2106,38 @@ def test_unrecoverable_update_is_finished_rather_than_replayed_forever(tmp_path,
     assert not restarted._has_pending()
 
 
+def test_a_reply_that_cannot_be_delivered_is_finished_not_replayed_forever(tmp_path, monkeypatch):
+    """A chunk Telegram permanently rejects (e.g. a malformed entity) must not
+    flood the log with an endless once-a-second requeue of the same doomed
+    send: it is content, not the network, and no retry will ever fix it.
+    """
+    service = _service(tmp_path)
+    service.turn_handler = lambda *a: "the reply"
+    monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
+    send_attempts = []
+    replies = []
+
+    def send_message(chat, text, **kw):
+        if text != "the reply":
+            replies.append(text)
+            service.request_stop()
+            return 1
+        send_attempts.append(text)
+        raise TelegramAPIError(
+            "Telegram API HTTP 400: Bad Request: can't parse entities", status_code=400,
+        )
+
+    monkeypatch.setattr(service.api, "send_message", send_message)
+    service._enqueue(_update(90, "hello"))
+    _drain(service)
+    assert len(send_attempts) == service_module._SEND_ATTEMPTS
+    assert len(replies) == 1 and "Bad Request" in replies[0]
+    restarted = _service(tmp_path)
+    restarted.requeue()
+    assert not restarted._has_pending()
+
+
 def test_live_input_does_not_overtake_retained_updates_in_its_topic(tmp_path, monkeypatch):
     service = _service(tmp_path)
     service._native_turn_handler = lambda *a: pytest.fail("overtook a retained update")
