@@ -374,7 +374,7 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
     service._state.tasks.transports = runner.transports
     assert world_state.pending_task_result_conversations() == (owner,)
     def unavailable(text, key):
-        # The run's own message, and the follow-up the assessment admitted.
+        # The retained run's message is sent before any assessment.
         assert text.startswith("The private consumer handoff is still outstanding.")
         assert "Investigation saved." not in text
         assert "Task done:" not in text
@@ -383,12 +383,18 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
         raise OSError("transport temporarily unavailable")
     with pytest.raises(OSError, match="temporarily unavailable"):
         service.deliver_task_result(owner, send=unavailable)
+    assert not (checkpoint.world.root / "decision.md").exists()
+    assert cognition.calls == 0
+    sent=[]
+    service.deliver_task_result(owner, send=lambda text, key: sent.append((text, key)))
+    assert len(sent) == 1 and cognition.calls == 0
+    service.assess_task_result(owner)
     assert (checkpoint.world.root / "decision.md").read_text() == "The private consumer handoff is still outstanding.\n"
     followups = [task for task in state.tasks.all() if task.task_id != reflection]
     assert len(followups) == 1 and followups[0].repository == "app"
     assert state.tasks.read(followups[0].task_id)[1].owner == str(owner)
-    sent=[]
     service.deliver_task_result(owner, send=lambda text, key: sent.append((text, key)))
+    service.assess_task_result(owner)
     assert len(sent) == 1 and cognition.calls == 1
     assert len(state.tasks.all()) == 2  # transport retry cannot repeat admission
     assert not world_state.pending_task_result_conversations()
@@ -442,7 +448,7 @@ def test_quiet_rhythm_result_is_retained_evidence_and_sends_nothing(tmp_path):
                 "COMMIT: reflection findings\nDISPOSITION: idle\nQUESTION: NONE"))
     assert world_state.pending_task_result_conversations() == (owner,)
     service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
-    assert cognition.calls == 1 and len(sent) == 1
+    assert cognition.calls == 0 and len(sent) == 1
     assert sent[0].startswith("A new consumer depends on the unpublished handoff.")
 
 
@@ -467,6 +473,8 @@ def test_rhythm_result_assessment_cannot_expand_repository_authority(tmp_path):
     service._state.tasks.transports = runner.transports
     sent=[]
     service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
+    assert not (checkpoint.world.root / "decision.md").exists()
+    service.assess_task_result(owner)
     assert (checkpoint.world.root / "decision.md").is_file()
     assert len(state.tasks.all()) == 1
     # The refusal stays with the automatic turn; the owner gets the finding.

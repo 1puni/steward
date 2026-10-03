@@ -2432,3 +2432,17 @@ def test_task_link_rendering_is_retained_across_delivery_retries(tmp_path, monke
     assert len(sent) == 2
     assert "https://t.me/steward/tasks?startapp=" in sent[1]
     assert "renamed_bot" not in sent[1]
+
+
+def test_result_transport_is_bounded_text_and_does_not_wait_on_rate_limit(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    sent = []
+    def send(_chat, text, **kwargs):
+        sent.append(text)
+        raise TelegramAPIError('rate limited', retry_after=300)
+    monkeypatch.setattr(service.api, 'send_message', send)
+    monkeypatch.setattr(service.api, 'send_document', lambda *a, **k: pytest.fail('evidence is not an action'))
+    monkeypatch.setattr(service_module.time, 'sleep', lambda *_: pytest.fail('transport waited'))
+    with pytest.raises(TelegramAPIError):
+        service.send_result(1, 42, 'Retained evidence [[file:/tmp/private]]', 'result:bounded')
+    assert len(sent) == 1

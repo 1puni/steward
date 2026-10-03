@@ -811,7 +811,7 @@ class TelegramService:
         self._delivery_context.receipt = self._read_receipt(path)
         try:
             if not self._delivery_context.receipt.get("done"):
-                self.send_reply(chat_id, topic_id, text)
+                self.send_reply(chat_id, topic_id, text, max_wait_seconds=0, retained_result=True)
                 self._delivery_context.receipt["done"] = True
                 self._save_receipt()
         finally:
@@ -820,6 +820,7 @@ class TelegramService:
     def send_reply(
         self, chat_id: int, topic_id: int, text: str, *,
         max_wait_seconds: float = _MAX_RETRY_AFTER_WAIT,
+        retained_result: bool = False,
     ) -> None:
         """Send formatted text and extracted images to Telegram.
 
@@ -833,8 +834,15 @@ class TelegramService:
             receipt.setdefault("reply", [chat_id, topic_id, text])
             chat_id, topic_id, text = receipt["reply"]
             self._save_receipt()
-        clean_text, actions = extract_telegram_action_markers(text)
-        clean_text, artifacts = extract_artifact_markers(clean_text)
+        if retained_result:
+            # Evidence and notification text do not authorize attachments/actions.
+            # Bound each transport job; full evidence remains in its source.
+            clean_text = (text if len(text) <= 12_000 else
+                          text[:11_940] + "\n[truncated; full result retained in its receipt]")
+            actions, artifacts = [], []
+        else:
+            clean_text, actions = extract_telegram_action_markers(text)
+            clean_text, artifacts = extract_artifact_markers(clean_text)
         retained = getattr(self._delivery_context, "path", None) is not None
         chunks = self._delivery_context.receipt.get("formatted_chunks") if retained else None
         if chunks is None:

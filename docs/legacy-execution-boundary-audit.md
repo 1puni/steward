@@ -3,7 +3,8 @@
 Revision-scoped audit, 2026-10-02. Source inspected:
 `29b968667dc4378ad9c80d9953e811974f26e2f4`; retained audit branch initially
 continued at `f9d5ace8`. Recommendations below are proposals, not implemented
-contracts or deployment claims. This audit changes documentation only.
+contracts or deployment claims at that revision. The October 3 correction below
+records subsequent implementation of B and V's clarification of notification policy.
 Attribution: `task:task-24c4f2f2dc5f539ba93beb7bcaab5431`.
 
 The central remaining problem is that execution completion still carries facts
@@ -144,16 +145,15 @@ requires delaying delivery of an already accepted question. Existing
 [result tests](../tests/test_task_result_delivery.py) establish assessment/send
 retry receipts and crash replay, not latency under saturated workers.
 
-**Correction and validation.** Give the retained result its own delivery decision
-and receipt independently of optional assessment. Use its existing source and
-owner, with task status rechecked where needed. Keep quiet rhythm opt-in and
-avoid turning every assessment into another notification. A bounded transport
-path must progress under a full cognition budget; merely rearranging FIFO lanes
-does not solve indefinitely occupied slots. This is a narrow scheduling-policy
-change requiring an explicit latency expectation, not a request for a general
-scheduler. Test full worker occupancy, busy/cleared conversation, failed send,
-crash after send before receipt, late assessment, ownership routing and duplicate
-source replay. Preserve documented at-least-once transport semantics.
+**October 3 correction.** V authorized delivering retained evidence independently of
+assessment. The implementation gives each retained result a frozen delivery decision
+and transport receipt, with optional assessment settled separately. One transport
+worker progresses under full cognition occupancy; this is an explicit narrow
+exception to the shared budget. The [current contract](kernel-contract.md#task-results)
+states latency, status rechecks and at-least-once semantics. Local regressions cover
+full worker occupancy, busy/cleared conversation, failed send, crash after send before
+receipt, late assessment, ownership routing and duplicate source replay. Deployed-host
+latency and real-provider behavior are not established by those fixtures.
 
 ## C. A failed world execution settles the interval without completing its work
 
@@ -336,11 +336,12 @@ task locks, repository leases and generation fences remain necessary. Cancelling
 a task need not kill a running gate to prevent publication. Capturing files
 before containment is verified would weaken the actual safety boundary.
 
-`NOTIFY` remains a justified opt-in for automatic runs, not a failed task-operation
-API: absent notification preserves evidence without sending it, and no task
-blocks. History `b3cc8d5f` and `2807d2d2` explains the noise problem and the
-alternative of delivering a changed world file directly. Do not remove quiet
-delivery policy while decoupling evidence from assessment.
+The October 2 recommendation to keep the `NOTIFY:` mechanism is superseded by
+V's October 3 direction: quiet-by-default is the policy worth keeping; a prose
+marker is not the operation. The callable-notification sibling owns replacing that
+marker. It uses the same retained result receipt transport, rather than a second
+sender. History `b3cc8d5f` and `2807d2d2` explains the original noise problem;
+those historical decisions do not require retaining final-output syntax.
 
 Bound follow-ups by the fact they move, not by the module they edit. A and D
 belong beside the existing callable-operation work. B concerns delivery and

@@ -532,30 +532,53 @@ class ConversationService:
     def deliver_task_result(
         self, conversation_id: ConversationId, *, send: Callable[[str, str], None],
     ) -> str | None:
-        """Assess a retained result, send it, and only then acknowledge delivery."""
-        receipt = self._state.retain_pending_result(
-            conversation_id,
-        )
+        """Send retained evidence without acquiring a conversation or cognition slot."""
+        receipt = self._state.retain_pending_result(conversation_id)
         if receipt is None:
             return None
-        result_text, source_event_key = receipt["result_text"], receipt["source_key"]
-        task_id = TaskId(receipt["task_id"]) if receipt.get("task_id") else None
         if "reply" not in receipt:
-            try:
-                receipt["reply"] = self._assess_task_result(
-                    conversation_id, task_id, result_text, source_event_key,
-                ) if task_id is not None else result_text
-            except (RuntimeExecutionError, RuntimeUnavailable) as error:
-                # The task's findings remain deliverable when assessment failed.
-                # Repeating uncertain model side effects is not transport retry.
-                receipt["reply"] = f"{result_text}\n\nResult assessment interrupted: {error}"
+            receipt["reply"] = receipt["result_text"]
+            if receipt.get("task_id") and receipt["source_key"].endswith(":done"):
+                task = self._state.tasks.get(TaskId(receipt["task_id"]))
+                if task.procedure and task.procedure.event.startswith("rhythm:"):
+                    receipt["reply"] = notification(receipt["result_text"])
+            # Freeze the delivery decision before attempting external transport.
+            receipt["assess"] = bool(receipt.get("task_id"))
             self._state.save_result_receipt(receipt)
         if receipt["reply"]:
-            send(receipt["reply"], source_event_key)
+            send(receipt["reply"], receipt["source_key"])
         receipt.pop("delivery_error", None)
         receipt["done"] = True
         self._state.save_result_receipt(receipt)
         return receipt["reply"]
+
+    def assess_task_result(self, conversation_id: ConversationId) -> None:
+        """Optional judgment after delivery; final prose creates no second send."""
+        receipt = next((r for r in self._state.pending_result_assessments()
+                        if r["owner"] == str(conversation_id)), None)
+        if receipt is None:
+            return
+        task = self._state.tasks.get(TaskId(receipt["task_id"]))
+        current_source = f"task_result:{task.task_id}:{task.outcome}:{task.status.value}"
+        if task.owner != str(conversation_id) or (
+            receipt["source_key"].startswith("task_result:")
+            and receipt["source_key"] != current_source
+        ):
+            receipt["assessment_done"] = True
+            receipt["assessment_skipped"] = "task outcome or owner changed"
+            self._state.save_result_receipt(receipt)
+            return
+        try:
+            self._assess_task_result(
+                conversation_id, TaskId(receipt["task_id"]),
+                receipt["result_text"], receipt["source_key"],
+            )
+        except (RuntimeExecutionError, RuntimeUnavailable) as error:
+            receipt["assessment_error"] = str(error)
+        # Busy/world-acceptance failures propagate and remain pending. Accepted
+        # world turns replay their own receipt if this write is interrupted.
+        receipt["assessment_done"] = True
+        self._state.save_result_receipt(receipt)
 
     def _assess_task_result(
         self, conversation_id: ConversationId, task_id: TaskId,
@@ -596,27 +619,7 @@ class ConversationService:
             episode_input=(result_text if target_result else
                            f"Harness task result for {task_id} in {task.repository}."),
         )
-        reply = result.reply_text
-        # Old accepted assessments retain the meaning of their frozen request.
-        # New completion requests never instruct or interpret a silence token.
-        legacy = prior is not None and "reply exactly silent" in text.casefold()
-        if legacy and reply.strip() == "SILENT":
-            reply = ""
-        if rhythm and notice and not legacy and result.execution_turn_id is None:
-            # The run decided that its owner hears of it; this turn may only
-            # say it differently. Its other words stay in the world, and a
-            # follow-up it admitted is named, since that is news too.
-            message = notification(reply) or notice
-            if result.task_admission is not None:
-                message += f"\n\nTask admitted: {result.task_admission.task_id}"
-            return message
-        if review and result.execution_turn_id is None:
-            return reply
-        return (
-            result_text
-            if result.execution_turn_id is not None or not reply.strip()
-            else f"{result_text}\n\n{reply}"
-        )
+        return result.reply_text
 
     def accept_prepared(self, event_id: str) -> ConversationTurnResult | Turn:
         row = self._state.prepared_turn(event_id)

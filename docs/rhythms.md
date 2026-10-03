@@ -170,10 +170,10 @@ protected procedure binding or configured publication/target requirements.
 
 Every rhythm explicitly declares `owner`. A configured `telegram:<topic>` or
 `desk:<conversation>` retains that protected result owner in each accepted task.
-Completion, questions and failures then enter the existing task-result assessment
-path: the owner's native conversation can commit world knowledge, propose useful
-follow-up tasks within configured repository authority, and return a concise
-result through its configured transport. Assessment cannot grant itself new
+Reportable completion, questions and failures enter the retained-result transport
+path independently of cognition. Later optional assessment in the owner's native
+conversation can commit world knowledge and propose useful follow-up tasks within
+configured repository authority. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
 repeating accepted world edits or follow-up admission.
 
@@ -473,11 +473,9 @@ message can be told apart from a run that never happened. The controller also lo
 A procedure rhythm's findings follow the same rule. Findings above the closure
 lines are the run's evidence commit, and they notify no one unless they contain a
 `NOTIFY:` line. Until then the result costs no model turn: no assessment runs and
-nothing is sent. A flagged result is assessed by its owning conversation as
-before. The run's own message is what gets sent, unless the assessment writes a
-`NOTIFY:` line of its own to say it differently, and a follow-up task the
-assessment admitted is named after it. The assessment cannot silence a flagged
-result. An explicit request, a question and a failure still report as they
+nothing is sent. The run's own message is delivered independently of the owning
+conversation's optional assessment. Assessment cannot replace or silence that
+message, and its final narration does not send another notification. An explicit request, a question and a failure still report as they
 always did, and so does a harness-prepared result that already carries its reply.
 A refused proposal or action in any automatic turn (`harness:*`) is kept on the
 turn and logged, not appended to the owner's message.

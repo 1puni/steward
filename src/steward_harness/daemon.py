@@ -521,6 +521,7 @@ class StewardDaemon:
         self._stop = threading.Event()
         self._desk_ingress: threading.Thread | None = None
         self._telegram: TelegramService | None = None
+        self._result_dispatch = Dispatch(1)
         self._kernel: StewardKernel | None = None
         self._health: HealthServer | None = None
         self._rhythm_health: dict = {}
@@ -803,8 +804,9 @@ class StewardDaemon:
         """Build the one pass over every owner this daemon is responsible for.
 
         The pass enumerates and hands each owner to the shared `Dispatch`; it
-        never waits for one. That is the whole scheduler. `controller.workers`
-        is how many run at once, the executor's queue is who goes next, and a
+        never waits for one. `controller.workers` bounds background cognition;
+        a separate single transport worker delivers retained results. The shared
+        executor's queue is who goes next for cognition, and a
         live conversation is not here at all — it runs on the ingress thread
         that received it, so a full budget never keeps the operator waiting.
 
@@ -838,6 +840,19 @@ class StewardDaemon:
                     OSError, subprocess.TimeoutExpired, WorldContentConflict,
                     WorldUpdatePending, subprocess.CalledProcessError) as error:
                 log.info("task result deferred: %s", deferral_cause(error))
+
+        def assess_result(owner: ConversationId) -> None:
+            try:
+                conversations.assess_task_result(owner)
+            except (Busy, ConversationBusy, GitTransportError, OSError,
+                    subprocess.TimeoutExpired, WorldContentConflict,
+                    WorldUpdatePending, subprocess.CalledProcessError) as error:
+                log.info("task assessment deferred: %s", deferral_cause(error))
+
+        def assessments() -> Iterator[Owner]:
+            for owner in dict.fromkeys(ConversationId(r["owner"])
+                                      for r in state.pending_result_assessments()):
+                yield ("assessment", owner), lambda owner=owner: assess_result(owner)
 
         def probes() -> Iterator[Owner]:
             if paused():
@@ -945,7 +960,7 @@ class StewardDaemon:
             except (OSError, GitTransportError, Busy, subprocess.CalledProcessError) as error:
                 log.warning("result discovery deferred: %s", error)
 
-        lanes = (kernel.owners, probes, desk_messages, rhythm, targets, results)
+        lanes = (kernel.owners, probes, desk_messages, rhythm, targets, assessments)
 
         def sync_tasks():
             try:
@@ -970,6 +985,9 @@ class StewardDaemon:
                 next_retention = time.monotonic() + 3600
             kernel.dispatch.submit(("task-intake", "git"), sync_tasks)
             dispatch.reap()
+            self._result_dispatch.reap()
+            for key, work in results():
+                self._result_dispatch.submit(key, work)
             kernel.tasks.flush_inputs()
             for key, work in chain.from_iterable(lane() for lane in lanes):
                 dispatch.submit(key, work)
@@ -1116,6 +1134,7 @@ class StewardDaemon:
             # on them indefinitely unless they are asked to end first.
             self._kernel.tasks.interrupt_running()
             self._kernel.stop()
+        self._result_dispatch.stop()
         if self._telegram is not None:
             self._telegram.stop()
         if self._desk_ingress is not None and self._desk_ingress is not threading.current_thread():

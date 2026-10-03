@@ -35,13 +35,14 @@ def repository_lease(state: StateDatabase, repository: str) -> Lease:
 class Dispatch:
     """One budget of concurrent work, and the owners currently holding it.
 
-    `controller.workers` is the whole scheduling policy. Everything the
+    `controller.workers` bounds background work. Everything the
     steward schedules for itself — task slices, repository publication,
-    rhythms, desk messages, probes, result delivery — competes for the same
+    rhythms, desk messages, probes, result assessment — competes for the same
     slots, and the executor's own queue is the assignment: first asked, first
     served. There is no per-lane reservation and no fairness ordering, because
     both are a scheduler, and a scheduler is the thing this row deletes.
 
+    Retained result transport has one independent worker and never runs cognition.
     A live conversation never comes here. The operator talking to their
     steward runs on the ingress thread that received them, so the budget can
     be full and they still get an answer.

@@ -49,11 +49,12 @@ def test_shutdown_keeps_telegram_open_until_kernel_results_and_ingress_drain():
         stop=lambda: events.append('drain ingress and close transport'),
     )
     daemon._kernel = SimpleNamespace(
-        stop=lambda: events.append('drain task results'),
+        stop=lambda: events.append('drain cognition'),
         tasks=SimpleNamespace(interrupt_running=lambda: events.append('interrupt task turns')),
     )
+    daemon._result_dispatch = SimpleNamespace(stop=lambda: events.append('drain task results'))
     daemon._desk_ingress = SimpleNamespace(join=lambda: events.append('drain desk ingress'))
     daemon._health = SimpleNamespace(stop=lambda: events.append('stop health'))
     daemon.stop()
-    assert events == ['stop intake', 'interrupt task turns', 'drain task results',
+    assert events == ['stop intake', 'interrupt task turns', 'drain cognition', 'drain task results',
                       'drain ingress and close transport', 'drain desk ingress', 'stop health']

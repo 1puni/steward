@@ -494,8 +494,10 @@ def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monke
     with running(daemon) as errors:
         assert sent.wait(5), errors
 
-    assert len(reviewer.requests) == 1
-    assert "Harness task result" in reviewer.requests[0].prompt
+    # Delivery can precede the next pass that schedules optional assessment.
+    assert len(reviewer.requests) <= 1
+    if reviewer.requests:
+        assert "Harness task result" in reviewer.requests[0].prompt
     assert str(task_id) in events.read_text()
     assert "Task cancelled" in events.read_text()
 
@@ -645,8 +647,10 @@ def test_daemon_delivers_task_truth_to_the_telegram_topic_that_admitted_it(
     with running(daemon) as errors:
         assert delivered.wait(5), errors
 
-    assert len(reviewer.requests) == 1
-    assert "Harness task result" in reviewer.requests[0].prompt
+    # Delivery can precede the next pass that schedules optional assessment.
+    assert len(reviewer.requests) <= 1
+    if reviewer.requests:
+        assert "Harness task result" in reviewer.requests[0].prompt
     assert len(sent) == 1
     assert sent[0][:2] == (99, topic_id)
     assert str(task_id) in sent[0][2]
@@ -888,6 +892,7 @@ def _result_pass(tmp_path, config, state):
                                  reap=lambda: None),
         owners=lambda: (), tasks=SimpleNamespace(flush_inputs=lambda: None),
     )
+    daemon._result_dispatch = kernel.dispatch
     service = object.__new__(ConversationService)
     service._state = state
     step = daemon._pass(state, service, kernel, SimpleNamespace(), None)
@@ -1044,3 +1049,42 @@ def test_task_cards_and_short_commands_keep_the_existing_git_identity(tmp_path):
     assert "Note recorded" in commands("task", f"note {task_id.short} Keep the old links working", 1, 42, 7)
     assert commands.state.tasks.get(task_id).pending[-1][2] == "Keep the old links working"
     assert commands("task", f"show {task_id}", 1, 42, 7).startswith("⏳")
+
+
+def test_retained_result_progresses_with_every_cognition_worker_occupied(tmp_path):
+    from steward_harness.kernel import Dispatch
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    state.save_result_receipt({"owner": "telegram:42", "task_id": None,
+                               "source_key": "notify:retained", "result_text": "Already known",
+                               "reply": "Already known"})
+    dispatch = Dispatch(2)
+    release = threading.Event()
+    started = [threading.Event(), threading.Event()]
+    def occupy(event):
+        event.set()
+        assert release.wait(5)
+    for n, event in enumerate(started):
+        dispatch.submit(("task", n), lambda event=event: occupy(event))
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml")
+    delivered = threading.Event()
+    daemon._telegram = SimpleNamespace(config=config.telegram,
+        send_result=lambda *args: delivered.set())
+    service = object.__new__(ConversationService)
+    service._state = state  # no cognition exists in this service
+    kernel = SimpleNamespace(dispatch=dispatch, owners=lambda: (),
+                             tasks=SimpleNamespace(flush_inputs=lambda: None))
+    try:
+        assert all(event.wait(1) for event in started)
+        step = daemon._pass(state, service, kernel, SimpleNamespace(), None)
+        step()
+        assert delivered.wait(1), "retained delivery waited for cognition capacity"
+        assert not release.is_set()
+    finally:
+        release.set()
+        daemon._result_dispatch.stop()
+        dispatch.stop()
+    assert state.result_receipt("notify:retained")["done"]
