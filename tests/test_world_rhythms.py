@@ -598,3 +598,99 @@ def test_a_world_rhythm_is_bounded_by_its_procedure_budget_and_own_deadline(tmp_
     procedures.config = config.model_copy(update={"procedures": {"sleep": sleep}})
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:21")
     assert (seen[-1].token_budget, seen[-1].timeout_seconds) == (250_000, 5400)
+
+
+def test_short_interval_cannot_starve_the_night_chain_and_staging(tmp_path, monkeypatch):
+    """A 301s inbox used to win every poll and exclude every later rhythm."""
+    inbox = CHAIN['sleep'] | {'schedule': 300, 'owner': None}
+    staging = CHAIN['sleep'] | {'schedule': 3600, 'owner': None}
+    rhythms = {'inbox': inbox, **CHAIN, 'staging': staging}
+    rhythms['sleep'] = rhythms['sleep'] | {'offset': 3600}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    clock = [NOW]
+    monkeypatch.setattr('steward_harness.procedures.time.time', lambda: clock[0])
+    ran = []
+    for _ in range(6):
+        name, key = next(iter(procedures.due_world_rhythms()))
+        ran.append(name)
+        procedures.advance_world_rhythm(service)
+        clock[0] += 301
+    assert ran == ['inbox', 'sleep', 'rem', 'dream-away', 'staging', 'inbox']
+    assert cognition.calls == 6
+    # Restart derives the same selection; no fairness cursor is persisted.
+    restarted = Procedures(config, state, {}, world=checkpoint.world)
+    assert list(restarted.due_world_rhythms()) == list(procedures.due_world_rhythms())
+
+
+def test_queued_world_work_rechecks_bucket_and_pause_at_execution(tmp_path, monkeypatch):
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path)
+    daemon = StewardDaemon(config, tmp_path / 'steward.yaml')
+    daemon._procedures = procedures
+    queued = []
+    kernel = SimpleNamespace(
+        dispatch=SimpleNamespace(submit=lambda key, work: queued.append((key, work)), reap=lambda: None),
+        owners=lambda: (), tasks=SimpleNamespace(flush_inputs=lambda: None))
+    clock = [NOW]
+    monkeypatch.setattr('steward_harness.procedures.time.time', lambda: clock[0])
+    step = daemon._pass(state, service, kernel, SimpleNamespace(), None)
+    step()
+    work, = [work for key, work in queued if key == ('rhythm', 'world')]
+    clock[0] += DAY
+    work()
+    assert state.turn_for_source(ConversationId('rhythm:sleep'), 'rhythm:sleep:20') is None
+    assert state.turn_for_source(ConversationId('rhythm:sleep'), 'rhythm:sleep:21').state == 'completed'
+    clock[0] += DAY
+    monkeypatch.setattr(state, 'paused', lambda: True)
+    work()
+    assert cognition.calls == 1
+
+
+def test_observation_distinguishes_offset_active_failure_and_blocked_chain(tmp_path):
+    rhythms = CHAIN | {'sleep': CHAIN['sleep'] | {'offset': 3600}}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    observed = procedures.world_rhythm_observations(now=NOW + 9)
+    assert observed['sleep']['due_at'] == NOW
+    assert observed['sleep']['overdue_seconds'] == 9
+    assert observed['rem']['progress'] == 'awaiting_predecessor'
+    owner = ConversationId('rhythm:sleep')
+    state.open_conversation(owner, provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner, 'rhythm:sleep:20', 'harness:rhythm', 'synthetic personal evidence')
+    assert procedures.world_rhythm_observations(now=NOW + 3600)['sleep']['progress'] == 'active'
+    state.interrupt_turn(turn.turn_id, 'synthetic provider failure')
+    observed = procedures.world_rhythm_observations(now=NOW + 3600)
+    assert observed['sleep']['progress'] == 'failed'
+    assert observed['rem']['progress'] == 'predecessor_failed'
+    assert not observed['sleep']['eligible']
+    assert list(procedures.due_world_rhythms(now=NOW + 3600)) == []
+    assert procedures.world_rhythm_observations(now=NOW + DAY)['sleep']['eligible']
+
+
+def test_observation_uses_world_input_guard_and_retains_completion_timing(tmp_path):
+    rhythms = {'sleep': CHAIN['sleep'] | {'paths': ['episodes/']}}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    procedures.run_world_rhythm(service, 'sleep', 'rhythm:sleep:20')
+    settled = procedures.world_rhythm_observations(now=NOW)['sleep']
+    assert settled['progress'] == 'scheduled'
+    assert settled['started_at'] and settled['completed_at']
+    _world_commit(checkpoint.world.root, 'maintenance/service.md')
+    waiting = procedures.world_rhythm_observations(now=NOW + DAY)['sleep']
+    assert waiting['progress'] == 'awaiting_input'
+    assert waiting['observed_at'] == NOW + DAY
+    _world_commit(checkpoint.world.root, 'episodes/personal.md')
+    assert procedures.world_rhythm_observations(now=NOW + DAY)['sleep']['progress'] == 'overdue'
+
+
+def test_missing_policy_consumes_failed_interval_instead_of_starving_other_work(tmp_path):
+    rhythms = {'inbox': CHAIN['sleep'] | {'schedule': 300}, 'sleep': CHAIN['sleep']}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    policy = config.procedures['sleep'].instructions
+    __import__('pathlib').Path(policy).unlink()
+    procedures.run_world_rhythm(service, 'inbox', f'rhythm:inbox:{NOW // 300}')
+    observed = procedures.world_rhythm_observations(now=NOW)
+    assert observed['inbox']['progress'] == 'failed'
+    assert list(procedures.due_world_rhythms(now=NOW)) == [('sleep', 'rhythm:sleep:20')]
+    assert cognition.calls == 0
+    # Failure remains consumed across restart, while the next interval retries.
+    restarted = Procedures(config, state, {}, world=checkpoint.world)
+    assert 'inbox' not in dict(restarted.due_world_rhythms(now=NOW))
+    assert 'inbox' in dict(restarted.due_world_rhythms(now=NOW + 300))

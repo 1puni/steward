@@ -379,6 +379,7 @@ class KernelCommands:
         if parts == ["list"]:
             lines = []
             runs = [task.procedure for task in self.state.tasks.all()]
+            observations = self.procedures.world_rhythm_observations()
             for name, rhythm in self.config.rhythms.items():
                 schedule = (f"after {rhythm.after}" if rhythm.after is not None
                             else f"every {rhythm.schedule}s" if isinstance(rhythm.schedule, int)
@@ -389,6 +390,10 @@ class KernelCommands:
                     key = f"rhythm:{name}:{interval(self.config.rhythms, name, time.time())}"
                     turn = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
                     history = f"this interval: {turn.state if turn else 'not run yet'}"
+                    observed = observations[name]
+                    history += (f"; {observed['progress']}, observed_at={observed['observed_at']:.0f}, "
+                                f"due_at={observed['due_at']:.0f}, "
+                                f"overdue_seconds={observed['overdue_seconds']:.0f}")
                 pause = "; automatic admission paused" if self.state.paused() else ""
                 lines.append(f"{name}: {schedule}, {rhythm.procedure}, {rhythm.input}, "
                              f"owner={rhythm.owner or 'retained only'}; {history}{pause}")
@@ -518,6 +523,7 @@ class StewardDaemon:
         self._telegram: TelegramService | None = None
         self._kernel: StewardKernel | None = None
         self._health: HealthServer | None = None
+        self._rhythm_health: dict = {}
 
     def request_stop(self) -> None:
         """Ask the owned loop to finish its pass and drain, without waiting.
@@ -684,7 +690,9 @@ class StewardDaemon:
                 )
         if self.config.controller.health_bind:
             self._health = HealthServer(
-                self.config.controller.health_bind, self._board(state)
+                self.config.controller.health_bind, self._board(state),
+                rhythms=lambda: self._rhythm_health,
+                observation_max_age=max(60, self.config.controller.poll_seconds * 3),
             )
             self._health.start()
         self._start_telegram(state, conversations, commands)
@@ -847,18 +855,19 @@ class StewardDaemon:
                     yield ("desk", message.msg_id), lambda m=message: desk.drain(m)
 
         def rhythm() -> Iterator[Owner]:
+            now = time.time()
+            observations = (self._procedures.world_rhythm_observations(now=now)
+                            if self.config.rhythms else {})
+            self._rhythm_health = dict(
+                observed_at=now, paused=paused(), rhythms=observations,
+                workers=self.config.controller.workers,
+                dispatch=dispatch.observation() if hasattr(dispatch, "observation") else None)
             if paused() or not self.config.rhythms:
                 return
             yield ("rhythms",), self._procedures.advance_rhythms
-            # World rhythms are one owner. Each writes the same world, and two
-            # started together make the later one's candidate a replay of a
-            # world that moved under it; the lease keeps that correct, not
-            # cheap. While one runs the owner is in flight, so the next due
-            # rhythm, in configured order, starts on the first poll after it.
-            due = next(iter(self._procedures.due_world_rhythms()), None)
-            if due is not None:
-                yield ("rhythm", "world"), lambda name=due[0], key=due[1]: (
-                    self._procedures.run_world_rhythm(conversations, name, key))
+            # One world writer; choose fresh due work when its queued slot runs.
+            if any(value['eligible'] for value in observations.values()):
+                yield ("rhythm", "world"), lambda: self._procedures.advance_world_rhythm(conversations)
 
         def targets() -> Iterator[Owner]:
             for name in self.config.targets:

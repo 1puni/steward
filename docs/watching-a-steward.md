@@ -24,9 +24,24 @@ is also what a broken monitor produces.
 - Count what rhythms recorded without sending. Rhythms are silent unless they
   write `NOTIFY:` ([what a rhythm sends](rhythms.md#what-a-rhythm-sends)), so a
   quiet topic proves nothing either way. `/status` gives the 24-hour count, and each
-  silent world-rhythm reply logs `reply recorded, not delivered`. A rhythm that ran
-  and recorded is healthy. One that shows up in neither the count nor the sent
-  messages did not run.
+  silent world-rhythm reply logs `reply recorded, not delivered`. This proves
+  recorded execution, not useful reflection. Absence from a bounded count or
+  transport history does not prove a missed execution: inspect the current
+  admission state, input guard and canonical turns.
+
+The desk probe prefers the controller's timestamped `world_rhythms` health
+observation over offline estimates. It reports observation age and worker
+pressure even when task-store reads fail. The watch reports stale or missing
+admission evidence separately from execution failures. With fresh evidence and
+admission unpaused, it names failed chains and eligible unstarted intervals
+older than five minutes; this is a visibility threshold, not another schedule.
+A world turn is identified by its source key, not a nonexistent task revision.
+When reading retained probes, parse anchored `rhythm_progress=` records and
+retain their observation timestamp; prose quoting that string is not a probe. For
+world Git evidence, use Git's `%(trailers:key=Steward-Source,valueonly)` formatter
+and match the complete `rhythm:<name>:<interval>` value. A body grep can select
+reflection prose; even a genuine commit timestamp is acceptance evidence, not
+an execution start timestamp.
 
 ## Build a monitor that cannot lie quietly
 

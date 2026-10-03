@@ -56,3 +56,24 @@ def test_health_bind_is_validated() -> None:
 def test_invalid_explicit_identity_cannot_pass_health(monkeypatch, value):
     monkeypatch.setenv("STEWARD_RELEASE_SHA", value)
     assert release_sha() == ""
+
+
+def test_health_names_stale_rhythm_evidence_without_changing_release_readiness(monkeypatch):
+    monkeypatch.setenv('STEWARD_RELEASE_SHA', 'a' * 40)
+    clock = [100]
+    monkeypatch.setattr('steward_harness.web.health.time.time', lambda: clock[0])
+    sample = {}
+    server = HealthServer('127.0.0.1:0', rhythms=lambda: sample, observation_max_age=60)
+    server.start()
+    try:
+        assert _get(server.port)[1]['world_rhythms']['fresh'] is False
+        sample.update(observed_at=100, paused=False, rhythms={'sleep': {'progress': 'scheduled'}})
+        assert _get(server.port)[1]['world_rhythms']['fresh'] is True
+        clock[0] = 161
+        status, body = _get(server.port)
+        assert status == 200 and body['ok']  # Release identity is a separate fact.
+        assert body['world_rhythms']['age_seconds'] == 61
+        assert body['world_rhythms']['fresh'] is False
+        assert body['world_rhythms']['observed_at'] == 100
+    finally:
+        server.stop()

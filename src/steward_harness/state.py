@@ -975,6 +975,15 @@ class StateDatabase:
             ).fetchone()
         return self._turn(row) if row is not None else None
 
+    def latest_rhythm_turn(self, owner: ConversationId) -> Turn | None:
+        """Latest execution evidence, excluding native input children."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM turns WHERE conversation_id=? AND execution_turn_id IS NULL "
+                "ORDER BY started_at DESC, rowid DESC LIMIT 1", (str(owner),),
+            ).fetchone()
+        return self._turn(row) if row is not None else None
+
     def last_world_candidate(self, owner: ConversationId) -> str | None:
         """The world revision this conversation's latest accepted turn produced."""
         with self.connect() as connection:

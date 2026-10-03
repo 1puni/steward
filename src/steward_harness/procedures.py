@@ -11,6 +11,7 @@ import logging
 import subprocess
 import time
 from pathlib import Path
+from datetime import datetime
 
 from steward_harness.git_transport import GitTransportError
 from steward_harness.lease import Busy
@@ -60,6 +61,56 @@ def interval(rhythms, name, now):
     if rhythm.after is not None:
         return interval(rhythms, rhythm.after, now)
     return int((now - rhythm.offset) // rhythm.schedule)
+
+
+def world_rhythm_observation(rhythms, name, now, *, run=None, latest=None,
+                             receipt=None, before=None, changed=None):
+    """Describe the same current bucket admission uses; unknown input is not due.
+
+    Callers supply canonical turns/receipts and the world's change guard. An
+    offline reader that cannot check that guard passes None, never guesses.
+    """
+    rhythm = rhythms[name]
+    root = rhythm
+    while root.after is not None:
+        root = rhythms[root.after]
+    index = interval(rhythms, name, now)
+    start = index * root.schedule + root.offset
+    key = f"rhythm:{name}:{index}"
+    last = run or latest
+    stamp = (last.completed_at or last.started_at) if last else None
+    updated = datetime.fromisoformat(stamp).timestamp() if stamp else None
+    value = dict(event=key, last_event=last.source_event_key if last else None,
+                 status=last.state if last else "never_started",
+                 started_at=last.started_at if last else None,
+                 completed_at=last.completed_at if last else None,
+                 updated=updated, evidence_age_seconds=max(0, now - updated) if updated else None,
+                 observed_at=now, due_at=start, interval_end=start + root.schedule,
+                 schedule=({'after': rhythm.after} if rhythm.after else
+                           {'interval': rhythm.schedule, 'offset': rhythm.offset}),
+                 paths=list(rhythm.paths or []), eligible=False)
+    if run and run.state == "interrupted":
+        progress = "failed"
+    elif receipt:
+        progress = "scheduled"
+        value['due_at'] = start + root.schedule
+    elif run and run.state == "completed" and receipt is None:
+        progress = "accepted_receipt_unobserved"
+    elif run:
+        progress = "receipt_pending" if run.state == "completed" else "active"
+        value['eligible'] = True  # Replay/finish through the existing turn boundary.
+    elif rhythm.after and (before is None or before.state != "completed"):
+        progress = "predecessor_failed" if before and before.state == "interrupted" else "awaiting_predecessor"
+    elif rhythm.paths and changed is None:
+        progress = "input_unobserved"
+    elif rhythm.paths and not changed:
+        progress = "awaiting_input"
+    else:
+        progress = "overdue" if now > start else "due"
+        value['eligible'] = True
+    value['progress'] = progress
+    value['overdue_seconds'] = max(0, now - start) if progress == "overdue" else 0
+    return value
 
 
 class Procedures:
@@ -251,34 +302,45 @@ class Procedures:
                 # operator ingress alive while the operator repairs its policy.
                 log.error("Rhythm %s admission failed: %s", name, error)
 
-    def due_world_rhythms(self, *, now=None):
-        """Each world rhythm whose current interval has no settled run.
-
-        The source key is the whole idempotency: one turn per rhythm and
-        interval, replayed rather than repeated after a restart. A recorded
-        receipt settles the interval; an interrupted turn consumes it. A
-        dependent rhythm shares its predecessor's interval and waits for that
-        interval's accepted turn, so a failed predecessor ends the chain. A
-        rhythm with `paths` starts only when the world changed under them since
-        its last accepted run.
-        """
+    def world_rhythm_observations(self, *, now=None):
+        """Fresh admission facts; no persisted cursor besides turns and receipts."""
         now = time.time() if now is None else now
+        observations = {}
         for name, rhythm in self.config.rhythms.items():
             if rhythm.input != "world":
                 continue
             index = interval(self.config.rhythms, name, now)
             key = f"rhythm:{name}:{index}"
-            prior = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
-            if self.state.result_receipt(key) or (prior is not None and prior.state == "interrupted"):
-                continue
-            if rhythm.after is not None:
-                before = self.state.turn_for_source(
-                    ConversationId(f"rhythm:{rhythm.after}"), f"rhythm:{rhythm.after}:{index}")
-                if before is None or before.state != "completed":
-                    continue
-            if rhythm.paths and prior is None and not self._world_changed(name, rhythm.paths):
-                continue
-            yield name, key
+            owner = ConversationId(f"rhythm:{name}")
+            prior = self.state.turn_for_source(owner, key)
+            before = (self.state.turn_for_source(
+                ConversationId(f"rhythm:{rhythm.after}"), f"rhythm:{rhythm.after}:{index}")
+                if rhythm.after else None)
+            receipt = bool(self.state.result_receipt(key))
+            changed = None
+            if (rhythm.paths and prior is None and not receipt
+                    and (not rhythm.after or (before and before.state == "completed"))):
+                changed = self._world_changed(name, rhythm.paths)
+            observations[name] = world_rhythm_observation(
+                self.config.rhythms, name, now, run=prior,
+                latest=self.state.latest_rhythm_turn(owner), receipt=receipt,
+                before=before, changed=changed)
+        return observations
+
+    def due_world_rhythms(self, *, now=None):
+        # Oldest current interval first; configured order breaks ties (including
+        # a night chain). A short-period rhythm cannot continually jump ahead
+        # of an hourly/daily rhythm while both are due. No catch-up buckets.
+        observations = self.world_rhythm_observations(now=now)
+        for name, value in sorted(observations.items(), key=lambda item: item[1]['due_at']):
+            if value['eligible']:
+                yield name, value['event']
+
+    def advance_world_rhythm(self, conversations):
+        # Resolve at execution, not enqueue: backpressure may span intervals.
+        due = next(iter(self.due_world_rhythms()), None)
+        if due is not None and not self.state.paused():
+            self.run_world_rhythm(conversations, *due)
 
     def _world_changed(self, name, paths):
         """Did the world change under `paths` since this rhythm's last accepted run?
@@ -312,7 +374,13 @@ class Procedures:
             log.info("world rhythm %s deferred: %s", key, error)
             return
         except (RuntimeExecutionError, RuntimeUnavailable, OSError, ValueError) as error:
-            # The interval is consumed: at most one run, never a retry storm.
+            # Policy/input preparation can fail before run_turn creates its
+            # source row. Retain that failure too, or the same interval retries
+            # forever and can monopolize the single world owner.
+            if self.state.turn_for_source(owner, key) is None:
+                failed, _ = self.state.start_turn(
+                    owner, key, "harness:rhythm", f"Scheduled {name} rhythm ({key}).")
+                self.state.interrupt_turn(failed.turn_id, str(error))
             log.error("world rhythm %s failed: %s", key, error)
             return
         recorded = result.reply_text.strip()
