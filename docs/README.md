@@ -21,6 +21,7 @@ block is in the [kernel contract](kernel-contract.md#configuration).
 | [Native provider runtime](native-provider-runtime.md) | Private homes, session continuity, model policy, live input, and where provider storage actually goes |
 | [Controller and agent identities](execution-boundary.md) | Host provisioning, and the boundary that has to be enforced rather than promised |
 | [Watching a live steward](watching-a-steward.md) | Why a failing steward looks idle, how a monitor avoids lying quietly, and what each number measures |
+| [Topic evidence export](topic-evidence-export.md) | Bounded metadata-only operator handoff for a Telegram routing investigation |
 | [Task board](task-mini-app.md) | The read-only Mini App: where each displayed fact comes from, and why no write crosses the socket |
 | [Upgrading](upgrading.md) | Carrying a running steward's obligations across a new version, rehearsed before performed |
 
