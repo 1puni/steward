@@ -11,6 +11,7 @@ from state_fixtures import FakeRemote, admit_task, close_task_slice
 from steward_harness.task_lock import task_lock
 from steward_harness.state import (
     CheckpointDisposition,
+    ConversationId,
     StateDatabase,
     TaskSpec,
     TaskStatus,
@@ -253,3 +254,35 @@ def test_retrying_a_withdrawn_task_retires_the_withdrawal(tmp_path: Path) -> Non
 
     assert not state.tasks.cancelled(task.task_id)
     assert state.tasks.queued() == (task.task_id,)
+
+
+def test_a_writer_waits_out_a_slow_writer_that_is_then_named(tmp_path: Path, monkeypatch,
+                                                              caplog) -> None:
+    """A write held across task Git must delay other writers, not crash them."""
+    import logging
+    import threading
+    import time
+
+    from steward_harness.lease import Lease
+
+    # Holders may wait out a whole task lease before their Git even starts.
+    assert StateDatabase.WRITE_WAIT_SECONDS > Lease(tmp_path)._timeout * 4
+    monkeypatch.setattr(StateDatabase, "SLOW_WRITE_SECONDS", 0.2)
+    state = StateDatabase(tmp_path / "state.db")
+    holding = threading.Event()
+
+    def accept_turn_with_slow_task_git():
+        with state.connect(write=True):
+            holding.set()
+            time.sleep(0.5)
+
+    holder = threading.Thread(target=accept_turn_with_slow_task_git)
+    with caplog.at_level(logging.WARNING, logger="steward_harness.state"):
+        holder.start()
+        holding.wait()
+        # The controller's 11:49 crash: a result owner opening its conversation.
+        state.open_conversation(ConversationId("telegram:1"), provider="codex",
+                                profile="balanced")
+        holder.join()
+    assert state.lineage(ConversationId("telegram:1")) is not None
+    assert "by accept_turn_with_slow_task_git" in caplog.text
