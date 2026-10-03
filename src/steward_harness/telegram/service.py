@@ -79,6 +79,20 @@ class TelegramDeliveryError(TelegramAPIError):
     """
 
 
+class TelegramContentRejected(TelegramDeliveryError):
+    """A reply was rejected on its content, not on the network or the server.
+
+    Raised instead of the plain `TelegramDeliveryError` when every failed
+    piece came back with a definite client error (Telegram's `is_permanent_rejection`):
+    a malformed entity, a chat or reply-to that no longer exists, and the
+    like. The executor's transient-error path is right for everything else
+    that class covers — retrying while the network or Telegram recovers —
+    but wrong here: the same content gets the same rejection every time, so
+    retrying it every second only floods the log and starves this topic's
+    queue behind a reply that will never go through.
+    """
+
+
 def probe_chat_access(api: TelegramAPI, config: TelegramConfig) -> None:
     """Verify the bot can actually operate in the configured chat before polling starts.
 
@@ -475,6 +489,27 @@ class TelegramService:
             self._administrators_read_at = time.monotonic()
         return user_id in administrators
 
+    def _finish_dropped_update(self, update: dict[str, Any], exc: Exception) -> None:
+        """Mark an update done and tell its sender it was dropped.
+
+        Used for errors a retry can never fix: the message is finished
+        rather than requeued, so one bad update cannot flood the log or
+        block everything behind it in its topic forever.
+        """
+        log.error("Unrecoverable error processing Telegram update: %s", exc)
+        path = self._receipt_path(update)
+        if path is not None:
+            write_receipt(path, {**self._read_receipt(path), "done": True})
+        # Finished is not silent: the sender learns it was dropped.
+        # Plain text, so nothing in the error can act as a marker.
+        message = update["message"]
+        try:
+            self.api.send_message(message["chat"]["id"],
+                                  f"Could not process this message: {exc}",
+                                  topic_id=message.get("message_thread_id") or None)
+        except Exception as error:
+            log.warning("Could not report the dropped update: %s", error)
+
     def _executor_loop(self) -> None:
         """Claim and process one update at a time until stopped and empty."""
         while not self._stop.is_set() or self._has_pending():
@@ -484,6 +519,14 @@ class TelegramService:
                 continue
             try:
                 self._handle_update(update)
+            except TelegramContentRejected as exc:
+                # Every failed piece came back a definite client rejection:
+                # Telegram will answer the same content the same way on
+                # every attempt. Requeueing it with the transient errors
+                # below would retry that same doomed request roughly once a
+                # second forever, flooding the log and starving every other
+                # update behind it in this topic. Finish it instead.
+                self._finish_dropped_update(update, exc)
             except (TelegramAPIError, Busy, ConversationBusy,
                     WorldUpdatePending, WorldContentConflict) as exc:
                 log.debug("Transient error processing update, requeueing: %s", exc)
@@ -500,19 +543,7 @@ class TelegramService:
                     return
                 self._stop.wait(1.0)
             except Exception as exc:
-                log.error("Unrecoverable error processing Telegram update: %s", exc)
-                path = self._receipt_path(update)
-                if path is not None:
-                    write_receipt(path, {**self._read_receipt(path), "done": True})
-                # Finished is not silent: the sender learns it was dropped.
-                # Plain text, so nothing in the error can act as a marker.
-                message = update["message"]
-                try:
-                    self.api.send_message(message["chat"]["id"],
-                                          f"Could not process this message: {exc}",
-                                          topic_id=message.get("message_thread_id") or None)
-                except Exception as error:
-                    log.warning("Could not report the dropped update: %s", error)
+                self._finish_dropped_update(update, exc)
             finally:
                 with self._queue_lock:
                     self._in_flight.discard(topic_key)
@@ -861,6 +892,10 @@ class TelegramService:
         artifact_failures: list[tuple[OutboundArtifact, str, Path | None]] = []
         sent_message_ids: list[int] = []
         allowed_actions = set(self.config.agent_actions)
+        # Every failed piece has to come back permanent for the whole reply
+        # to be unrecoverable: one transient piece alongside it still means
+        # retrying the reply is worth doing.
+        all_permanent = True
 
         for action in actions:
             if chat_id != self.config.chat_id:
@@ -876,7 +911,8 @@ class TelegramService:
             ):
                 failures.append("pin_message message id exceeds Telegram's numeric range")
         if failures:
-            raise TelegramDeliveryError("; ".join(failures))
+            # Properties of the message/config, never the network: always permanent.
+            raise TelegramContentRejected("; ".join(failures))
 
         for index, chunk in enumerate(chunks):
             try:
@@ -895,6 +931,7 @@ class TelegramService:
             except TelegramAPIError as exc:
                 log.error("Failed to send Telegram reply chunk after retries: %s", exc)
                 failures.append(f"message chunk: {exc}")
+                all_permanent = all_permanent and exc.is_permanent_rejection
 
         for index, artifact in enumerate(artifacts):
             if (getattr(self._delivery_context, "path", None) is not None
@@ -923,6 +960,10 @@ class TelegramService:
                 log.error("Failed to send %s %s after retries: %s", label, artifact.path, exc)
                 detail = f"{label} {artifact.path}: {exc}"
                 failures.append(detail)
+                # Already quarantined below, so this path is not the one
+                # that floods the log on a permanent rejection; leave its
+                # delivery classified as retryable, as before.
+                all_permanent = False
                 record = self._quarantine(str(exc), chat_id=chat_id, topic_id=topic_id,
                                          kind=artifact.kind.value, path=artifact.path)
                 artifact_failures.append((artifact, str(exc), record))
@@ -948,6 +989,7 @@ class TelegramService:
             except TelegramAPIError as exc:
                 log.error("Failed to execute Telegram %s after retries: %s", action.kind, exc)
                 failures.append(f"{action.kind.value}: {exc}")
+                all_permanent = False
 
         if artifact_failures:
             records = [record.name for _artifact, _error, record in artifact_failures if record]
@@ -965,7 +1007,8 @@ class TelegramService:
                 log.error("Failed to send thread-independent delivery alert: %s", exc)
 
         if failures:
-            raise TelegramDeliveryError(
+            error_class = TelegramContentRejected if all_permanent else TelegramDeliveryError
+            raise error_class(
                 f"{len(failures)} of {len(chunks) + len(artifacts)} reply piece(s) failed to "
                 f"deliver: {'; '.join(failures)}"
             )
