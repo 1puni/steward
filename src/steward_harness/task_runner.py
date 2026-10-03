@@ -759,10 +759,14 @@ class TaskRunner:
             self.worktrees_root,
             execution_broker=self.broker,
         )
+        # Refresh source evidence even for retained branches. The working HEAD
+        # and local edits remain the task's; cognition can compare them with
+        # the latest controller observation without an automatic rebase.
+        transport = self.transports[task.repository]
+        observed = transport.sync_remote_to_agent(repository.path, self.broker)
         base = None
         if not manager.has_branch(task.branch):
-            transport = self.transports[task.repository]
-            base = transport.sync_remote_to_agent(repository.path, self.broker)
+            base = observed
             procedure = task.procedure
             if procedure:
                 base = procedure.candidate

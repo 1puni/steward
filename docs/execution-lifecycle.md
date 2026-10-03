@@ -67,7 +67,13 @@ preserves exclusion across retries and publication.
 ## Execution closure and continuation
 
 A task's live slice owns a retained checkout under its task lock. Native commits
-remain intact. The session calls the native `steward_tasks` task tool:
+remain intact. Before each slice, the controller refreshes the repository's
+`refs/steward/remote/<default-branch>` observation, including for a retained
+checkout. Its HEAD and local work stay in place. Cognition can compare that work
+with the fresh source and accepted steering; a refresh does not rebase the task
+or change a procedure's pinned candidate.
+
+The session calls the native `steward_tasks` task tool:
 
 ```json
 {"operation":"close","key":"finish","subject":"feat: implement the request","disposition":"idle"}
