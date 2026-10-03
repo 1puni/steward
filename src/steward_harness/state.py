@@ -8,6 +8,8 @@ import hashlib
 import os
 import re
 import sqlite3
+import sys
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -483,11 +485,19 @@ class StateDatabase:
         from steward_harness.task_store import GitTaskStore
         self.tasks = GitTaskStore(self.path.with_name(self.path.name + ".tasks.git"))
 
+    #: How long a writer waits for another's transaction. Some transactions
+    #: hold the lock across task Git (a 5 s lease, then fsynced commits); a
+    #: 5 s wait turned those into controller crashes twice on October 3, 2026.
+    WRITE_WAIT_SECONDS: ClassVar[float] = 60.0
+    #: A write transaction held longer than this is logged with its caller.
+    SLOW_WRITE_SECONDS: ClassVar[float] = 2.0
+
     def _raw_connection(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.path), timeout=10.0, isolation_level=None)
+        connection = sqlite3.connect(str(self.path), timeout=self.WRITE_WAIT_SECONDS,
+                                     isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA synchronous=FULL")
-        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute(f"PRAGMA busy_timeout={int(self.WRITE_WAIT_SECONDS * 1000)}")
         return connection
 
     def _initialize(self) -> None:
@@ -538,10 +548,12 @@ class StateDatabase:
     @contextmanager
     def connect(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         connection = self._raw_connection()
+        held = None
         try:
             connection.execute("PRAGMA foreign_keys=ON")
             if write:
                 connection.execute("BEGIN IMMEDIATE")
+                held = time.monotonic()
             else:
                 connection.execute("PRAGMA query_only=ON")
                 connection.execute("BEGIN")
@@ -554,6 +566,11 @@ class StateDatabase:
             raise
         finally:
             connection.close()
+            if held is not None and time.monotonic() - held > self.SLOW_WRITE_SECONDS:
+                # Every other writer waited this long; name who held them up.
+                # Frames: this generator, contextlib's __exit__, the caller.
+                log.warning("state write held %.1fs by %s", time.monotonic() - held,
+                            sys._getframe(2).f_code.co_name)
 
     #: Prepared: accepting it needs nothing run again. A world turn also needs
     #: its captured candidate; a worldless one only its retained output.
