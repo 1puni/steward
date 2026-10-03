@@ -167,6 +167,9 @@ blocked tasks and tasks with live locks stay materialized. Removal uses Git
 refs, accepted history and provider records. Dirty, untracked or ignored files,
 unfinished Git operations and unaccepted commits prevent removal and produce a
 warning in the controller log. A retry can rematerialize accepted work.
+Any existing owner home beneath the configured native homes also prevents
+checkout removal: it may hold unique state or links into the checkout. See
+[native evidence retention](native-session-host.md#native-evidence-retention-audit).
 [Retention tests](../tests/test_retention.py) cover these boundaries.
 
 ## Recurring work and world recovery

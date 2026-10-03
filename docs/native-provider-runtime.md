@@ -104,7 +104,7 @@ identity, stream bounds, and process cleanup. The adapter requests native termin
 cleanup for the parent and reported children, then closes stdin after those
 acknowledgements. Native records are written directly into the candidate; execution
 returns after the process and owned descendants exit. Owner homes remain durable;
-anonymous launch links are removed. A connection can
+native evidence is archived and anonymous homes are retained. A connection can
 be recreated while resuming the same native thread.
 
 Embedders may supply `CognitionRequest.on_input_ready(send)` and
@@ -340,24 +340,34 @@ Keep this directory tracked; repository ignore rules still apply to ordinary
 checkpointing. Consolidated scope truth remains in `docs/`; native memory is
 readable working knowledge, not a replacement authority.
 
-Each conversation or task keeps its own provider home between turns, until its
-workspace is retired. Native turns with a retained lineage use a private
+Each conversation or task keeps its own provider home across turns and lineage
+changes. Native turns with a retained lineage use a private
 `.steward-owner-<hash>` home beneath the configured native home. The hash covers
 the actual conversation or task session owner, the selected provider and the
 lineage generation. Profile changes and controller restarts keep the same home;
 clearing the conversation, switching provider or invalidating a missing session
 selects a new generation. The home is selected on every adapter attempt,
 fallback and recovery included. A checkout path or a per-turn execution ID is
-never an owner. Anonymous conflict-resolution calls use temporary launch homes.
+never an owner. Anonymous conflict-resolution calls use separate retained launch homes.
 
-Preparing a new generation for a persistent owner immediately retires that
-owner's other generation directories beneath the same seed home, keeping only
-the one just prepared. This runs independently of [idle session
-retention](world-turn-durability.md#idle-session-retention) and [task
-retention](execution-lifecycle.md#cancellation-and-retained-work), which only
-retire a whole owner once its conversation or task goes idle; a rhythm whose
-schedule never leaves it idle for `world_session_idle_seconds` would otherwise
-accumulate one native home per lineage-switching generation forever.
+Preparing a new generation preserves all older owner homes. Native databases,
+queues, tool results and provider-created files are not assumed reconstructable
+from the records in Git. [Idle session retention](world-turn-durability.md#idle-session-retention)
+and [task retention](execution-lifecycle.md#cancellation-and-retained-work)
+refuse checkout removal while any configured provider home has an entry for the
+owner. This also keeps the targets of native record links alive. Accepted Git
+history alone does not authorize deleting complete native evidence. This guard
+retains disk usage. Before startup and after teardown, native homes and mapped
+records also receive private verified rsync recovery snapshots outside the checkout.
+Claude/GLM launches also set `CLAUDE_CODE_TMPDIR` in the environment and inline
+settings to an owned 0700 `.steward-tmp` directory inside that home. Preparation
+rejects a redirected or non-private directory. Anonymous homes do not link to
+the seed's temp root. Native temporary tool output remaining there is included
+in the same pre/post snapshots; system fallback temp files and output removed
+within a running invocation are not covered by that claim.
+Anonymous launch homes survive setup and provider failures. Storage reserves
+stop new native admissions and interrupt active provider writers without deleting
+evidence. These local archives are not distributed backups. See the [retention audit](native-session-host.md#native-evidence-retention-audit).
 
 Only native configuration, authentication and integration entries are linked in
 from the configured seed home. SQLite, caches, queues, goals and jobs stay
@@ -377,8 +387,8 @@ The provider writes original files directly; the harness writes no
 `thread/read` snapshots of its own. An existing home cannot silently retarget
 these links to another candidate. Directory creation uses the execution broker,
 existing symlinks in mapped record directories are rejected, and setup shares the
-execution deadline. Success or failure keeps the owned native state; only
-anonymous temporary homes are removed, after the provider process has exited.
+execution deadline. Success or failure keeps native state, including anonymous launch homes, and
+archives it after the provider process has exited.
 
 The home persists, the process does not. Every invocation starts a new provider
 process, and no provider process is kept between turns. Goals and jobs therefore

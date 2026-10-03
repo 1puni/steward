@@ -23,6 +23,7 @@ from steward_harness.git import (
 )
 from steward_harness.git_reconcile import ResolveTurn, reconcile_git
 from steward_harness.state import StateDatabase
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.world.git_world import BASE_TRAILER, TURN_TRAILER, GitWorld
 from steward_harness.lease import Lease
@@ -124,6 +125,8 @@ class WorldTurnCheckpoint:
             raise WorldUpdatePending(f"retained workspace no longer belongs to its world: {path}")
         # Interrupted tools, ignored environments, and uncommitted edits belong
         # to the session. Resume them as-is; acceptance will reconcile later.
+        if self.broker.path_exists(path / EVIDENCE_PENDING):
+            return
         if self._git(path, "status", "--porcelain").stdout.strip():
             return
         for git_path in git_operation_paths(lambda *args: self._git(path, *args).stdout).values():
@@ -313,6 +316,8 @@ class WorldTurnCheckpoint:
     def _remove_worktree(self, path: Path) -> None:
         if not self.broker.path_exists(path):
             return
+        if self.broker.path_exists(path / EVIDENCE_PENDING):
+            raise WorldUpdatePending("native evidence preservation is pending; checkout retained")
         self._git(self.world.root, "worktree", "remove", "--force", str(path), check=False)
         self.broker.run([self.broker.python_executable, "-I", "-c",
             "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)", str(path)],

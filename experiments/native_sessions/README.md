@@ -126,3 +126,40 @@ not a safe reuse boundary. See the existing
 [session-host proof matrix](../../docs/native-session-host.md#stage-three-writer-exclusion-evidence)
 for measured versions, scope, credential limits and remaining controller-host
 checks. This probe must never become an enablement check for reuse.
+
+## Native retention startup probe
+
+Run `python3 experiments/native_sessions/retention_startup_probe.py` for two
+credential-free initializations of each installed provider with old synthetic
+session and memory fixtures. It reports hash survival and sanitized Codex config
+readback. It does not run inference or prove a cleanup sweep/consolidation ran.
+See the [retention audit](../../docs/native-session-host.md#native-evidence-retention-audit)
+for scope, archive restore tests and remaining deployed/off-host coverage.
+
+The retention initialization probe also tests a long private
+`CLAUDE_CODE_TMPDIR` and an aged synthetic task-output fixture across restart.
+It verifies native temp-directory creation, not Bash execution or a positive
+retention sweep; no credentials or inference are used by this probe.
+
+`uv run python experiments/native_sessions/claude_temp_probe.py` drives installed
+Claude against a loopback synthetic Messages API, with no real credentials or
+paid inference. It executes a native sandboxed Bash command, verifies the complete
+200 KB result in both native temporary and persisted tool-output files, ages those
+files plus its real transcript and synthetic native memory, injects actual Git
+index-lock and commit-hook failures, then checks restart survival and restores
+one selected result from a private snapshot with SHA-256 verification. The probe
+uses disposable fixtures only; it does not prove every provider retention path.
+
+`uv run python experiments/native_sessions/codex_evidence_probe.py` uses a
+loopback synthetic Responses API and Steward's process containment to execute a
+native Codex command, preserve its complete 200 KB result, then resume the actual
+native session after Git index-lock and commit-hook failures. It checks the old
+rollout prefix and synthetic memory, verifies a snapshot restore by SHA-256, runs
+SQLite integrity checks, and verifies restored native thread-history rows. It
+uses isolated homes and no provider credentials or paid inference. The fixture
+turns code mode off to exercise the native shell tool directly; it does not cover
+all tool families. Add `--retention` to enable the fixture memory pipeline and
+seed old, recent and selected synthetic stage-1 rows. Native restart must delete
+the old unselected row, retain the controls, and the independent pre-start copy
+must restore all exact rows. This exercises one installed retention path without
+changing production memory settings; it does not prove all consolidation paths.

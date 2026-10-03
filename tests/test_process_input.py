@@ -262,3 +262,37 @@ def test_unretained_stream_is_consumed_without_counting_against_the_limit(tmp_pa
             [sys.executable, "-c", "[print('x' * 100) for _ in range(50)]"],
             cwd=tmp_path, env=os.environ, timeout_seconds=30, on_stdout_line=lines.append,
         )
+
+
+def test_storage_pressure_interrupts_live_writer_without_deleting_evidence(tmp_path, monkeypatch):
+    import steward_harness.runtime.process as process_module
+
+    low = False
+    inputs = []
+    stopped = []
+
+    def headroom(_paths):
+        if low:
+            raise RuntimeError('native evidence storage reserve reached')
+
+    def output(_line):
+        nonlocal low
+        low = True
+
+    def stop():
+        stopped.append(True)
+        inputs[0].write('stop\n')
+        inputs[0].close()
+
+    monkeypatch.setattr(process_module, 'check_headroom', headroom)
+    with pytest.raises(RuntimeExecutionError, match='storage reserve reached'):
+        controller().run(
+            [sys.executable, '-c',
+             "from pathlib import Path; import sys; Path('evidence').write_text('keep'); "
+             "print('READY',flush=True); sys.stdin.readline()"],
+            cwd=tmp_path, env=os.environ, timeout_seconds=10,
+            on_input_ready=inputs.append, on_stdout_line=output, on_stop=stop,
+            storage_paths=(tmp_path,),
+        )
+    assert stopped == [True]
+    assert (tmp_path / 'evidence').read_text() == 'keep'

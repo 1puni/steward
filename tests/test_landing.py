@@ -595,3 +595,16 @@ def test_rebase_setup_failure_keeps_stage_and_remote(repo, tmp_path, monkeypatch
     result = _prepare(_engine(repo, tmp_path), repo, "steward/work")
     assert result.reason == "Git rebase failed (exit 128): fatal: committer identity unknown"
     assert _origin_git(repo, "rev-parse", "main") == base
+
+
+def test_worktree_removal_refuses_pending_native_archive(repo, tmp_path):
+    from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
+
+    manager = WorktreeManager(repo['clone'], tmp_path / 'worktrees', execution_broker=_broker())
+    path = manager.create_worktree('native-pending', branch_name='tasks/native-pending',
+                                   base_sha=_git('rev-parse', 'HEAD', cwd=repo['clone']))
+    (path / EVIDENCE_PENDING).touch()
+    (path / 'native-result').write_text('unique evidence')
+    with pytest.raises(WorktreeError, match='native evidence preservation is pending'):
+        manager.remove_worktree('native-pending')
+    assert (path / 'native-result').read_text() == 'unique evidence'

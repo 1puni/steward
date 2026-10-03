@@ -31,6 +31,7 @@ from steward_harness.runtime.contracts import (
 from steward_harness.runtime.native_workspace import native_workspace
 from steward_harness.runtime.process import ProcessController, ProcessInput
 
+# A finite mitigation, not disabled cleanup. Claude 2.1.281 rejects zero.
 NATIVE_RETENTION_DAYS = 365000
 _MAX_RESPONSE_CHARS = 64_000
 _SANDBOX_SETTINGS = json.dumps(
@@ -583,6 +584,7 @@ class ClaudeRuntime:
             request = workspace.remaining_request(request)
             environment = self.environment()
             environment["CLAUDE_CONFIG_DIR"] = str(workspace.home)
+            environment["CLAUDE_CODE_TMPDIR"] = str(workspace.home / ".steward-tmp")
             if self.credential_path is not None:
                 # Explicit router credentials must not fall back to a native
                 # first-party OAuth store, even on anonymous seed-home calls.
@@ -594,7 +596,8 @@ class ClaudeRuntime:
             return self._execute(request, session_id, environment, resume=workspace.resume)
 
     def _execute(self, request, session_id, environment, *, resume=None):
-        command = self._command(request, resume or session_id)
+        command = self._command(request, resume or session_id,
+                                native_tmp=environment.get("CLAUDE_CODE_TMPDIR"))
         if request.sandbox_mode == "workspace-write":
             environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "0"
         # Any configured router token must never survive into recorded events.
@@ -609,6 +612,7 @@ class ClaudeRuntime:
             output = self._controller.run(
                 command,
                 cwd=request.cwd,
+                storage_paths=(Path(environment["CLAUDE_CONFIG_DIR"]), request.cwd),
                 env=environment,
                 timeout_seconds=request.timeout_seconds,
                 on_stdout_line=stream.consume,
@@ -678,8 +682,11 @@ class ClaudeRuntime:
         environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         return environment
 
-    def _command(self, request: RuntimeRequest, session_id: str | None) -> list[str]:
+    def _command(self, request: RuntimeRequest, session_id: str | None,
+                 *, native_tmp: str | None = None) -> list[str]:
         settings = json.loads(_SANDBOX_SETTINGS)
+        if native_tmp is not None:
+            settings["env"] = {"CLAUDE_CODE_TMPDIR": native_tmp}
         # A dropped OS identity is the boundary. Asking the provider to police
         # itself on top of an enforced boundary buys nothing and costs reasoning.
         unrestricted = self._controller.broker.enabled and request.sandbox_mode == "workspace-write"

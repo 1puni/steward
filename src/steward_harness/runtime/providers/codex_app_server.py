@@ -122,6 +122,7 @@ class CodexAppServerRuntime:
                      "sqlite_home=" + json.dumps(str(workspace.home)),
                      *codex_arguments(request.task_call_socket)],
                     cwd=request.cwd,
+                    storage_paths=(workspace.home, request.cwd),
                     env=environment,
                     timeout_seconds=request.timeout_seconds,
                     on_stdout_line=turn.consume,

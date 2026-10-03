@@ -17,6 +17,7 @@ from steward_harness.kernel import repository_lease
 from steward_harness.retention import prune_tasks, prune_world_sessions
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.native_workspace import _owner_prefix
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 from steward_harness.state import StateDatabase, TaskSpec
 from steward_harness.task_runner import TaskRunner
 from steward_harness.task_lock import task_lock
@@ -31,11 +32,12 @@ def _owner_homes(tmp_path, owner):
     return home, ours, other
 
 
+@pytest.mark.parametrize("native_evidence", [False, True])
 @pytest.mark.parametrize("boundary", [
     "published", "cancelled", "unpublished", "locked", "repository_busy",
-    "dirty", "ignored", "unaccepted", "merge",
+    "dirty", "ignored", "unaccepted", "merge", "native_pending",
 ])
-def test_task_retention(tmp_path, boundary, caplog):
+def test_task_retention(tmp_path, boundary, caplog, native_evidence):
     bare, clone = _repository(tmp_path)
     state = StateDatabase(tmp_path / "state.db")
     task = admit_task(state, TaskSpec("app", "Result", "Create result.txt"), provider="claude")
@@ -61,6 +63,9 @@ def test_task_retention(tmp_path, boundary, caplog):
         # A separate lease instance in the same thread still contends.
         lock = repository_lease(state, "app")
         lock.acquire()
+    elif boundary == "native_pending":
+        _git_path(path, "info/exclude").write_text(EVIDENCE_PENDING + "\n")
+        (path / EVIDENCE_PENDING).touch()
     elif boundary == "dirty":
         (path / "result.txt").write_text("unfinished")
     elif boundary == "ignored":
@@ -74,12 +79,12 @@ def test_task_retention(tmp_path, boundary, caplog):
         _git_path(path, "MERGE_HEAD").write_text(_git("rev-parse", "HEAD", cwd=path))
     home, ours, other = _owner_homes(tmp_path, str(task.session_id))
     try:
-        prune_tasks(runner, [home])
+        prune_tasks(runner, [home] if native_evidence else [])
     finally:
         if lock:
             lock.release()
-    assert path.exists() == (boundary not in {"published", "cancelled", "ignored"})
-    assert ours.exists() == path.exists() and other.exists()
+    assert path.exists() == (native_evidence or boundary not in {"published", "cancelled", "ignored"})
+    assert ours.exists() and other.exists()
     if not path.exists():
         assert str(path) not in _git("worktree", "list", "--porcelain", cwd=clone)
         assert state.tasks.read(task.task_id)[1].work
@@ -88,11 +93,12 @@ def test_task_retention(tmp_path, boundary, caplog):
         assert "retained task workspace" in caplog.text
 
 
+@pytest.mark.parametrize("native_evidence", [False, True])
 @pytest.mark.parametrize("boundary", [
     "old", "recent", "running", "interrupted", "pending", "completion",
-    "dirty", "ignored", "unaccepted", "merge", "replayed", "replayed_then_unaccepted",
+    "dirty", "ignored", "unaccepted", "merge", "native_pending", "replayed", "replayed_then_unaccepted",
 ])
-def test_world_retention(tmp_path, boundary, caplog):
+def test_world_retention(tmp_path, boundary, caplog, native_evidence):
     checkpoint = _checkpoint(_git_world(tmp_path / "world"), tmp_path)
     state = checkpoint.state
     owner = state.get_or_create_conversation("telegram", "owner", provider="codex", profile="balanced")
@@ -123,6 +129,9 @@ def test_world_retention(tmp_path, boundary, caplog):
         receipt = state.path.with_suffix(".world-completions") / (hashlib.sha256(str(owner.conversation_id).encode()).hexdigest() + ".json")
         receipt.parent.mkdir()
         receipt.write_text("{}")
+    elif boundary == "native_pending":
+        _git_path(turn.path, "info/exclude").write_text(EVIDENCE_PENDING + "\n")
+        (turn.path / EVIDENCE_PENDING).touch()
     elif boundary == "dirty":
         (turn.path / "unfinished").write_text("local")
     elif boundary == "ignored":
@@ -134,10 +143,10 @@ def test_world_retention(tmp_path, boundary, caplog):
     elif boundary == "merge":
         _git_path(turn.path, "MERGE_HEAD").write_text(turn.base_sha)
     home, ours, other = _owner_homes(tmp_path, str(owner.conversation_id))
-    prune_world_sessions(checkpoint, 7 * 86400, [home])
-    assert turn.path.exists() == (boundary not in {"old", "ignored", "replayed"})
-    assert ours.exists() == turn.path.exists() and other.exists()
-    if boundary in {"old", "ignored", "replayed"}:
+    prune_world_sessions(checkpoint, 7 * 86400, [home] if native_evidence else [])
+    assert turn.path.exists() == (native_evidence or boundary not in {"old", "ignored", "replayed"})
+    assert ours.exists() and other.exists()
+    if not native_evidence and boundary in {"old", "ignored", "replayed"}:
         assert str(turn.path) not in _git("worktree", "list", "--porcelain", cwd=checkpoint.world.root)
         prune_world_sessions(checkpoint, 7 * 86400)
         assert checkpoint.checkout(workspace_id=owner.conversation_id.workspace).path.exists()

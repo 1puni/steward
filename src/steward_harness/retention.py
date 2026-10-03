@@ -15,7 +15,8 @@ from steward_harness.kernel import repository_lease
 from steward_harness.state import ConversationId, TaskId
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
-from steward_harness.runtime.native_workspace import retire_native_owner
+from steward_harness.runtime.native_workspace import check_native_owner_retirement
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ def _head_if_clean(broker, repository: Path, path: Path) -> str:
     def git(*args, cwd=path):
         return agent_git(broker, *args, cwd=cwd, timeout=60)
 
+    if broker.path_exists(path / EVIDENCE_PENDING):
+        raise ValueError("native evidence preservation is pending")
     if broker.is_symlink(path):
         raise ValueError("symlink checkout")
     if Path(git("rev-parse", "--show-toplevel")) != path:
@@ -76,8 +79,8 @@ def prune_tasks(runner, native_homes: Iterable[Path] = ()) -> None:
                 head = _head_if_clean(runner.broker, Path(repository.path), path)
                 if not runner.state.tasks.contains(head, current.revision):
                     raise ValueError("HEAD is not retained in accepted task Git")
-                # Before the checkout goes, so a failure leaves both for the next pass.
-                retire_native_owner(runner.broker, native_homes, str(current.session_id))
+                # Native homes and linked records need custody independent of Git.
+                check_native_owner_retirement(runner.broker, native_homes, str(current.session_id))
                 _remove(runner.broker, Path(repository.path), path)
         except Busy:
             continue
@@ -126,9 +129,8 @@ def prune_world_sessions(checkpoint, idle_seconds: int, native_homes: Iterable[P
                 if checkpoint.unaccepted(path, checkpoint.world.input_cursor(),
                                          connection=connection):
                     raise ValueError("HEAD is not in the accepted world")
-                # Native state is cache for this checkout; the originals are in the world.
-                # Retire it first, so a failure leaves both for the next pass.
-                retire_native_owner(checkpoint.broker, native_homes, owner)
+                # Git acceptance does not establish custody of all native evidence.
+                check_native_owner_retirement(checkpoint.broker, native_homes, owner)
                 _remove(checkpoint.broker, checkpoint.world.root, path)
         except Busy:
             continue

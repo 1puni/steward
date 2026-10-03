@@ -724,3 +724,18 @@ def test_a_rebase_rewrites_only_the_trailer_base_not_the_exchange(tmp_path: Path
     _finish(checkpoint, turn, "first", "quote it", "Steward-Base: quoted, not a trailer")
     assert _episodes(world.root)[-1]["steward"] == "Steward-Base: quoted, not a trailer"
     assert world.trailers("HEAD")["Steward-Base"] == moved
+
+
+def test_startup_cleanup_preserves_interrupted_native_evidence(tmp_path):
+    from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
+
+    world = _git_world(tmp_path / 'world')
+    checkpoint = _checkpoint(world, tmp_path)
+    integration = checkpoint.worktrees_root / 'integration-interrupted-native'
+    subprocess.run(['git', 'worktree', 'add', '--detach', str(integration), 'HEAD'],
+                   cwd=world.root, check=True, capture_output=True)
+    (integration / EVIDENCE_PENDING).touch()
+    (integration / 'native-result').write_text('not yet archived')
+    with pytest.raises(WorldUpdatePending, match='native evidence preservation is pending'):
+        checkpoint.startup_cleanup()
+    assert (integration / 'native-result').read_text() == 'not yet archived'

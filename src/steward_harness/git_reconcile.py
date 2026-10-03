@@ -15,6 +15,7 @@ from steward_harness.git import (
 )
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,13 @@ def reconcile_git(
             raise RuntimeExecutionError(_git_failure(args[0], result))
         return result.stdout.strip()
 
+    def evidence_pending() -> bool:
+        return broker.path_exists(worktree / EVIDENCE_PENDING)
+
+    pending_error = "native evidence preservation is pending; reconciliation retained"
+    if evidence_pending():
+        return pending_error
+
     # Cancellation used to be re-asked here between every git
     # invocation. It is SIGTERM to the child now; a withdrawn task is
     # read from its marker at the decision points that write it down.
@@ -109,6 +117,8 @@ def reconcile_git(
                 ))
             except (RuntimeExecutionError, RuntimeUnavailable) as exc:
                 return f"Rebase resolver {type(exc).__name__}: {redact_command_output(str(exc))}"
+            if evidence_pending():
+                return pending_error
             # Git validates added conflict markers and supports resolutions
             # that delete files. No parallel filesystem conflict scanner.
             checked = git("diff", "--check")
@@ -126,5 +136,7 @@ def reconcile_git(
             git_checked("commit", "-qm", "steward: preserve reconciliation work")
         return None
     finally:
-        if rebase.returncode != 0:
+        # Abort can overwrite tracked native records written by the resolver.
+        # Preserve the in-progress rebase until its evidence copy is recovered.
+        if rebase.returncode != 0 and not evidence_pending():
             git("rebase", "--abort")
