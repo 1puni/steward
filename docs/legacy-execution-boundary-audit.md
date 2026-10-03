@@ -296,16 +296,24 @@ invocation is needed for further native activity, and filesystem persistence
 alone does not prove the provider will resume a job. This limits longer native
 workflows, but is not permission to keep writers alive during acceptance.
 
-**History and smallest correction.** `f1d4d285` implements stage two of the
-[session-host design](native-session-host.md); stage three remains explicitly
-deferred because an idle-looking server or MCP process can still write.
-Keep teardown until whole-interval exclusion of every writer across capture,
-reset, reconciliation and acceptance is proven. Any future reuse experiment
-must establish that exclusion, stale-checkout handling, child ownership,
-generation retirement, cancellation, crash recovery and credential boundaries.
-Existing adapter tests for active children, terminal cleanup failure and late
-steering acknowledgements must continue to fail closed. Do not open a second
-process-host project based on this audit alone.
+**Current direction (2026-10-03).** The operator authorized extending stage
+three of the [session-host design](native-session-host.md), correcting any
+reading of this audit as a recommendation to keep per-invocation teardown as
+permanent policy. Preserve writer exclusion; replace its mechanism where proved.
+The cancelled lifecycle task is historical ownership, not a reason to defer the
+accepted work or create a second process-host project.
+
+The [stage-three evidence](native-session-host.md#stage-three-writer-exclusion-evidence)
+now includes installed Codex and Claude Code with deliberately writing MCP
+fixtures: writes continued while idle and while the provider leader was stopped;
+Codex terminal cleanup also failed to stop those writes. Shared agent filesystem
+grants additionally permit peer writers outside a session's cgroup. Whole-interval
+exclusion, stale-checkout safety, child ownership, generation retirement,
+cancellation, crash recovery and resident credential boundaries are not proved.
+Keep teardown for all providers until they are. No process reuse was enabled;
+the fail-closed adapter tests remain intact. The evidence table distinguishes
+measured counterexamples from controller/root-host and authenticated-provider
+checks that remain unperformed.
 
 ## Boundaries to preserve and design guidance
 
