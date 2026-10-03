@@ -241,3 +241,137 @@ def test_work_merged_without_a_landing_commit_is_done_not_repaired(tmp_path):
     task = state.tasks.get(task_id)
     assert task.status is TaskStatus.DONE and task.landed == work
     assert state.tasks.queued() == () and len(adapter.requests) == 1
+
+
+def test_retained_checkout_sees_new_source_and_completion_without_losing_work(tmp_path):
+    bare, clone = _repository(tmp_path)
+    adapter = InvestigationAdapter("continue", edit_first=True)
+    state, runner, _, reconciler = harness(tmp_path / "state", bare, clone, adapter)
+    task_id, _ = state.tasks.create(TaskSpec("app", "Checklist", "Old checklist: implement completion.txt."))
+    runner.prepare(task_id)
+    work = state.tasks.get(task_id).work_sha
+    worktree = runner.worktrees_root / str(task_id)
+    (worktree / "local-only.txt").write_text("unfinished evidence")
+    (clone / "completion.txt").write_text("completed by the owner")
+    _git("add", "completion.txt", cwd=clone)
+    _git("commit", "-m", "owner completes checklist", cwd=clone)
+    _git("push", "origin", "main", cwd=clone)
+    accepted_source = _git("rev-parse", "main", cwd=bare)
+    correction = "Operator completion: completion.txt is done; do not repeat the old checklist."
+    state.tasks.note(task_id, correction)
+    execute = adapter.execute
+
+    def inspect(request):
+        cwd = Path(request.cwd)
+        assert _git("rev-parse", "HEAD", cwd=cwd) == work
+        assert (cwd / "result.txt").read_text() == "completed\n"
+        assert (cwd / "local-only.txt").read_text() == "unfinished evidence"
+        assert _git("rev-parse", "refs/steward/remote/main", cwd=cwd) == accepted_source
+        assert _git("show", "refs/steward/remote/main:completion.txt", cwd=cwd) == "completed by the owner"
+        assert correction in request.prompt
+        assert not (cwd / "completion.txt").exists()
+        return execute(request)
+
+    adapter.execute = inspect
+    adapter.disposition = "idle"
+    runner.prepare(task_id)
+    assert len(adapter.requests) == 2
+    assert reconciler.publish_repository("app") == task_id
+    assert _git("show", "main:completion.txt", cwd=bare) == "completed by the owner"
+    assert _git("show", "main:result.txt", cwd=bare) == "completed"
+
+
+@pytest.mark.parametrize("action", ["cancel", "note"])
+def test_new_authority_after_gates_prevents_publication_at_unchanged_source(tmp_path, monkeypatch, action):
+    import sys
+    from steward_harness.config.schema import CommandSpec
+    from steward_harness.landing.merger import PromotionEngine, Tested
+
+    bare, clone = _repository(tmp_path)
+    adapter = InvestigationAdapter(edit_first=True)
+    state, runner, _, reconciler = harness(tmp_path / "state", bare, clone, adapter)
+    task_id, _ = state.tasks.create(TaskSpec("app", "Finish", "Create result.txt."))
+    runner.prepare(task_id)
+    source = _git("rev-parse", "main", cwd=bare)
+    accepted_task = state.tasks.get(task_id).revision
+    receipt = tmp_path / "tested-sha"
+    gate = CommandSpec(argv=(sys.executable, "-c",
+        "from pathlib import Path; import subprocess; "
+        f"Path({str(receipt)!r}).write_text(subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True))"))
+    reconciler.repositories["app"] = runner.repositories["app"].model_copy(update={"gates": (gate,)})
+    tested = []
+    prepare = PromotionEngine.prepare
+
+    def steer_after_gates(engine, *args):
+        result = prepare(engine, *args)
+        assert isinstance(result, Tested)
+        assert receipt.read_text().strip() == result.tested_sha
+        tested.append(result.tested_sha)
+        getattr(state.tasks, action)(task_id, "Owner completed this elsewhere; stop this publication.")
+        assert state.tasks.get(task_id).revision != accepted_task
+        return result
+
+    monkeypatch.setattr(PromotionEngine, "prepare", steer_after_gates)
+    assert reconciler.publish_repository("app") is None
+    assert len(tested) == 1
+    assert _git("rev-parse", "main", cwd=bare) == source
+    assert state.tasks.get(task_id).landed is None
+    assert state.tasks.get(task_id).status is (TaskStatus.CANCELLED if action == "cancel" else TaskStatus.QUEUED)
+    if action == "cancel":
+        runner.prepare(task_id)
+        assert len(adapter.requests) == 1
+
+
+def test_remote_movement_after_gates_requires_new_integrated_gate_receipt(tmp_path, monkeypatch):
+    import sys
+    from steward_harness.config.schema import CommandSpec
+
+    bare, clone = _repository(tmp_path)
+    state, runner, _, reconciler = harness(tmp_path / "state", bare, clone, InvestigationAdapter(edit_first=True))
+    task_id, _ = state.tasks.create(TaskSpec("app", "Finish", "Create result.txt."))
+    runner.prepare(task_id)
+    work = state.tasks.get(task_id).work_sha
+    receipts = tmp_path / "gate-receipts"
+    gate = CommandSpec(argv=(sys.executable, "-c",
+        "from pathlib import Path; import subprocess; "
+        "assert Path('result.txt').read_text().strip() == 'completed'; "
+        "assert Path('base.txt').read_text() in ('before gates', 'after gates'); "
+        f"f = Path({str(receipts)!r}).open('a'); "
+        "f.write(subprocess.check_output(['git', 'rev-parse', 'HEAD', 'HEAD^'], text=True)); f.close()"))
+    reconciler.repositories["app"] = runner.repositories["app"].model_copy(update={"gates": (gate,)})
+
+    def move_source(content):
+        (clone / "base.txt").write_text(content)
+        _git("add", "base.txt", cwd=clone)
+        _git("commit", "-m", content, cwd=clone)
+        _git("push", "origin", "main", cwd=clone)
+        return _git("rev-parse", "HEAD", cwd=clone)
+
+    before = move_source("before gates")
+    transport = runner.transports["app"]
+    push = transport.push_candidate
+    attempts = []
+    moved = []
+
+    def race(candidate, base):
+        assert receipts.read_text().splitlines()[-2:] == [candidate, base]
+        if not attempts:
+            moved.append(move_source("after gates"))
+        attempts.append((candidate, base))
+        return push(candidate, base)
+
+    monkeypatch.setattr(transport, "push_candidate", race)
+    assert reconciler.publish_repository("app") is None
+    assert "revalidated" in reconciler.last_outcome["app"]
+    assert attempts[0][1] == before
+    assert _git("rev-parse", "main", cwd=bare) == moved[0]
+    assert state.tasks.get(task_id).landed is None
+    assert state.tasks.get(task_id).publishable
+    assert reconciler.publish_repository("app") == task_id
+    first, second = attempts
+    assert first[0] != second[0] and second[0] != work
+    assert second[1] == moved[0]
+    assert receipts.read_text().splitlines() == [*first, *second]
+    assert state.tasks.get(task_id).landed == second[0] == _git("rev-parse", "main", cwd=bare)
+    assert _git("show", "main:base.txt", cwd=bare) == "after gates"
+    assert _git("rev-parse", f"tasks/{task_id}", cwd=clone) == work
