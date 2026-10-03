@@ -116,7 +116,9 @@ class TaskCalls:
         if self.owner.kind == "rhythm" and operation != "notify":
             raise ValueError("rhythms may only notify their owner")
         tasks = self.state.tasks
-        with self.state.connect(write=True) as connection, tasks.lease:
+        # Observations validate against a SQLite snapshot; slow Git reads must
+        # not reserve the writer needed by unrelated provider session binds.
+        with self.state.connect(write=operation not in {"list", "show"}) as connection, tasks.lease:
             context_id = request.get("source_id", self.turn_id)
             context = connection.execute("SELECT * FROM turns WHERE turn_id=? AND conversation_id=?",
                                          (context_id, str(self.owner))).fetchone()

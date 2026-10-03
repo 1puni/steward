@@ -413,3 +413,79 @@ def test_rhythm_notification_is_bound_to_configured_owner_and_cannot_mutate_task
         calls(submission())
     with pytest.raises(ValueError, match='incorrect fields'):
         calls(dict(operation='notify', key='notice', text='Sleep needs help.', owner='telegram:elsewhere'))
+
+
+@pytest.mark.parametrize('operation', ['list', 'show'])
+def test_task_reads_do_not_block_provider_binding(tmp_path, monkeypatch, operation):
+    """A slow accepted-task Git read must not own SQLite's writer slot."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+    from threading import Event
+    from time import monotonic
+    from steward_harness.kernel import Dispatch
+
+    state = StateDatabase(tmp_path / 'state.db')
+    state.tasks.repositories = {'app'}
+    owner = state.open_conversation(ConversationId('telegram:owner'),
+                                    provider='codex', profile='balanced')
+    other = state.open_conversation(ConversationId('telegram:other'),
+                                    provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'event', 'operator', 'work')
+    calls = TaskCalls(state, turn.turn_id)
+    receipt = calls(submission())
+    entered, release = Event(), Event()
+    original = state.tasks.refs if operation == 'list' else state.tasks.read
+
+    def slow_read(*args, **kwargs):
+        entered.set()
+        assert release.wait(15), 'test did not release Git reader'
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(state.tasks, 'refs' if operation == 'list' else 'read', slow_read)
+    request = {'operation': operation}
+    if operation == 'show':
+        request['task_id'] = receipt['task_id']
+    dispatch = Dispatch(1)
+    with ThreadPoolExecutor(1) as pool:
+        reading = pool.submit(calls, request)
+        try:
+            assert entered.wait(5)
+            started = monotonic()
+            dispatch.submit('bind', lambda: state.bind_conversation_provider(
+                other.conversation_id, 'codex', 'independent-session',
+                expected_generation=other.generation))
+            # Wait for the worker, then exercise the daemon's fault boundary.
+            job = dispatch._inflight['bind']
+            assert wait([job], timeout=7).done
+            elapsed = monotonic() - started
+            print(f'{operation}: provider bind worker finished after {elapsed:.3f}s with Git blocked')
+            dispatch.reap()
+            assert not reading.done()
+            assert state.lineage(other.conversation_id).provider_session_id == 'independent-session'
+        finally:
+            release.set()
+            dispatch.stop()
+        result = reading.result(timeout=5)
+        assert result['operation'] == operation
+
+
+@pytest.mark.parametrize('operation', ['list', 'show'])
+@pytest.mark.parametrize('invalidate', ['interrupt', 'rotate'])
+def test_task_reads_reject_expired_execution(tmp_path, operation, invalidate):
+    state = StateDatabase(tmp_path / 'state.db')
+    state.tasks.repositories = {'app'}
+    owner = state.open_conversation(ConversationId('telegram:owner'),
+                                    provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'event', 'operator', 'work')
+    calls = TaskCalls(state, turn.turn_id)
+    receipt = calls(submission())
+    request = {'operation': operation}
+    if operation == 'show':
+        request['task_id'] = receipt['task_id']
+    with pytest.raises(ValueError, match='controller-accepted'):
+        calls(request | {'source_id': 'unknown'})
+    if invalidate == 'interrupt':
+        state.interrupt_turn(turn.turn_id, 'execution ended')
+    else:
+        state.bind_conversation_provider(owner.conversation_id, 'claude', 'replacement')
+    with pytest.raises(ValueError, match='active execution'):
+        calls(request)

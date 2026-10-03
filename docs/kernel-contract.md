@@ -161,6 +161,12 @@ The current database has four tables: `steward_schema`, `conversations`,
 `turns` and `incidents`. Tasks and task inputs are not SQL records. The private task
 Git store is enumerated directly, and a missing native lineage permits a fresh run.
 
+Conversation task `list` and `show` calls validate source and execution authority
+against a read-only SQLite snapshot while holding the task Git lease. Their Git
+reads do not reserve SQLite's writer, so independent provider sessions can bind
+while those observations run. Mutating task calls retain their writer transaction
+and accepted-receipt replay checks.
+
 Decisions need durable representation when they cannot be derived; that does not
 require SQL. Git can record a withheld grant, cancellation, failed gate, answer or
 retry. Controller permissions and accepted refs establish authority independently
