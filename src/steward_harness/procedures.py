@@ -60,6 +60,20 @@ def rhythm_attempts(runs):
     return grouped
 
 
+def superseded(runs, name, receipt):
+    """Interrupted intervals that a later accepted interval has settled.
+
+    A rhythm procedure reads from its own cursor, so a later accepted run has
+    already covered what an older interrupted one missed. Clocks still never
+    supersede unfinished work: only an accepted completion does.
+    """
+    latest = next((index for index in sorted(runs, reverse=True)
+                   if runs[index][-1].state == "completed" and receipt(f"rhythm:{name}:{index}")),
+                  None)
+    return {index for index, attempts in runs.items()
+            if latest is not None and index < latest and attempts[-1].state == "interrupted"}
+
+
 def world_rhythm_interval(rhythms, name, now, runs, predecessors, receipt):
     """Oldest captured obligation first; clocks never supersede unfinished work.
 
@@ -68,10 +82,13 @@ def world_rhythm_interval(rhythms, name, now, runs, predecessors, receipt):
     Offline readers pass a receipt lookup returning None (unknown).
     """
     current = interval(rhythms, name, now)
-    pending = {index for index, attempts in runs.items()
-               if attempts[-1].state != "completed"
-               or receipt(f"rhythm:{name}:{index}") is False}
-    pending.update(index for index in predecessors if index not in runs)
+    settled = superseded(runs, name, receipt)
+    pending = {index for index, attempts in runs.items() if index not in settled
+               and (attempts[-1].state != "completed"
+                    or receipt(f"rhythm:{name}:{index}") is False)}
+    after = rhythms[name].after
+    skipped = superseded(predecessors, after, receipt) if after else set()
+    pending.update(index for index in predecessors if index not in runs and index not in skipped)
     return min(pending) if pending else current
 
 
@@ -440,7 +457,9 @@ class Procedures:
         if self.state.result_receipt(key):
             return
         # Even a stale dispatched/manual request cannot skip an older hold.
-        if any(i < index and rows[-1].state != "completed" for i, rows in runs.items()):
+        settled = superseded(runs, name, lambda key: bool(self.state.result_receipt(key)))
+        if any(i < index and i not in settled and rows[-1].state != "completed"
+               for i, rows in runs.items()):
             return
         if prior and prior.state == "interrupted":
             return

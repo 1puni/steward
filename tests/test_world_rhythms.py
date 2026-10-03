@@ -367,6 +367,32 @@ def test_a_failed_predecessor_holds_the_chain_until_explicit_continuation(tmp_pa
     assert cognition.calls == 1
 
 
+def test_a_later_accepted_interval_settles_an_older_interrupted_one(tmp_path):
+    # gg's inbox and night chain stopped on interruptions from days earlier,
+    # although later accepted runs had already read past them.
+    class Failing(EditingCognition):
+        def run(self, request, *, execution_id=None):
+            self.calls += 1
+            request()
+            raise RuntimeExecutionError("provider failed")
+
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path)
+    for name in CHAIN:
+        procedures.run_world_rhythm(service, name, f"rhythm:{name}:21")
+    state, checkpoint, service, failing = runtime(tmp_path, Failing())
+    procedures = Procedures(config, state, {}, world=checkpoint.world)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert failing.calls == 1
+
+    # Neither the interrupted night nor its dependents hold today's chain.
+    state, checkpoint, service, success = runtime(tmp_path)
+    procedures = Procedures(config, state, {}, world=checkpoint.world)
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == [("sleep", "rhythm:sleep:22")]
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:22")
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == [("rem", "rhythm:rem:22")]
+    assert success.calls == 1
+
+
 def test_a_dependent_accepted_before_its_receipt_replays_after_restart(tmp_path, monkeypatch):
     config, state, checkpoint, service, cognition, procedures = _chain(tmp_path)
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")

@@ -343,7 +343,11 @@ reserved source within the shared budget, and duplicate requests find that same
 source. A restart preserves a queued source whose checkout was never claimed.
 Each explicit request permits one attempt; polling and restarts never authorize provider
 retries. A held interval prevents newer intervals of that rhythm from replacing
-it, while unrelated rhythms remain eligible. A continuation can recover an
+it, while unrelated rhythms remain eligible. Only a later *accepted* interval
+settles an older interrupted one, because a procedure reads from its own cursor
+and that run already covered the gap; a dependent owes nothing for a settled
+predecessor interval. Without this, gg's inbox and night chain stopped on
+interruptions days older than their latest accepted runs (October 3, 2026). A continuation can recover an
 already accepted notification by replaying its original `source_id`, key and
 text through the notification tool; that returns the existing receipt without
 queuing another send. Changed text is a different intent and cannot overwrite
