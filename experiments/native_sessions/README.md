@@ -108,3 +108,21 @@ rollback, idempotent resubmission after an ambiguous disconnect, coherent
 capture during native background memory writes, or restoring a *session* (as
 opposed to memory) from Git alone. A model-backed happy path does not make any
 of those go away.
+
+## Rejecting unsafe process reuse
+
+On Linux, run `/usr/bin/python3 experiments/native_sessions/writer_exclusion_probe.py`
+and repeat with `--provider claude`. These use installed providers, fresh homes,
+no inherited credentials and no inference. A deliberately writing MCP fixture
+shows that idle state and suspending a provider leader do not exclude writes;
+Codex additionally acknowledges terminal cleanup before the measurement. A peer
+at the same UID then writes the disposable target with provider/MCP leaders
+stopped. The script only signals its disposable provider group and identified
+fixture processes. It needs Linux `/proc` and a Python build with pidfds; it checks that before
+launching. Some uv-managed Python builds lack them.
+
+A successful run reports `reuse_proven: false`: it reproduced a counterexample,
+not a safe reuse boundary. See the existing
+[session-host proof matrix](../../docs/native-session-host.md#stage-three-writer-exclusion-evidence)
+for measured versions, scope, credential limits and remaining controller-host
+checks. This probe must never become an enablement check for reuse.
