@@ -207,7 +207,7 @@ Three judgment points, grounded in this harness's real surfaces:
 
 | Point | Where it lives today | Reflex input |
 |---|---|---|
-| `should_wake` | desk inbox (`steward_harness/desk/drain.py`) → full model turn per accepted message | `source=<desk|telegram|probe|rhythm|deploy> \| text` |
+| `should_wake` | inbox drain (`steward_harness/inbox.py`) → full model turn per accepted message | `source=<desk|telegram|probe|rhythm|deploy> \| text` |
 | `is_diff_safe` | integration review: cortex reads every candidate diff | commit subject + file count + changed top-level areas |
 | `is_task_done` | disposition reading: cortex parses every task's final report | disposition body text |
 

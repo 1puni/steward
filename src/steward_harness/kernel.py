@@ -36,15 +36,15 @@ class Dispatch:
 
     `controller.workers` bounds background work. Everything the
     steward schedules for itself — task slices, repository publication,
-    rhythms, desk messages, probes, result assessment — competes for the same
+    rhythms, probes, result assessment — competes for the same
     slots, and the executor's own queue is the assignment: first asked, first
     served. There is no per-lane reservation and no fairness ordering, because
     both are a scheduler, and a scheduler is the thing this row deletes.
 
     Retained result transport has one independent worker and never runs cognition.
     A live conversation never comes here. The operator talking to their
-    steward runs on the ingress thread that received them, so the budget can
-    be full and they still get an answer.
+    steward is answered by the inbox drain, so the budget can be full and they
+    still get an answer.
 
     The dict is deliberately not an exclusion. `task_lock` and
     `repository_lease` are, and unlike a dict they are durable, so they hold

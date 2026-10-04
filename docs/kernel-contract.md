@@ -88,7 +88,7 @@ YAML is trusted policy. Each block owns one kind of decision:
 | `procedures` | Accepted instructions, model and access settings |
 | `rhythms` | Non-overlapping interval triggers for procedures; `input: world` keeps one obligation per captured interval |
 | `targets` | Desired refs, installed drivers and required evidence |
-| `telegram`, `desk` | Optional ingress and result transports |
+| `telegram`, `desk` | Optional transports: each feeds the shared inbox and receives its own replies and results |
 
 `controller.poll_seconds` bounds only background rechecks — admission, convergence and
 probes. Conversation ingress and running task turns do not wait on it, so raising it
@@ -317,18 +317,50 @@ A provider without a working tool channel records evidence only. Neither final
 reply parsing nor assessment is a fallback send mechanism.
 
 
+### Inbound messages
+
+Every inbound message is a file in an inbox, and one drain answers them all. The
+suffix is ownership: `.json` queued, `.json.claimed` being answered, `.json.failed`
+and `.rejected` parked for the operator. A restart returns claims to the queue. The
+drain answers messages in name order within a conversation and different
+conversations concurrently; a deferral (a busy owner, a storage refusal, pending or
+conflicting world work, a transient transport error) returns the message to the front
+of its conversation and retries it a second later. A message is removed only after
+its reply is delivered. Each source replies through its own transport.
+
+The directory names who is speaking, never the record. The desk inbox
+(`desk.inbox_dir`) accepts `{"kind": "message", "id", "text", "topic", "profile"?,
+"context"?}` from external clients, whose permission to write it is their boundary;
+replies are `reply` lines in `desk.events_file` carrying the message `id`. The Telegram
+ingress admits a sender first and then writes the same record shape, with its chat,
+sender, message and image metadata, into a private inbox under
+`<state_db>.telegram-inbox/<chat>/`. A desk client therefore cannot speak as a
+Telegram operator.
+
 ### Telegram ingress
 
-Each update is written to its receipt under `<state_db>.telegram-receipts/<chat>/` before
-the poll offset moves past it: the offset is the acknowledgement and the receipt files
-are the spool. Receipts are pruned only after a poll acknowledges them. Delivery is
-at-least-once — an uncertain send can duplicate. Never run two pollers for one bot
-token; when moving a bot, copy the offset only after the old ingress has stopped.
+Each admitted update is written into the Telegram inbox, claimed by the ingress,
+before the persisted offset (`offset` in that directory) moves past it; only then
+is it routed. The offset is the acknowledgement: Telegram redelivers nothing below
+it, an update below it is never retained again, and a redelivery in the window
+between the two writes is recognized by name. Delivery is at-least-once — an
+uncertain send can duplicate. Never run two pollers for one bot token; when moving a
+bot, copy the inbox and its offset only after the old ingress has stopped. A start with
+no persisted offset first adopts the previous release's per-update receipts (see
+[upgrading](upgrading.md#one-inbox-for-telegram-and-the-desk)); if that fails, Telegram
+ingress stays off rather than polling from zero.
 
 Inputs are deduplicated by source identity, never by content: the same words under a
-different update ID are a new input and get a new reply. An input is marked handled
-only after processing and delivery succeed; caching it earlier turns one transient
-failure into permanent suppression of a valid retry.
+different update ID are a new input and get a new reply. A saved reply is resent,
+never recomputed, and each confirmed piece is recorded in the message file so a
+retry or restart sends only what is missing.
+
+Control commands are answered on the polling thread so they overtake a busy topic.
+Text for a topic whose native execution is running becomes live input to it, unless
+queued messages in that topic would be overtaken; a command never does. Everything
+else waits for the drain. Admission is asked again when a message is answered,
+because a retained update is not a grant; an unreadable administrator list is a
+deferral, not a refusal.
 
 In a forum, Telegram sends no thread ID for General, so topic `0` is a valid route in
 both directions. Ingress logs whether the thread field was present, its value and the
@@ -391,7 +423,7 @@ files. See [world durability](world-turn-durability.md).
 ## Concurrent dispatch
 
 `controller.workers` is one shared budget — default **8**, range **1–32** — and it is
-the budget for background cognition and work. Tasks, repository convergence, probes, desk messages,
+the budget for background cognition and work. Tasks, repository convergence, probes,
 rhythms and task-result assessment all compete for the same slots. The executor's own
 queue is the assignment: first asked, first served, without per-lane reservation or
 fairness ordering among cognition jobs. Retained result transport has one separate worker as
@@ -409,8 +441,7 @@ alive, the task lock who runs a task, the repository lease who publishes, the wo
 lease who applies a world update.
 
 Repositories run independently. Each task has its own lock. One rhythm dispatch owner
-resumes incomplete scheduled work before choosing another due definition. Desk messages
-have message dispatch keys and retain their inbox/conversation ownership. Result
+resumes incomplete scheduled work before choosing another due definition. Result
 assessment is keyed by the owning conversation. No separate repository-observation pool
 exists.
 
@@ -424,24 +455,24 @@ its lock died with its worker, so the next pass yields it like any other and the
 resumes the turn it finds open.
 
 Pause is a filter on that derivation, not a branch around it. It stops the steward
-taking on work: new task slices, probes, desk intake and rhythms. Already submitted jobs
+taking on work: new task slices, probes and rhythms. Already submitted jobs
 finish. Repository convergence and result assessment stay active, because a repository
 that owes a publication does not stop owing it. A crash-interrupted task stays queued,
 so pause also delays its next slice. Pause is not a quiescence barrier; do not treat it
 as one before an upgrade.
 
-Telegram polling and conversation execution run outside this background budget. The
-operator talking to their steward is answered on the ingress thread that received them,
+Telegram polling and the inbox drain run outside this background budget, and pause
+does not apply to them. The operator talking to their steward is answered by the drain,
 so the budget can be full and they still get a reply. Authenticated control commands can
-be handled while cognition is active; commands that run external work use the ordinary
-executor path. One native conversation can receive supported live inputs without
+be handled while cognition is active; commands that run external work wait in the
+inbox like any message. One native conversation can receive supported live inputs without
 acquiring a second candidate writer. Unsupported inputs wait. Spare background capacity
 and a responsive conversation are separate claims, and neither establishes the other.
 
-Configured desk intake accepts ordinary messages through the same native
-conversation and repository authorization as any operator message. Keep the inbox's
-`.claimed` and `.failed` files with desk state across upgrades, and inspect a parked
-`.failed` message's native evidence before retrying it.
+Desk messages run through the same native conversation and repository authorization
+as any operator message. Keep both inboxes, with their `.claimed` and `.failed` files
+and the Telegram offset, across upgrades, and inspect a parked `.failed` message's
+native evidence before retrying it.
 
 The harness reports its own stalls without a model: a rhythm becoming held and a
 storage-reserve refusal go straight to the operator topic, once per event and
@@ -511,7 +542,7 @@ deployed instance has passed it. Implementation paths are relative to
 | Native sessions use private homes and candidate-owned records | `runtime/native_workspace.py`, `runtime/providers/` | [workspace](../tests/test_native_workspace.py), [Claude transport](../tests/test_claude_stream.py), [Codex transport](../tests/test_codex_app_server.py) |
 | Provider errors separate "declined" from "failed" | `runtime/providers/` | [provider errors](../tests/test_provider_errors.py) |
 | Task results survive restart and are not re-assessed | `conversations.py`, `receipts.py`, `telegram/` | [result delivery](../tests/test_task_result_delivery.py), [Telegram](../tests/test_telegram.py) |
-| Live conversations stay responsive with a full worker budget | `daemon.py` | [responsiveness](../tests/test_scheduler_responsiveness.py) |
+| Live conversations stay responsive with a full worker budget | `daemon.py`, `inbox.py` | [responsiveness](../tests/test_scheduler_responsiveness.py), [inbox](../tests/test_inbox.py) |
 | The broker enforces a separate service identity | `runtime/execution.py` | [Linux boundary acceptance](../tests/test_boundary_acceptance.py) |
 | An invocation cannot leave escaped writers or kill a peer | `runtime/ownership.py`, `runtime/process.py` | [host ownership](../tests/test_host_ownership.py), [process input and stop](../tests/test_process_input.py) |
 | Configuration rejects unknown fields and colliding resources | `config/` | [configuration](../tests/test_config.py) |

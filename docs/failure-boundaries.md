@@ -28,8 +28,8 @@ way you count errors.
 | World acceptance | Retain prepared candidates through contention, conflict and failed application | Provider completion or an episode proves accepted edits |
 | Rhythm | Log declared Git transport failures while observing a rhythm's input and skip that rhythm until the next poll without changing its quiet state; other rhythms remain eligible. Retain incomplete unprepared work for retry and prepared work for acceptance | Failure creates a new successful due boundary |
 | Deployment | Report staging/activation failure; failed restart or health attempts rollback | A pointer flip or HTTP success alone proves artifact integrity |
-| Desk ingress | Requeue messages on world contention, pending application or content conflict; log the deferral and retain candidates | One conflicted session requires stopping the controller or replaying accepted cognition |
-| Telegram update reply | Persist confirmed delivery pieces and retry unfinished pieces | Exactly-once network delivery |
+| Inbound message | Requeue at the front of its conversation on a busy owner, storage refusal, world contention, pending application, content conflict or transient transport error; park other failures as `.failed` and tell a Telegram sender | One conflicted session requires stopping the controller or replaying accepted cognition |
+| Telegram update reply | Persist confirmed delivery pieces in the message file and retry unfinished pieces | Exactly-once network delivery |
 | Task-result assessment | Retain the selected outcome before assessment; replay accepted assessment and retry transport until acknowledged | Exactly-once network delivery, or permission to repeat uncertain model side effects |
 
 Result receipts are selected before assessment starts and stay pending until the

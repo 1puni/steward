@@ -40,7 +40,7 @@ def test_polling_and_downloads_reuse_one_client_and_keep_request_deadlines(tmp_p
     assert clients[0].is_closed
 
 
-def test_shutdown_keeps_telegram_open_until_kernel_results_and_ingress_drain():
+def test_shutdown_keeps_telegram_open_until_kernel_results_and_inbound_answers_drain():
     events = []
     daemon = object.__new__(StewardDaemon)
     daemon._stop = threading.Event()
@@ -53,8 +53,13 @@ def test_shutdown_keeps_telegram_open_until_kernel_results_and_ingress_drain():
         tasks=SimpleNamespace(interrupt_running=lambda: events.append('interrupt task turns')),
     )
     daemon._result_dispatch = SimpleNamespace(stop=lambda: events.append('drain task results'))
-    daemon._desk_ingress = SimpleNamespace(join=lambda: events.append('drain desk ingress'))
+    daemon._inbox = SimpleNamespace(
+        request_stop=lambda: events.append('stop inbound claims'),
+        stop=lambda: events.append('drain inbound answers'),
+    )
     daemon._health = SimpleNamespace(stop=lambda: events.append('stop health'))
     daemon.stop()
-    assert events == ['stop intake', 'interrupt task turns', 'drain cognition', 'drain task results',
-                      'drain ingress and close transport', 'drain desk ingress', 'stop health']
+    # Inbound answers reply through Telegram, so they drain before it closes.
+    assert events == ['stop intake', 'stop inbound claims', 'interrupt task turns', 'drain cognition',
+                      'drain task results', 'drain inbound answers',
+                      'drain ingress and close transport', 'stop health']
