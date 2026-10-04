@@ -709,7 +709,7 @@ def test_an_exhausted_models_list_is_unavailable_with_every_reason(tmp_path):
     assert "glm: unavailable: usage limit" in text
 
 
-def test_fallback_false_keeps_only_the_first_entry_and_scoped_reads_still_skip():
+def test_fallback_false_keeps_only_the_first_entry():
     procedure = _listed(fallback=False)
     routing = procedure.routing(("codex", "claude", "glm"))
     assert routing["provider_order"] == ("codex",)
@@ -724,14 +724,3 @@ def test_a_models_list_never_reaches_providers_outside_it_and_absent_list_is_unc
     single = ProcedureConfig(instructions="/etc/p.md", provider="claude", model=ModelChoice(model="m"))
     assert single.routing(("codex", "claude"))["entry_models"] == ()
     assert single.provider_order(("codex", "claude")) == ("claude", "codex")
-
-
-def test_a_models_list_still_never_falls_back_to_unscoped_cognition(tmp_path):
-    from steward_harness.runtime.contracts import ReadScope
-
-    procedure = _listed()
-    codex, claude = FakeAdapter("codex", available=False), FakeAdapter("claude")
-    with pytest.raises(RuntimeUnavailable, match="scoped read isolation"):
-        Cognition({"codex": codex, "claude": claude}).run(_request(
-            tmp_path, read_scope=ReadScope("visitor"), **procedure.routing(("codex", "claude", "glm"))))
-    assert claude.requests == []

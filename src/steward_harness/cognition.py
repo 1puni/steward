@@ -17,7 +17,6 @@ from steward_harness.runtime.contracts import (
     MissingProviderSession,
     RuntimeExecutionError,
     RuntimeRequest,
-    ReadScope,
     RuntimeResult,
     RuntimeInput,
     RuntimeInputResult,
@@ -58,7 +57,6 @@ class CognitionRequest:
     session_provider: ProviderFamily | None = None
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
-    read_scope: ReadScope | None = None
     allow_empty_output: bool = False
     task_call_socket: str | None = None
     on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None
@@ -181,9 +179,6 @@ class Cognition:
                 if adapter is None:
                     unavailable.append(f"{provider}: not registered")
                     continue
-                if request.read_scope is not None and not adapter.capabilities.scoped_reads:
-                    unavailable.append(f"{provider}: missing scoped read isolation")
-                    continue
                 if request.images and not adapter.capabilities.images:
                     unavailable.append(f"{provider}: missing images")
                     continue
@@ -226,7 +221,6 @@ class Cognition:
                         token_budget=request.token_budget,
                         images=request.images,
                         sandbox_mode=request.sandbox_mode,
-                        read_scope=request.read_scope,
                         allow_empty_output=request.allow_empty_output,
                         writable_roots=self._writable_roots
                         if request.sandbox_mode == "workspace-write" else (),

@@ -209,8 +209,8 @@ JSON over a temporary controller-owned Unix socket. Kernel peer credentials
 bind each caller to the provider's controller-owned systemd invocation; local
 inert brokers use the process session instead. Another invocation cannot borrow
 that authority by discovering the socket path. The client holds no task state or controller configuration.
-Public read-only desk executions and rhythms receive no capability. There is
-no additional cognition or confirmation step.
+Rhythms receive no capability. There is no additional cognition or confirmation
+step.
 
 | Operation | Required string fields besides `operation` | Receipt |
 | --- | --- | --- |

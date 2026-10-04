@@ -465,81 +465,18 @@ machine, not a suite total and not proof that a deployed rhythm completed. Use
 runtime readiness to accept an installation. Before moving real native histories
 between versions, follow the [upgrade procedure](upgrading.md).
 
-## Trusted desk cognition policy
+## Desk cognition policy
 
 Optional `desk.provider` and `desk.profile` seed a new desk conversation through
 the ordinary admission path, before its first native call. Omitted values inherit
 `provider.family_order[0]` and `provider.default_profile`. The selected provider
 must belong to the configured family order. An existing conversation keeps its
 lineage: changing these defaults never silently retargets an active session.
-Configured fallback providers still apply when they support the required access
-boundary. Browser visitors cannot set either field. A configured desk profile
-also suppresses the trusted inbox's per-message profile hint; leave it unset to
-keep the phone ingress behavior.
+Configured fallback providers still apply. Browser visitors cannot set either
+field. A configured desk profile also suppresses the trusted inbox's per-message
+profile hint; leave it unset to keep the phone ingress behavior.
 
 For example, a desk can select `desk.provider: codex` and `desk.profile: fast`,
 with `provider.models.codex.fast: gpt-5.6-luna`, once you have checked the
 installed model catalogue and upgraded safely. That is a per-installation
 override, not a generic model default, and no `gpt-6-luna` alias is supplied.
-
-`desk.access` defaults to `operator`, which keeps full desk and phone authority.
-`read-only` receives no native task-call capability. Unaccepted final task
-markers, including historical prepared completions, are refused. It applies to
-every desk topic, private bearer ingress included, and no client can override
-it. Telegram conversations keep their configured authority. Public inputs and
-replies are not appended to the shared Git world, and a writable world turn
-prepared earlier cannot be accepted through the read-only desk.
-
-`desk.readable_roots` is the trusted allowlist of public directories or
-individual files. It requires read-only access and defaults to an empty list: no
-product files are implicitly readable. The prompt gives only this public map,
-with no private repository or world orientation. Select public deployed data,
-not a whole checkout: tracked native transcripts, memories, task files, `.git`
-and sibling worktrees can all be private. Symlinks cannot grant reads beyond the
-selected paths. Never put credentials or private data inside a public grant.
-
-The Codex adapter gives each read-only desk conversation a persistent private
-native home under `<native_home>/.steward-read-scopes/<hash>`, with a separate
-empty working directory. Only the provider authentication file is linked from the
-operator home; operator configuration, plugins, skills, memories and session
-histories are not imported. Use a canonical native-home path, because symlinked
-private scope directories are rejected. The native process can keep its own
-conversation, but model tools cannot read that home, another visitor's home or
-the operator's home. Back up and upgrade these homes together with the
-controller's conversation lineage. Native sessions that ran without a scope are
-not imported into them.
-
-The adapter requires the named `steward-public` permission profile on both thread
-start/resume and turn start. It grants minimal system runtime reads plus the
-explicit public paths and the empty working directory, with no writes and no
-network. It disables apps, MCP inheritance, plugins, hooks, memory tools, host
-skill discovery, browser/computer/image tools, delegation and approval
-escalation. Shell children inherit no provider credentials and no host
-environment beyond a fixed system PATH. Before a model turn, the adapter verifies
-the native effective configuration and the confirmed permission profile;
-conflicting managed settings or an unsupported protocol fail closed. Codex
-0.153.4 was exercised with real sandbox reads, a symlink escape, writes and
-loopback denial, plus app-server configuration and profile confirmation, without
-starting model inference.
-Code mode and its host remain enabled: Luna uses `exec` to dispatch even ordinary
-shell reads. The dispatched commands still use the named permission profile;
-disabling the dispatcher prevents permitted reads as well as denied operations.
-
-The opt-in `test_live_luna_dispatches_confined_reads` additionally runs real
-`gpt-5.6-luna` turns through the adapter. It checks native `exec` outputs for an
-unknown public fixture value, then resumes the same session and checks actual
-denials for sibling history, symlink escape, authentication, parent process
-environment, writes and loopback access. Run it with
-`STEWARD_LIVE_CODEX_AUTH_HOME=/absolute/private/codex-home uv run --extra dev python -m pytest -q tests/test_codex_read_scope.py -k live_luna`.
-This consumes provider usage and links the existing login into an isolated test
-home; credentials and unrelated transcripts are never printed. Ordinary source
-gates skip this authenticated test.
-
-Providers that do not declare and implement scoped reads are skipped for this
-access mode; Claude and GLM do not. An unavailable Codex cannot silently fall
-back to an unconstrained provider. Ordinary operator requests keep their normal
-provider behavior. These local tests do not establish the installed Codex
-provider's login, model availability or a real reply journey. Keep a public web
-desk route contained until you have verified the upgraded runtime, the installed
-native policy, two independent visitor conversations and rejected actions, and
-had that reopening reviewed independently.
