@@ -116,6 +116,42 @@ def test_failed_interval_stays_held_rather_than_retried(tmp_path):
     assert not (checkpoint.world.root / "decision.md").exists()
 
 
+def test_a_held_intervals_due_at_scales_with_a_later_schedule_change_but_stays_ineligible(tmp_path):
+    """A held index is reinterpreted under whatever schedule is configured now.
+
+    `rhythm:sleep:20` is captured once, under `schedule: DAY`, with its index
+    meaning "the 20th day-long bucket". If the rhythm's own `schedule` is
+    reconfigured afterward (as `inbox` was, 300 -> 3600, in
+    `e0cdd9c6`), nothing stores what the index meant when it was captured:
+    `world_rhythm_observation` always multiplies by the *current* schedule.
+    The result is display-only: progress stays `held` and the entry is never
+    `eligible`, so no changed `due_at` can move it in admission order.
+    """
+    class Failing(EditingCognition):
+        def run(self, request, *, execution_id=None):
+            self.calls += 1
+            request()
+            raise RuntimeExecutionError("provider failed")
+
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, Failing())
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    before = procedures.world_rhythm_observations(now=NOW + DAY)["sleep"]
+    assert before["progress"] == "held" and before["due_at"] == 20 * DAY
+
+    reconfigured = config.model_copy(update={"rhythms": {
+        **config.rhythms, "sleep": config.rhythms["sleep"].model_copy(update={"schedule": DAY * 12})}})
+    rescaled = Procedures(reconfigured, state, {})
+    after = rescaled.world_rhythm_observations(now=NOW + DAY)["sleep"]
+    # Same captured index (20), reread against the new schedule: the exact
+    # 12x artifact reported from the live controller.
+    assert after["progress"] == "held" and after["due_at"] == 20 * DAY * 12 == before["due_at"] * 12
+
+    # Cosmetic: the held entry never becomes eligible, so the corrupted
+    # due_at cannot change which rhythm admission actually picks.
+    assert after["eligible"] is False
+    assert list(rescaled.due_world_rhythms(now=NOW + DAY)) == []
+
+
 def _replying(output, *, write=None, notify=None):
     def edit(request):
         if notify:
