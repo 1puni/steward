@@ -19,9 +19,11 @@ from steward_harness.runtime.native_evidence import CAPTURED_ROOT
 _PREPARE = r'''
 import json, os, pathlib, shutil, stat, subprocess, sys, tempfile, uuid
 
-source, mappings, session, pattern, bundled_skills, owner, owned = json.load(sys.stdin)
+source, mappings, session, pattern, bundled_skills, owner, owned, records = json.load(sys.stdin)
 source = pathlib.Path(source)
 world = pathlib.Path.cwd()
+# Where this run's records are committed, when that is not where it works.
+records = pathlib.Path(records) if records else world
 flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 # Config/auth remain private. Each invocation owns its links; no shared link
 # is retargeted when different worlds or concurrent conversations execute.
@@ -151,8 +153,9 @@ try:
                 (launch / name).unlink()
             os.close(directory_at(launch, name, create=True))
         else:
-            os.close(directory_at(world, relative, create=True))
-            link(launch / name, world / relative, True)
+            # Native memory is a world file the run edits in its record checkout.
+            os.close(directory_at(records, relative, create=True))
+            link(launch / name, records / relative, True)
 
     def place(relative, data):
         # An interrupted copy can never masquerade as a complete resumable
@@ -188,16 +191,16 @@ try:
         specs = [spec] + ([spec[:-len('.jsonl')] + '/**/*'] if spec.endswith(session + '.jsonl') else [])
         git_env = {**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1'}
         listed = subprocess.run(['git', 'ls-files', '-z', '--', *(':(glob)' + s for s in specs)],
-                                cwd=world, capture_output=True, check=True, env=git_env).stdout
+                                cwd=records, capture_output=True, check=True, env=git_env).stdout
         tracked = {path for path in listed.decode().split('\0') if path}
-        inside = os.path.realpath(world) + os.sep
-        on_disk = {p.relative_to(world).as_posix() for s in specs for p in world.glob(s)
+        inside = os.path.realpath(records) + os.sep
+        on_disk = {p.relative_to(records).as_posix() for s in specs for p in records.glob(s)
                    if p.is_file() and not p.is_symlink() and os.path.realpath(p).startswith(inside)}
         for path in sorted(tracked | on_disk):
             if not path.startswith(relative + '/'):
                 continue
-            data = (world / path).read_bytes() if path in on_disk else subprocess.run(
-                ['git', 'cat-file', 'blob', ':' + path], cwd=world, capture_output=True,
+            data = (records / path).read_bytes() if path in on_disk else subprocess.run(
+                ['git', 'cat-file', 'blob', ':' + path], cwd=records, capture_output=True,
                 check=True, env=git_env).stdout
             place(pathlib.PurePosixPath(name, path[len(relative) + 1:]), data)
         return list(launch.glob(pattern.format(session=session)))
@@ -380,7 +383,9 @@ def native_workspace(
             raise RuntimeExecutionError("Native temporary directory preparation failed; originals retained")
 
     evidence("check", home, {"workspace": str(request.cwd)})
-    if request.sandbox_mode != "workspace-write" and request.native_owner is None:
+    # Only a read-only, ownerless run with nowhere to commit uses the seed home
+    # directly; given a record checkout it gets a launch home and is captured.
+    if request.sandbox_mode != "workspace-write" and request.native_owner is None and checkout is None:
         prepare_temporary(home)
         yield NativeWorkspace(home, request.provider_session_id, deadline)
         return
@@ -421,6 +426,7 @@ def native_workspace(
                      "plugins", "commands", "agents", "CLAUDE.md", "rules", "output-styles"],
                 },
                 sorted(owned),
+                str(checkout) if checkout else None,
             ]),
         )
     except (OSError, subprocess.TimeoutExpired) as error:

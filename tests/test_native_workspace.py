@@ -812,3 +812,21 @@ def test_a_read_only_run_commits_its_records_to_the_checkout_it_is_given(setup, 
     with mapped(setup, native_owner='task:other', sandbox_mode='read-only') as unrecorded:
         (unrecorded.home / 'sessions/kept.jsonl').write_text('kept')
     assert (unrecorded.home / 'sessions/kept.jsonl').read_text() == 'kept'
+
+
+def test_a_run_working_elsewhere_resumes_from_its_record_checkout(setup, tmp_path):
+    """The voice agent works in a code repository but commits records to the world."""
+    _, world, _ = setup[0], setup[1].cwd, None
+    code = tmp_path / 'code'
+    code.mkdir()
+    _git(code, 'init', '-q')
+    with mapped(setup, native_owner='voice:guru', cwd=code, record_checkout=world) as native:
+        (native.home / f'sessions/rollout-{SESSION}.jsonl').write_text('spoken turn\n')
+    assert _git(world, 'show', f':artefacts/codex/sessions/rollout-{SESSION}.jsonl') == 'spoken turn\n'
+    assert _git(code, 'ls-files') == ''
+    # A new generation home has no copy; it resumes from the world's index.
+    with mapped(setup, native_owner='voice:guru', native_generation=2, cwd=code,
+                record_checkout=world, provider_session_id=SESSION) as resumed:
+        assert resumed.home != native.home
+        assert Path(resumed.resume).read_text() == 'spoken turn\n'
+    assert (world / 'memories/codex').is_dir() and not (code / 'memories').exists()

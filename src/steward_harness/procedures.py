@@ -88,7 +88,12 @@ def world_rhythm_interval(rhythms, name, now, runs, predecessors, receipt):
                     or receipt(f"rhythm:{name}:{index}") is False)}
     after = rhythms[name].after
     skipped = superseded(predecessors, after, receipt) if after else set()
-    pending.update(index for index in predecessors if index not in runs and index not in skipped)
+    # A dependent owes its predecessor's intervals since its own newest run.
+    # A dependent added later starts at the predecessor's newest interval
+    # rather than replaying every one accepted before it existed.
+    floor = max(runs) if runs else max(predecessors, default=0)
+    pending.update(index for index in predecessors
+                   if index >= floor and index not in runs and index not in skipped)
     return min(pending) if pending else current
 
 
