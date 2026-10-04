@@ -241,6 +241,12 @@ class RuntimeRequest:
     on_started: Callable[[Callable[[], None]], None] | None = None
     on_input_ready: Callable[[Callable[[RuntimeInput], None]], None] | None = None
     on_input_result: Callable[[RuntimeInputResult], None] = lambda _result: None
+    # Best-effort narration of in-turn tool activity, for consumers that show
+    # progress while a turn runs. Adapters normalize their native event shape
+    # into one short human-readable line. It carries no lifecycle authority:
+    # a turn's outcome is decided by its terminal result alone, and adapters
+    # must not let a raising consumer disturb stream validation.
+    on_progress: Callable[[str], None] = lambda _activity: None
     # Automatic observations can complete without an outward message. Native
     # terminal completion remains mandatory; this never permits a broken stream.
     allow_empty_output: bool = False

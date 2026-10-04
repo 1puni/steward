@@ -328,6 +328,31 @@ class _AppServerTurn:
                         "Codex emitted invalid agent message text", session_id=self.thread_id,
                     )
                 self.output = item["text"].strip()[-64_000:]
+            elif method == "item/completed" and item.get("type") not in (
+                None, "agentMessage", "subAgentActivity",
+            ):
+                self._report_activity(item)
+
+    def _report_activity(self, item: Mapping[str, object]) -> None:
+        """Narrate one completed native item; advisory only, never fatal.
+
+        Only completions are reported. This transport's start events carry no
+        shape this adapter verifies, and a progress line is not worth guessing
+        at one. A consumer that raises is ignored rather than failing the turn.
+        """
+        kind = item.get("type")
+        if not isinstance(kind, str) or not kind:
+            return
+        detail = ""
+        for key in ("command", "path", "query", "url", "name"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                detail = value.strip()
+                break
+        try:
+            self.request.on_progress(f"{kind} {detail}".strip()[:120])
+        except Exception:
+            return
 
     def _meter(self, params: dict) -> None:
         """Count this execution's output across its thread and native children."""

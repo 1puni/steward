@@ -278,6 +278,76 @@ def test_repeated_command_transitions_fail_closed(tmp_path, state):
         command(stream, root, state)
 
 
+def progress_stream(tmp_path, sink):
+    """A started stream whose lifecycle narrates activity into `sink`."""
+    request = RuntimeRequest(
+        execution_id="native", resolved=resolve_model("glm", "fast"),
+        provider_session_id=None, prompt="work", cwd=tmp_path, timeout_seconds=5,
+        on_progress=sink,
+    )
+    lifecycle = _ClaudeLifecycle(None, "glm", on_progress=request.on_progress)
+    stream = ClaudeInputStream(request, lifecycle)
+    wire = Wire()
+    stream.connect(wire)
+    root = wire.messages[-1]["uuid"]
+    command(stream, root, "queued")
+    command(stream, root, "started")
+    emit(stream, type="system", subtype="init", model="glm")
+    return stream, root
+
+
+def assistant(stream, *content):
+    emit(stream, type="assistant", parent_tool_use_id=None,
+         message={"role": "assistant", "content": list(content)})
+
+
+def test_tool_use_is_narrated_with_its_most_telling_argument(tmp_path):
+    seen = []
+    stream, _root = progress_stream(tmp_path, seen.append)
+
+    assistant(
+        stream,
+        {"type": "text", "text": "let me look"},
+        {"type": "tool_use", "name": "WebSearch", "input": {"query": "bitcoin price"}},
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/notes.md"}},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}},
+    )
+
+    assert seen == [
+        "WebSearch bitcoin price",
+        "Read /tmp/notes.md",
+        "Bash ls -la",
+    ]
+
+
+def test_a_nameless_or_argumentless_tool_still_narrates_safely(tmp_path):
+    seen = []
+    stream, _root = progress_stream(tmp_path, seen.append)
+
+    assistant(
+        stream,
+        {"type": "tool_use", "input": {"query": "no name"}},
+        {"type": "tool_use", "name": "Glob", "input": {}},
+        {"type": "tool_use", "name": "Task", "input": "not-a-mapping"},
+    )
+
+    assert seen == ["Glob", "Task"]
+
+
+def test_a_raising_consumer_cannot_break_the_stream(tmp_path):
+    """Narration is advisory: a broken consumer must not fail a healthy turn."""
+    def explode(_activity):
+        raise RuntimeError("consumer is broken")
+
+    stream, root = progress_stream(tmp_path, explode)
+
+    assistant(stream, {"type": "tool_use", "name": "Read", "input": {"file_path": "x"}})
+    result(stream, root, text="done")
+    command(stream, root, "completed")
+
+    assert stream.lifecycle.finish()[0] == "done"
+
+
 @pytest.mark.parametrize("allow_empty", [False, True])
 @pytest.mark.parametrize("text", ["", "   "])
 def test_empty_assessment_requires_successful_result_and_command_completion(tmp_path, allow_empty, text):

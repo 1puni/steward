@@ -68,6 +68,9 @@ class CognitionRequest:
     on_session_invalidated: Callable[[ProviderFamily], None] = lambda _provider: None
     on_input_ready: Callable[[Callable[[RuntimeInput], None]], None] | None = None
     on_input_result: Callable[[RuntimeInputResult], None] = lambda _result: None
+    on_progress: Callable[[ProviderFamily, str], None] = (
+        lambda _provider, _activity: None
+    )
 
     def __post_init__(self) -> None:
         if not self.execution_id:
@@ -236,6 +239,9 @@ class Cognition:
                         on_input_ready=request.on_input_ready
                         if adapter.capabilities.ongoing_input else None,
                         on_input_result=request.on_input_result,
+                        on_progress=lambda activity: request.on_progress(
+                            provider, activity
+                        ),
                     )
                     try:
                         result = adapter.execute(runtime_request)
