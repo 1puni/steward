@@ -70,37 +70,6 @@ def test_events_writer_dedupe_scan(tmp_path: Path) -> None:
     assert not events.has_reply("m2")
 
 
-def test_observations_keep_the_first_evidence_across_claim_recovery_and_completion(tmp_path):
-    inbox = DeskInbox(tmp_path / 'inbox')
-    assert inbox.observe('failure-1', 'first evidence')
-    [message] = inbox.pending()
-    assert message.observation
-    assert not inbox.observe('failure-1', 'later measurement')
-    assert inbox.claim(message).observation
-    assert inbox.pending() == []
-    assert not inbox.observe('failure-1', 'during native work')
-    assert inbox.recover() == 1
-    [recovered] = inbox.pending()
-    assert recovered.text == 'first evidence'
-    inbox.done(inbox.claim(recovered))
-    assert not inbox.observe('failure-1', 'after completion')
-    assert inbox.pending() == []
-    assert (inbox.dir / 'failure-1.json.done').exists()
-    assert not list(inbox.dir.glob('*.json'))
-
-
-def test_observation_recovers_a_source_written_before_queue_publication(tmp_path):
-    inbox = DeskInbox(tmp_path / 'inbox')
-    inbox.observe('failure-1', 'first evidence')
-    (inbox.dir / 'failure-1.json').unlink()  # crash before the queue link existed
-    assert inbox.observe('failure-1', 'different later reading')
-    [message] = inbox.pending()
-    assert message.text == 'first evidence'
-    inbox.park_failed(inbox.claim(message))
-    assert not inbox.observe('failure-1', 'do not retry uncertain cognition')
-    assert inbox.pending() == []
-
-
 def test_a_message_may_ask_for_its_threads_quality(tmp_path: Path) -> None:
     inbox = DeskInbox(tmp_path)
     for msg_id, profile in (("fast-one", "fast"), ("odd-one", "turbo"), ("plain-one", None)):

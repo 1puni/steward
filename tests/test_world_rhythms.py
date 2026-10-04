@@ -1056,3 +1056,19 @@ def test_a_dependent_added_later_starts_at_its_predecessors_newest_interval():
     assert world_rhythm_interval(rhythms, "chaos", 23 * 300 + 1, {}, staging, receipt) == 22
     # Established: every predecessor interval since its own newest run.
     assert world_rhythm_interval(rhythms, "chaos", 23 * 300 + 1, {20: accepted}, staging, receipt) == 21
+
+
+def test_a_held_rhythm_alerts_the_operator_without_a_model(tmp_path):
+    class Failing(EditingCognition):
+        def run(self, request, *, execution_id=None):
+            request()
+            raise RuntimeExecutionError("provider failed")
+
+    config, state, checkpoint, service, cognition, _ = _chain(tmp_path, Failing())
+    alerts = []
+    procedures = Procedures(config, state, {}, world=checkpoint.world,
+                            alert=lambda key, text: alerts.append((key, text)))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    [(key, text)] = alerts
+    assert key == "held:rhythm:sleep:20"
+    assert "provider failed" in text and "/rhythm run sleep" in text

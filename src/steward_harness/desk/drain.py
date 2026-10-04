@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +22,6 @@ class DeskMessage:
     msg_id: str
     text: str
     topic_id: int = 0  # an optional thread id: a new thread starts a new session
-    observation: bool = False
     # The quality the sender asks this thread to run at, as Telegram's /model
     # sets it. A phone call asks for "fast": the caller is waiting in silence.
     profile: str | None = None
@@ -67,53 +64,12 @@ class DeskInbox:
     """Claims atomic-rename inbox files the way the shell harnesses did.
 
     Ownership is the file's suffix: ``.json`` queued, ``.json.claimed`` being
-    worked, ``.json.failed``/``.rejected`` parked for the operator. Observations
-    also retain an immutable ``.source`` and a consumed ``.json.done`` marker.
-    A restart returns orphaned claims to the queue; accepted native turns replay
+    worked, ``.json.failed``/``.rejected`` parked for the operator. A restart returns orphaned claims to the queue; accepted native turns replay
     their receipt instead of repeating cognition.
     """
 
     def __init__(self, inbox_dir: str | Path) -> None:
         self.dir = Path(inbox_dir)
-
-    def observe(self, msg_id: str, text: str) -> bool:
-        """Retain one immutable source and queue it through the ordinary inbox.
-
-        A .source file freezes the first evidence for replay. The existing
-        claim/failure markers and an observation's .done marker own custody;
-        none of these archived files participate in the pending .json scan.
-        """
-        if not _ID_RE.fullmatch(msg_id) or not 1 <= len(text) <= _MAX_TEXT:
-            raise ValueError("invalid desk observation identity or text")
-        self.dir.mkdir(parents=True, exist_ok=True)
-        source = self.dir / f"{msg_id}.source"
-        target = self.dir / f"{msg_id}.json"
-        if not source.exists():
-            with tempfile.NamedTemporaryFile(mode="w", dir=self.dir, delete=False) as stream:
-                temporary = Path(stream.name)
-                try:
-                    json.dump({"kind": "observation", "id": msg_id, "text": text}, stream)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                    try:
-                        os.link(temporary, source)
-                    except FileExistsError:
-                        pass
-                finally:
-                    temporary.unlink()
-        if any(target.with_name(target.name + suffix).exists()
-               for suffix in ("", ".claimed", ".done", ".failed")):
-            return False
-        try:
-            os.link(source, target)
-        except FileExistsError:
-            return False
-        directory = os.open(self.dir, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-        return True
 
     def recover(self) -> int:
         """Requeue files left claimed by a dead process; returns the count."""
@@ -155,16 +111,12 @@ class DeskInbox:
             msg_id=message.msg_id,
             text=message.text,
             topic_id=message.topic_id,
-            observation=message.observation,
             profile=message.profile,
             context=message.context,
         )
 
     def done(self, message: DeskMessage) -> None:
-        if message.observation:
-            message.path.replace(message.path.with_suffix(".done"))
-        else:
-            message.path.unlink(missing_ok=True)
+        message.path.unlink(missing_ok=True)
 
     def requeue(self, message: DeskMessage) -> None:
         if message.path.suffix != ".claimed":
@@ -183,7 +135,7 @@ class DeskInbox:
             job = json.loads(path.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
-        if not isinstance(job, dict) or job.get("kind") not in ("message", "observation"):
+        if not isinstance(job, dict) or job.get("kind") != "message":
             return None
         text = job.get("text")
         msg_id = job.get("id")
@@ -201,5 +153,4 @@ class DeskInbox:
         if not isinstance(context, str) or not 1 <= len(context) <= _MAX_CONTEXT:
             context = None
         return DeskMessage(path=path, msg_id=msg_id, text=text, topic_id=topic,
-                           observation=job["kind"] == "observation", profile=profile,
-                           context=context)
+                           profile=profile, context=context)

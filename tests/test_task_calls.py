@@ -281,7 +281,6 @@ def test_followthrough_stub_uses_native_task_tool(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('first,later,accepted', [
     ('harness:task-result', 'operator', True),
-    ('operator', 'harness:desk-watch', False),
 ])
 def test_live_source_authority_does_not_follow_first_speaker(tmp_path, first, later, accepted):
     from steward_harness.runtime.contracts import RuntimeInputResult
@@ -310,10 +309,6 @@ def test_live_source_authority_does_not_follow_first_speaker(tmp_path, first, la
             assert changed['accepted'] is False
     service = _service(tmp_path, CallingCognition(during))
     task = _waiting_rhythm_task(service)
-    if later == 'harness:desk-watch':
-        owner = service.conversation_for('telegram', 'chat:topic').conversation_id
-        task, _ = service._state.tasks.create(TaskSpec('app', 'Owned', 'Work'), owner=str(owner))
-        close_task_slice(service._state, task, 'ask', detail='Which index?')
     _turn(service, 'root', operator_id=first)
     assert service._state.tasks.get(task).status.value == ('queued' if accepted else 'waiting')
 

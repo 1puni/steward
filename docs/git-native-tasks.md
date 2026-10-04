@@ -263,8 +263,7 @@ transaction as authorization. Interrupted or cleared executions cannot mutate.
 Calls cannot select a conversation, operator, provider or authorization policy. Submission requires a
 currently configured repository. A conversation may inspect and steer its own
 tasks; an operator turn can also address ownerless work. Automated turns cannot
-steer ownerless work, and desk-watch observations can only note existing owned
-work, not answer, retry or cancel it. Existing task status guards still apply.
+steer ownerless work. Existing task status guards still apply.
 Task notes and answers retain controller provenance, never operator provenance.
 
 Admission is independent of conversation/world completion. An accepted task can

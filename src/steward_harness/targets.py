@@ -39,8 +39,8 @@ FAILED = frozenset({"failed", "blocked", "failed-evidence"})
 # own shutdown drain makes every observe fail for a pass or two, and a target
 # that recovers before anyone could act has nothing to report. The clock
 # starts at the first failure since the target was last satisfied at this
-# revision, so flapping between failure and busy still accumulates. One
-# desk-watch cycle: long enough to span a restart, short against a real outage.
+# revision, so flapping between failure and busy still accumulates. Five
+# minutes: long enough to span a restart, short against a real outage.
 FAILURE_PERSISTS_SECONDS = 300.0
 
 
