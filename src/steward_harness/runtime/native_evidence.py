@@ -33,6 +33,15 @@ MAX_RESERVE_BYTES = 10 * 1024 ** 3
 _GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 
 
+def record_mappings(family: str) -> dict[str, str]:
+    """Each provider home directory that holds records, and its world path."""
+    if family == 'codex':
+        return {'sessions': 'artefacts/codex/sessions',
+                'archived_sessions': 'artefacts/codex/archived_sessions',
+                'memories': 'memories/codex'}
+    return {'projects': f'artefacts/{family}/projects'}
+
+
 def check_headroom(paths: list[Path], required: int = 0) -> None:
     for path in paths:
         usage = shutil.disk_usage(path)

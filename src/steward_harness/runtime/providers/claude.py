@@ -28,6 +28,7 @@ from steward_harness.runtime.contracts import (
     TokenMeter,
     validated_uuid,
 )
+from steward_harness.runtime.native_evidence import record_mappings
 from steward_harness.runtime.native_workspace import native_workspace
 from steward_harness.runtime.process import ProcessController, ProcessInput
 
@@ -611,7 +612,7 @@ class ClaudeRuntime:
                 raise ValueError(f"Invalid persisted {self.display_name} session ID")
         with native_workspace(
             self._controller.broker, request, self.native_home,
-            mappings={"projects": f"artefacts/{self.family}/projects"},
+            mappings=record_mappings(self.family),
             resume_pattern=f"artefacts/{self.family}/projects/*/{{session}}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)

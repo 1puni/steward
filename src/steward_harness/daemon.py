@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 
-from steward_harness.retention import prune_tasks, prune_world_sessions
+from steward_harness.retention import prune_tasks, prune_world_sessions, retire_native_homes
 from steward_harness.repository_reconciler import RepositoryReconciler
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import (
@@ -986,6 +986,11 @@ class StewardDaemon:
             prune_tasks(kernel.tasks)
             if checkpoint is not None:
                 prune_world_sessions(checkpoint, self.config.controller.world_session_idle_seconds)
+            retire_native_homes(
+                state, self.broker, self.config.provider.native_homes,
+                self.config.world.root if self.config.world else None,
+                {name: repository.path for name, repository in self.config.repositories.items()},
+            )
 
         def step() -> None:
             nonlocal next_retention

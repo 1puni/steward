@@ -18,7 +18,7 @@ from steward_harness.retention import prune_tasks, prune_world_sessions
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.native_workspace import _owner_prefix
 from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
-from steward_harness.state import StateDatabase, TaskSpec
+from steward_harness.state import ConversationId, StateDatabase, TaskSpec
 from steward_harness.task_runner import TaskRunner
 from steward_harness.task_lock import task_lock
 
@@ -190,3 +190,74 @@ def test_world_removal_serializes_new_turn_admission(tmp_path, monkeypatch):
             release.set()
         cleanup.result(timeout=10)
         assert new_turn.result(timeout=10).path.is_dir()
+
+
+def _world_with_records(tmp_path, records):
+    world = tmp_path / "world"
+    world.mkdir()
+    _git("init", "-q", cwd=world)
+    for path, text in records.items():
+        (world / path).parent.mkdir(parents=True, exist_ok=True)
+        (world / path).write_text(text)
+    _commit_all(world, "records")
+    return world
+
+
+def _owner_home(root, owner, provider, generation, files, *, age=7200):
+    import json
+    import os
+    import time
+    from steward_harness.retention import _home_key
+    home = root / (_owner_prefix(owner) + _home_key(provider, generation))
+    home.mkdir(parents=True, exist_ok=True)
+    for relative, text in files.items():
+        (home / relative).parent.mkdir(parents=True, exist_ok=True)
+        (home / relative).write_text(text)
+    (home / "state_5.sqlite").write_text("private provider state")
+    old = time.time() - age
+    for directory, _, names in os.walk(home):
+        for name in names:
+            os.utime(os.path.join(directory, name), (old, old))
+    return home
+
+
+def test_superseded_homes_retire_only_once_git_holds_their_records(tmp_path):
+    from steward_harness.retention import retire_native_homes
+
+    world = _world_with_records(tmp_path, {
+        "artefacts/codex/sessions/2026/a.jsonl": "first generation\n",
+    })
+    state = StateDatabase(tmp_path / "state.db")
+    broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
+    codex = tmp_path / "codex-home"
+    owner = ConversationId("telegram:8")
+    state.open_conversation(owner, provider="codex", profile="balanced")
+    with state.connect(write=True) as connection:
+        connection.execute("UPDATE conversations SET generation=3 WHERE conversation_id=?", (str(owner),))
+    retired = _owner_home(codex, str(owner), "codex", 1, {"sessions/2026/a.jsonl": "first generation\n"})
+    uncommitted = _owner_home(codex, str(owner), "codex", 2, {"sessions/2026/b.jsonl": "never accepted\n"})
+    current = _owner_home(codex, str(owner), "codex", 3, {"sessions/2026/a.jsonl": "first generation\n"})
+    fallback = _owner_home(codex, str(owner), "claude", 4, {})  # claude runs at generation + 1
+    recent = _owner_home(codex, str(owner), "codex", 0, {}, age=60)
+    unknown = _owner_home(codex, "telegram:gone", "codex", 1, {})
+    retire_native_homes(state, broker, {"codex": codex, "claude": tmp_path / "claude-home"}, world, {})
+    assert not retired.exists()
+    assert uncommitted.exists() and current.exists() and fallback.exists()
+    assert recent.exists() and unknown.exists()
+
+
+def test_a_running_owner_keeps_every_home(tmp_path):
+    from steward_harness.retention import retire_native_homes
+
+    world = _world_with_records(tmp_path, {"README.md": "world\n"})
+    state = StateDatabase(tmp_path / "state.db")
+    owner = ConversationId("rhythm:staging")
+    state.open_conversation(owner, provider="claude", profile="balanced")
+    with state.connect(write=True) as connection:
+        connection.execute("UPDATE conversations SET generation=5 WHERE conversation_id=?", (str(owner),))
+    claude = tmp_path / "claude-home"
+    old = _owner_home(claude, str(owner), "claude", 1, {})
+    state.start_turn(owner, "rhythm:staging:1", "harness:rhythm", "Staging.")
+    retire_native_homes(state, UntrustedExecutionBroker(UntrustedExecutionConfig()),
+                        {"claude": claude}, world, {})
+    assert old.exists()
