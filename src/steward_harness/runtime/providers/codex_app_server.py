@@ -67,6 +67,17 @@ def _declines_turn(message: str) -> bool:
     )
 
 
+_RELOCATE_THREAD = r'''
+import glob, sqlite3, sys
+home, thread, path = sys.argv[1:]
+for database in glob.glob(home + "/state_*.sqlite"):
+    with sqlite3.connect(database, timeout=30) as connection:
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='threads'").fetchone():
+            connection.execute("UPDATE threads SET rollout_path=? WHERE id=? AND rollout_path!=?",
+                               (path, thread, path))
+'''
+
+
 class CodexAppServerRuntime:
     """Map native lifecycle and steering; the provider owns tools and children."""
 
@@ -87,6 +98,22 @@ class CodexAppServerRuntime:
         if not self._controller.broker.can_execute(self.executable):
             return Availability(False, f"Codex CLI is not executable at {self.executable}")
         return Availability(True)
+
+    def _relocate_thread(self, home, thread_id: str, rollout: str) -> None:
+        """Point Codex's record of a thread at the rollout this home now holds.
+
+        A home whose sessions once linked into a world checkout recorded the
+        linked path; that copy is gone, and Codex refuses a resume whose path
+        disagrees with its record. The home's file is the same rollout.
+        """
+        result = self._controller.broker.run(
+            [self._controller.broker.python_executable, "-I", "-c", _RELOCATE_THREAD,
+             str(home), thread_id, rollout], cwd="/", timeout=60)
+        if result.returncode:
+            raise RuntimeExecutionError(
+                "Codex thread record could not be relocated: " + result.stderr.strip()[-300:],
+                session_id=thread_id,
+            )
 
     def execute(self, request: RuntimeRequest) -> RuntimeResult:
         if (
@@ -111,6 +138,8 @@ class CodexAppServerRuntime:
             resume_pattern="artefacts/codex/sessions/**/rollout-*{session}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)
+            if request.provider_session_id and workspace.resume and workspace.home != home:
+                self._relocate_thread(workspace.home, request.provider_session_id, workspace.resume)
             turn = _AppServerTurn(request, resume_path=workspace.resume,
                 unrestricted=self._controller.broker.enabled
                 and request.sandbox_mode == "workspace-write")

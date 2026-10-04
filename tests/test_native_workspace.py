@@ -830,3 +830,21 @@ def test_a_run_working_elsewhere_resumes_from_its_record_checkout(setup, tmp_pat
         assert resumed.home != native.home
         assert Path(resumed.resume).read_text() == 'spoken turn\n'
     assert (world / 'memories/codex').is_dir() and not (code / 'memories').exists()
+
+
+def test_codex_thread_record_follows_the_rollout_into_its_home(tmp_path):
+    import sqlite3
+    import sys
+    from steward_harness.runtime.providers.codex_app_server import _RELOCATE_THREAD
+
+    home = tmp_path / 'home'
+    home.mkdir()
+    linked = '/worktrees/session-x/artefacts/codex/sessions/2026/09/30/rollout-a.jsonl'
+    with sqlite3.connect(home / 'state_5.sqlite') as database:
+        database.execute('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)')
+        database.executemany('INSERT INTO threads VALUES (?, ?)', [('a', linked), ('b', '/elsewhere/b.jsonl')])
+    rollout = str(home / 'sessions/2026/09/30/rollout-a.jsonl')
+    subprocess.run([sys.executable, '-I', '-c', _RELOCATE_THREAD, str(home), 'a', rollout], check=True)
+    with sqlite3.connect(home / 'state_5.sqlite') as database:
+        assert dict(database.execute('SELECT id, rollout_path FROM threads')) == {
+            'a': rollout, 'b': '/elsewhere/b.jsonl'}
