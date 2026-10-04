@@ -972,3 +972,28 @@ def test_an_empty_reply_releases_its_owner_like_any_provider_failure(tmp_path):
     assert _task_id(accepted) is not None
     # The empty turn's edit was kept in the checkout for the next source.
     assert (checkpoint.world.root / "decision.md").is_file()
+
+
+def test_a_storage_refusal_before_any_provider_leaves_the_source_to_replay(tmp_path):
+    """The reserve refused admission: nothing ran, so the message is not lost."""
+    from steward_harness.runtime.contracts import NativeStorageDeferred
+
+    class Refusing(EditingCognition):
+        refusals = 1
+
+        def run(self, request, *, execution_id=None):
+            if self.refusals:
+                self.refusals -= 1
+                request()  # Claimed its checkout, then the reserve refused.
+                raise NativeStorageDeferred("native evidence storage reserve reached")
+            return super().run(request, execution_id=execution_id)
+
+    cognition = Refusing()
+    state, _, service, _ = runtime(tmp_path, cognition)
+    with pytest.raises(Busy):
+        run(service)
+    with state.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM turns").fetchone()[0] == 0
+    accepted = run(service)
+    assert state.prepared_turn(str(accepted.turn_id))["state"] == "completed"
+    assert cognition.calls == 1

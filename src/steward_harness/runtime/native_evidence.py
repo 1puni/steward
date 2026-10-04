@@ -134,7 +134,11 @@ def leave_to_git(workspace: Path) -> int:
 if __name__ == '__main__':
     operation, home, records, workspace = json.load(sys.stdin)
     if operation == 'check':
-        check_headroom([Path(home), *map(Path, records.values())])
+        try:
+            check_headroom([Path(home), *map(Path, records.values())])
+        except RuntimeError as error:
+            print(error, file=sys.stderr)
+            sys.exit(75)  # EX_TEMPFAIL: admission deferred, nothing started.
         if workspace:
             marker = Path(workspace) / EVIDENCE_PENDING
             descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
