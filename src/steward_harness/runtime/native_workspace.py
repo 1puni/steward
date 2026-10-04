@@ -1,4 +1,4 @@
-"""Private native launch configuration with direct, workspace-owned records."""
+"""Private native launch configuration; retained homes own their native records."""
 
 from __future__ import annotations
 
@@ -7,16 +7,17 @@ import json
 import math
 import subprocess
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeRequest
 from steward_harness.runtime.execution import UntrustedExecutionBroker
+from steward_harness.runtime.native_evidence import CAPTURED_ROOT
 
 _PREPARE = r'''
-import json, os, pathlib, shutil, stat, sys, tempfile, uuid
+import json, os, pathlib, shutil, stat, subprocess, sys, tempfile, uuid
 
 source, mappings, session, pattern, bundled_skills, owner = json.load(sys.stdin)
 source = pathlib.Path(source)
@@ -134,18 +135,78 @@ try:
                 pass
             os.close(directory)
     private = persistent and not owner['writable']
-    record_root = launch if private else world
+    # A retained home owns these records as real files. A writable owner's
+    # are staged into its checkout's index after each run, so the checkout
+    # never has to materialize them; see native_evidence.capture.
+    owned = set(owner['records']) if persistent else set()
+    record_root, world_pattern, session_mapping = world, pattern, None
     for name, relative in mappings.items():
-        if private:
+        if name in owned:
             if pattern.startswith(relative + '/'):
                 pattern = name + pattern[len(relative):]
+                record_root, session_mapping = launch, (name, relative)
+            if owner['writable'] and (launch / name).is_symlink():
+                # This home used to write through into a world checkout. Those
+                # records are in the world's Git; the lineage's own are imported.
+                (launch / name).unlink()
             os.close(directory_at(launch, name, create=True))
         else:
             os.close(directory_at(world, relative, create=True))
             link(launch / name, world / relative, True)
+
+    def place(relative, data):
+        # An interrupted copy can never masquerade as a complete resumable
+        # original. Existing records are never replaced.
+        directory = directory_at(launch, relative.parent, create=True)
+        temporary = '.steward-import-' + uuid.uuid4().hex
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=directory)
+            with os.fdopen(descriptor, 'wb') as imported:
+                imported.write(data)
+                imported.flush()
+                os.fsync(imported.fileno())
+            try:
+                os.link(temporary, relative.name, src_dir_fd=directory,
+                        dst_dir_fd=directory, follow_symlinks=False)
+            except FileExistsError:
+                pass
+            os.fsync(directory)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            os.close(directory)
+
+    def import_from_world():
+        # Only this lineage's session and its companions (Claude/GLM keep
+        # session-scoped children in <session>/). A file still in the checkout
+        # was written after the last capture and is newer than the index's.
+        name, relative = session_mapping
+        spec = world_pattern.format(session=session)
+        specs = [spec] + ([spec[:-len('.jsonl')] + '/**/*'] if spec.endswith(session + '.jsonl') else [])
+        git_env = {**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1'}
+        listed = subprocess.run(['git', 'ls-files', '-z', '--', *(':(glob)' + s for s in specs)],
+                                cwd=world, capture_output=True, check=True, env=git_env).stdout
+        tracked = {path for path in listed.decode().split('\0') if path}
+        inside = os.path.realpath(world) + os.sep
+        on_disk = {p.relative_to(world).as_posix() for s in specs for p in world.glob(s)
+                   if p.is_file() and not p.is_symlink() and os.path.realpath(p).startswith(inside)}
+        for path in sorted(tracked | on_disk):
+            if not path.startswith(relative + '/'):
+                continue
+            data = (world / path).read_bytes() if path in on_disk else subprocess.run(
+                ['git', 'cat-file', 'blob', ':' + path], cwd=world, capture_output=True,
+                check=True, env=git_env).stdout
+            place(pathlib.PurePosixPath(name, path[len(relative) + 1:]), data)
+        return list(launch.glob(pattern.format(session=session)))
+
     resume = None
     if session:
         matches = list(record_root.glob(pattern.format(session=session)))
+        if not matches and session_mapping and not private:
+            matches = import_from_world()
         if private and not matches:
             # Import only the requested lineage's original, never another
             # owner's database, queue or whole private history directory.
@@ -220,33 +281,9 @@ except BaseException:
     raise
 '''
 
-# Native homes contain more than Git-mapped transcripts: databases, queues,
-# tool results and provider-created files may be unique. Until independent
-# custody is established, neither these homes nor their linked checkout may
-# be reclaimed on the strength of a successful Git checkpoint.
-_CHECK_RETIREMENT = """
-import json, pathlib, sys
-homes, prefix = json.load(sys.stdin)
-for home in map(pathlib.Path, homes):
-    if home.is_dir():
-        for entry in home.iterdir():
-            if entry.name.startswith(prefix):
-                raise RuntimeError('native evidence still depends on retained owner workspace')
-"""
-
 
 def _owner_prefix(owner: str) -> str:
     return ".steward-owner-" + hashlib.sha256(owner.encode()).hexdigest()[:32] + "-"
-
-
-def check_native_owner_retirement(broker: UntrustedExecutionBroker, homes: Iterable[Path], owner: str) -> None:
-    """Refuse checkout removal while any owner generation can depend on it."""
-    checked = broker.run(
-        [broker.python_executable, "-I", "-c", _CHECK_RETIREMENT], cwd="/", timeout=60,
-        input_text=json.dumps([list(map(str, homes)), _owner_prefix(owner)]),
-    )
-    if checked.returncode:
-        raise RuntimeError("native owner retention blocked: " + checked.stderr.strip()[-500:])
 
 
 _PRIVATE_TEMP = r'''
@@ -342,12 +379,7 @@ def native_workspace(
     evidence("check", home, {"workspace": str(request.cwd)})
     if request.sandbox_mode != "workspace-write" and request.native_owner is None:
         prepare_temporary(home)
-        aliases = {name: str(home / name) for name in mappings}
-        evidence("snapshot-seed", home, aliases)
-        try:
-            yield NativeWorkspace(home, request.provider_session_id, deadline)
-        finally:
-            evidence("snapshot-seed-final", home, aliases)
+        yield NativeWorkspace(home, request.provider_session_id, deadline)
         return
     if deadline is not None:
         setup_timeout = min(30, deadline - time.monotonic())
@@ -356,6 +388,10 @@ def native_workspace(
                 "Native workspace setup exceeded execution deadline",
                 session_id=request.provider_session_id,
             )
+    # A writable owner's provider records live in its home and reach Git by
+    # capture; a read-only owner's stay private to its home.
+    owned = {name for name, relative in mappings.items()
+             if not writable or relative.startswith(CAPTURED_ROOT)}
     owner_key = None if request.native_owner is None else (
         # One prefix per owner lets retirement find every generation.
         _owner_prefix(request.native_owner)[len(".steward-owner-"):]
@@ -373,7 +409,8 @@ def native_workspace(
                  (Path(__file__).resolve().parents[1] / "skills").glob("*/SKILL.md")},
                 None if owner_key is None else {
                     "key": owner_key,
-                    "writable": request.sandbox_mode == "workspace-write",
+                    "writable": writable,
+                    "records": sorted(owned),
                     "shared": ["auth.json", "config.toml", "requirements.toml", "plugins", "AGENTS.md",
                                "AGENTS.override.md", "rules", "prompts", "hooks.json", "agents"]
                     if request.resolved.provider == "codex" else
@@ -395,17 +432,11 @@ def native_workspace(
         )
     record = json.loads(prepared.stdout)
     workspace = NativeWorkspace(Path(record["home"]), record["resume"], deadline)
-    records = {name: str(request.cwd / relative) for name, relative in mappings.items()} if writable else {}
-    if writable and request.resolved.provider in {"claude", "glm"}:
-        memory = request.cwd / "memories" / request.resolved.provider
-        # The adapter creates this path after preparation; capture it on exit.
-        # The snapshot script treats this one optional root separately below.
-        records["auto-memory"] = str(memory)
+    captured = {name: mappings[name] for name in owned} if writable and owner_key else {}
     prepare_temporary(workspace.home)
-    evidence("snapshot", workspace.home, records)
     try:
         yield workspace
     finally:
         # ProcessController has already torn down the provider and descendants.
-        # Anonymous homes are retained too; no Git result authorizes deletion.
-        evidence("snapshot-final", workspace.home, records)
+        # Homes are retained; Git now holds a copy, not the only one.
+        evidence("capture", workspace.home, captured)

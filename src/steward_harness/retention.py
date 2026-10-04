@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import replace
 import hashlib
 import logging
@@ -15,7 +14,6 @@ from steward_harness.kernel import repository_lease
 from steward_harness.state import ConversationId, TaskId
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
-from steward_harness.runtime.native_workspace import check_native_owner_retirement
 from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 
 log = logging.getLogger(__name__)
@@ -55,7 +53,7 @@ def _remove(broker, repository: Path, path: Path) -> None:
     log.info("pruned accepted workspace %s", path)
 
 
-def prune_tasks(runner, native_homes: Iterable[Path] = ()) -> None:
+def prune_tasks(runner) -> None:
     """Use accepted task status, then recheck under repository and task locks."""
     for task in runner.state.tasks.all():
         if task.status.value not in {"done", "cancelled"}:
@@ -79,8 +77,6 @@ def prune_tasks(runner, native_homes: Iterable[Path] = ()) -> None:
                 head = _head_if_clean(runner.broker, Path(repository.path), path)
                 if not runner.state.tasks.contains(head, current.revision):
                     raise ValueError("HEAD is not retained in accepted task Git")
-                # Native homes and linked records need custody independent of Git.
-                check_native_owner_retirement(runner.broker, native_homes, str(current.session_id))
                 _remove(runner.broker, Path(repository.path), path)
         except Busy:
             continue
@@ -90,7 +86,7 @@ def prune_tasks(runner, native_homes: Iterable[Path] = ()) -> None:
             lock.release()
 
 
-def prune_world_sessions(checkpoint, idle_seconds: int, native_homes: Iterable[Path] = ()) -> None:
+def prune_world_sessions(checkpoint, idle_seconds: int) -> None:
     """Serialize eligibility with turn admission and world acceptance."""
     state = checkpoint.state
     cutoff = datetime.now(UTC) - timedelta(seconds=idle_seconds)
@@ -129,8 +125,6 @@ def prune_world_sessions(checkpoint, idle_seconds: int, native_homes: Iterable[P
                 if checkpoint.unaccepted(path, checkpoint.world.input_cursor(),
                                          connection=connection):
                     raise ValueError("HEAD is not in the accepted world")
-                # Git acceptance does not establish custody of all native evidence.
-                check_native_owner_retirement(checkpoint.broker, native_homes, owner)
                 _remove(checkpoint.broker, checkpoint.world.root, path)
         except Busy:
             continue

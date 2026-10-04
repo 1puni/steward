@@ -8,6 +8,7 @@ acceptance, while independent sessions can work concurrently.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 import uuid
@@ -23,12 +24,14 @@ from steward_harness.git import (
 )
 from steward_harness.git_reconcile import ResolveTurn, reconcile_git
 from steward_harness.state import StateDatabase
-from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
+from steward_harness.runtime.native_evidence import CAPTURED_ROOT, EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.world.git_world import BASE_TRAILER, TURN_TRAILER, GitWorld
 from steward_harness.lease import Lease
 
 _WORKSPACE_PREFIX = "session-"
+
+_NATIVE_EVIDENCE = (Path(__file__).parents[1] / "runtime" / "native_evidence.py").read_text()
 
 
 class WorldUpdatePending(RuntimeError):
@@ -113,8 +116,33 @@ class WorldTurnCheckpoint:
                 self._refresh_workspace(path, sha)
                 sha = self._git(path, "rev-parse", "HEAD").stdout.strip()
             else:
-                self._git(self.world.root, "worktree", "add", "--detach", str(path), sha)
+                self._add_worktree(path, sha)
         return WorldTurnWorktree(path, sha)
+
+    def _add_worktree(self, path: Path, sha: str) -> None:
+        """Check out `sha` without the provider records Git already holds.
+
+        Owner homes hold live records and capture them into the index, so no
+        checkout needs every session the world ever kept. Skip-worktree, not
+        sparse-checkout: sparse mode lets an incoming path overwrite an
+        untracked local file instead of refusing.
+        """
+        self._git(self.world.root, "worktree", "add", "--no-checkout", "--detach", str(path), sha)
+        self._git(path, "read-tree", sha)
+        records = self._git(path, "ls-files", "-z", "--", CAPTURED_ROOT).stdout
+        if records:
+            self._git(path, "update-index", "-z", "--skip-worktree", "--stdin", input_text=records)
+        self._git(path, "checkout-index", "--all", "--index")
+
+    def _leave_records_to_git(self, path: Path) -> None:
+        """A merge or checkout writes the records it changed; take them back out."""
+        result = self.broker.run(
+            [self.broker.python_executable, "-I", "-c", _NATIVE_EVIDENCE], cwd=path, timeout=300,
+            input_text=json.dumps(["release", None, {}, str(path)]),
+        )
+        if result.returncode:
+            raise RuntimeError(f"could not leave native records to Git in {path}: "
+                               + result.stderr.strip()[-500:])
 
     def _refresh_workspace(self, path: Path, head: str) -> None:
         """Bring accepted knowledge into a clean checkout; never erase local work."""
@@ -158,6 +186,7 @@ class WorldTurnCheckpoint:
             raise WorldContentConflict(
                 f"accepted world conflicts with retained workspace: {path}: {detail}"
             )
+        self._leave_records_to_git(path)
 
     def _accepted_candidates(self, path: Path, head: str, connection=None) -> set[str]:
         """Local commits of `path` that completed acceptance into this world consumed.
@@ -236,10 +265,7 @@ class WorldTurnCheckpoint:
                     self._apply_revision(row["candidate_sha"])
                     return finalize()
                 integration = self.worktrees_root / f"integration-{uuid.uuid4().hex}"
-                self._git(
-                    self.world.root, "worktree", "add", "--detach",
-                    str(integration), row["candidate_sha"],
-                )
+                self._add_worktree(integration, row["candidate_sha"])
             try:
                 error = reconcile_git(
                     integration, head, event_id, broker=self.broker,

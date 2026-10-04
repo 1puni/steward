@@ -120,10 +120,11 @@ def _task_input(commit: str, kind: str, text: str, source: str) -> RuntimeInput:
 def session_state_prefixes(family: ProviderFamily) -> tuple[str, ...]:
     """Worktree paths the running provider writes its own session state into.
 
-    Each adapter maps its native session directory *inside* the worktree — see
-    the `mappings=` argument where the providers open a `native_workspace` — and
-    that is deliberate: it is what makes a session durable, resumable and
-    reviewable across invocation loss and later recovery.
+    Each adapter's native session records are captured into the worktree's
+    index after every invocation — see the `mappings=` argument where the
+    providers open a `native_workspace` — and that is deliberate: it is what
+    makes a session durable, resumable and reviewable across invocation loss
+    and later recovery.
 
     The consequence is that these paths change on every turn, a read-only one
     included. A reviewer reading a repository necessarily appends its own

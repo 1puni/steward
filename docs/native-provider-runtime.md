@@ -102,9 +102,9 @@ turns cannot complete the parent. An unfinished reported child prevents returnin
 a successful candidate. The broker retains deadlines, cancellation, environment,
 identity, stream bounds, and process cleanup. The adapter requests native terminal
 cleanup for the parent and reported children, then closes stdin after those
-acknowledgements. Native records are written directly into the candidate; execution
+acknowledgements. Native records are written into the owner home; execution
 returns after the process and owned descendants exit. Owner homes remain durable;
-native evidence is archived and anonymous homes are retained. A connection can
+native records are captured into Git and anonymous homes are retained. A connection can
 be recreated while resuming the same native thread.
 
 Embedders may supply `CognitionRequest.on_input_ready(send)` and
@@ -350,24 +350,13 @@ selects a new generation. The home is selected on every adapter attempt,
 fallback and recovery included. A checkout path or a per-turn execution ID is
 never an owner. Anonymous conflict-resolution calls use separate retained launch homes.
 
-Preparing a new generation preserves all older owner homes. Native databases,
-queues, tool results and provider-created files are not assumed reconstructable
-from the records in Git. [Idle session retention](world-turn-durability.md#idle-session-retention)
-and [task retention](execution-lifecycle.md#cancellation-and-retained-work)
-refuse checkout removal while any configured provider home has an entry for the
-owner. This also keeps the targets of native record links alive. Accepted Git
-history alone does not authorize deleting complete native evidence. This guard
-retains disk usage. Before startup and after teardown, native homes and mapped
-records also receive private verified rsync recovery snapshots outside the checkout.
-Claude/GLM launches also set `CLAUDE_CODE_TMPDIR` in the environment and inline
+Preparing a new generation preserves all older owner homes; nothing deletes
+them. Claude/GLM launches also set `CLAUDE_CODE_TMPDIR` in the environment and inline
 settings to an owned 0700 `.steward-tmp` directory inside that home. Preparation
 rejects a redirected or non-private directory. Anonymous homes do not link to
-the seed's temp root. Native temporary tool output remaining there is included
-in the same pre/post snapshots; system fallback temp files and output removed
-within a running invocation are not covered by that claim.
-Anonymous launch homes survive setup and provider failures. Storage reserves
-stop new native admissions and interrupt active provider writers without deleting
-evidence. These local archives are not distributed backups. See the [retention audit](native-session-host.md#native-evidence-retention-audit).
+the seed's temp root. Anonymous launch homes survive setup and provider failures.
+A storage reserve stops new native admissions rather than filling the disk. See
+[native records in Git](native-session-host.md#native-records-in-git).
 
 Only native configuration, authentication and integration entries are linked in
 from the configured seed home. SQLite, caches, queues, goals and jobs stay
@@ -376,19 +365,20 @@ replaced locally, the replacement is preserved, but the home refuses re-entry
 until someone inspects it; preparation never copies it back to the seed. With no
 seed credential, an independent native local login is kept. Bundled skills stay
 available without modifying the configured skill links. Writable owners map
-native originals directly into their retained candidate:
+native records in their home and capture them into their retained candidate:
 
-- Codex `sessions/` and `archived_sessions/` write native rollouts beneath
-  `artefacts/codex/`; `memories/` maps to `memories/codex/`.
-- Claude/GLM `projects/` writes native project/session files beneath
+- Codex `sessions/` and `archived_sessions/` hold native rollouts, captured beneath
+  `artefacts/codex/`; `memories/` links to `memories/codex/` in the candidate.
+- Claude/GLM `projects/` holds native project/session files, captured beneath
   `artefacts/<provider>/projects/`; the memory setting points to `memories/<provider>/`.
 
 The provider writes original files directly; the harness writes no
-`thread/read` snapshots of its own. An existing home cannot silently retarget
-these links to another candidate. Directory creation uses the execution broker,
-existing symlinks in mapped record directories are rejected, and setup shares the
-execution deadline. Success or failure keeps native state, including anonymous launch homes, and
-archives it after the provider process has exited.
+`thread/read` snapshots of its own. Capture stages the home's files into the
+candidate's index after the provider process has exited, success or failure. An
+existing home cannot silently retarget its memory link to another candidate.
+Directory creation uses the execution broker, existing symlinks in mapped record
+directories are rejected, and setup shares the execution deadline. Anonymous
+writable homes still link their records into the candidate.
 
 The home persists, the process does not. Every invocation starts a new provider
 process, and no provider process is kept between turns. Goals and jobs therefore
