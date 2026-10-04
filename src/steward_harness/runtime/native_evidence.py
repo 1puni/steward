@@ -26,6 +26,9 @@ CAPTURED_ROOT = "artefacts/"
 
 MIN_FREE_BYTES = 1024 ** 3
 MIN_FREE_FRACTION = 0.05
+# A fraction alone scales past sense: 5% of a 1.8 TB laptop disk refused
+# every turn with 80 GB free. The reserve stops growth, not a nearly full disk.
+MAX_RESERVE_BYTES = 10 * 1024 ** 3
 
 _GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 
@@ -33,7 +36,7 @@ _GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 def check_headroom(paths: list[Path], required: int = 0) -> None:
     for path in paths:
         usage = shutil.disk_usage(path)
-        reserve = max(MIN_FREE_BYTES, int(usage.total * MIN_FREE_FRACTION))
+        reserve = min(MAX_RESERVE_BYTES, max(MIN_FREE_BYTES, int(usage.total * MIN_FREE_FRACTION)))
         if usage.free - required < reserve:
             raise RuntimeError('native evidence storage reserve reached; retain evidence and stop new native work')
 
