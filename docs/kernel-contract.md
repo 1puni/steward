@@ -438,18 +438,15 @@ executor path. One native conversation can receive supported live inputs without
 acquiring a second candidate writer. Unsupported inputs wait. Spare background capacity
 and a responsive conversation are separate claims, and neither establishes the other.
 
-Configured desk intake accepts ordinary messages and retained watch observations.
-Watch observations enter as `harness:desk-watch`, not operator grants, through the
-same native conversation and repository authorization. They may propose work or
-note an owned task; the controller rejects answers and retries from that source.
-Their immutable inbox source and consumption marker prevent repeated samples from
-repeating cognition. Accepted task refs and ordinary result receipts, not inbox
-consumption, establish repair progress. The instance that produces the samples owns
-their source identity and activation procedure. Keep the inbox's `.source`, `.claimed`,
-`.failed` and `.done` files with desk state across upgrades. Inspect a parked
-`.failed` message's native evidence before retrying it; deleting a source receipt or
-minting a second one is not a repair. See [watching a live steward](watching-a-steward.md)
-for what a watch should measure.
+Configured desk intake accepts ordinary messages through the same native
+conversation and repository authorization as any operator message. Keep the inbox's
+`.claimed` and `.failed` files with desk state across upgrades, and inspect a parked
+`.failed` message's native evidence before retrying it.
+
+The harness reports its own stalls without a model: a rhythm becoming held and a
+storage-reserve refusal go straight to the operator topic, once per event and
+quiet period. A watcher that hands findings to cognition fails exactly when
+cognition does.
 
 Unexpected worker exceptions propagate to the daemon; shutdown cancels queued owners
 and drains already-running writers while retaining the daemon lease. Queued work

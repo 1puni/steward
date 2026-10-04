@@ -159,8 +159,9 @@ def world_rhythm_observation(rhythms, name, now, *, run=None, latest=None,
 
 
 class Procedures:
-    def __init__(self, config, state, transports, *, world=None):
+    def __init__(self, config, state, transports, *, world=None, alert=None):
         self.config, self.state, self.transports = config, state, transports
+        self.alert = alert or (lambda _key, _text: None)
         self.world = world
         # Per quiet rhythm: the commits seen so far, and when the newest arrived.
         self._quiet = {}
@@ -493,6 +494,8 @@ class Procedures:
                     owner, source, "harness:rhythm", f"Scheduled {name} rhythm ({key}).")
                 self.state.interrupt_turn(failed.turn_id, str(error))
             log.error("world rhythm %s held: %s", key, error)
+            self.alert(f"held:{key}", f"⚠️ The {name} rhythm is held ({key}): {str(error)[-600:]}\n"
+                       f"Once the cause is fixed, `/rhythm run {name}` continues it.")
             return
         recorded = result.reply_text.strip()
         if recorded:

@@ -15,6 +15,7 @@ from steward_harness.provider_types import (
 from steward_harness.runtime.contracts import (
     CognitionAdapter,
     MissingProviderSession,
+    NativeStorageDeferred,
     RuntimeExecutionError,
     RuntimeRequest,
     RuntimeResult,
@@ -104,7 +105,11 @@ class Cognition:
         custom_models: Mapping[str, Mapping[str, ModelChoice | str]] | None = None,
         *,
         writable_roots: tuple[Path, ...] = (),
+        on_storage_deferred: Callable[[str], None] = lambda _reason: None,
     ) -> None:
+        # Every run passes here, so this is the one place a storage refusal
+        # is seen whatever started it: a message, a rhythm or a task.
+        self._on_storage_deferred = on_storage_deferred
         self._adapters = dict(adapters)
         for provider, adapter in self._adapters.items():
             if not provider.strip() or not adapter.family.strip():
@@ -239,6 +244,9 @@ class Cognition:
                     )
                     try:
                         result = adapter.execute(runtime_request)
+                    except NativeStorageDeferred as error:
+                        self._on_storage_deferred(str(error))
+                        raise
                     except RuntimeExecutionError as error:
                         if error.session_id is None:
                             error.session_id = started_session

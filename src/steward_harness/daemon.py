@@ -522,6 +522,7 @@ class StewardDaemon:
             config, self.config_path
         )
         self.adapters = adapters
+        self._alerted: dict[str, float] = {}
         self._stop = threading.Event()
         self._desk_ingress: threading.Thread | None = None
         self._telegram: TelegramService | None = None
@@ -580,6 +581,9 @@ class StewardDaemon:
             self.adapters if self.adapters is not None else build_runtimes(self.config.provider, self.broker),
             self.config.provider.models,
             writable_roots=self.broker.writable_roots,
+            on_storage_deferred=lambda reason: self._alert(
+                "storage", "⚠️ Disk below the native storage reserve: new turns are waiting, "
+                f"none are lost. {reason}"),
         )
         def resolve(turn: ResolverTurn) -> None:
             name = self.config.world.reconcile if self.config.world else None
@@ -626,7 +630,8 @@ class StewardDaemon:
         )
 
         procedures = Procedures(self.config, state, transports,
-                                world=checkpoint.world if checkpoint else None)
+                                world=checkpoint.world if checkpoint else None,
+                                alert=self._alert)
         targets = Targets(self.config, state, transports, procedures)
         self._procedures, self._targets = procedures, targets
         reconciler = RepositoryReconciler(
@@ -778,7 +783,7 @@ class StewardDaemon:
             while not self._stop.is_set():
                 deferred = False
                 for message in desk.inbox.pending():
-                    if message.observation or self._stop.is_set():
+                    if self._stop.is_set():
                         continue
                     try:
                         desk.drain(message)
@@ -870,15 +875,6 @@ class StewardDaemon:
                 return
             for name in self.config.pipelines:
                 yield ("probe", name), lambda name=name: incidents.observe(name)
-
-        def desk_messages() -> Iterator[Owner]:
-            # Observations only: an operator's message is a live conversation
-            # and has its own ingress thread (`_start_desk`).
-            if desk is None or paused():
-                return
-            for message in desk.inbox.pending():
-                if message.observation:
-                    yield ("desk", message.msg_id), lambda m=message: desk.drain(m)
 
         def rhythm() -> Iterator[Owner]:
             now = time.time()
@@ -994,7 +990,7 @@ class StewardDaemon:
                 next_world_exchange[0] = time.monotonic() + WORLD_EXCHANGE_SECONDS
                 yield ("world", "remote"), converge_world
 
-        lanes = (kernel.owners, probes, desk_messages, rhythm, targets, assessments, world_remote)
+        lanes = (kernel.owners, probes, rhythm, targets, assessments, world_remote)
 
         def sync_tasks():
             try:
@@ -1099,19 +1095,12 @@ class StewardDaemon:
                         transport="desk",
                         transport_key=str(message.topic_id),
                         source_event_key=message.msg_id,
-                        operator_id="harness:desk-watch" if message.observation else "desk",
+                        operator_id="desk",
                         text=(f"{message.context}\n\n{message.text}" if message.context
                               else message.text),
                         episode_input=message.text,
                     )
                     reply = result.transport_reply
-                    if message.observation:
-                        # This acknowledges acceptance, not repair completion.
-                        # Task result delivery retains its own ordinary receipt.
-                        receipt = (f"Controller accepted task {result.task_admission.task_id}."
-                                   if result.task_admission else
-                                   "Controller accepted observation; no new task admitted.")
-                        reply = f"{reply}\n\n{receipt}".strip()
                     if reply:
                         events.append("reply", reply, message.msg_id)
                 inbox.done(message)
@@ -1143,6 +1132,21 @@ class StewardDaemon:
     def _notify(self, text: str) -> None:
         """Deliver incident state changes without making transport part of policy."""
         self._notify_topic("incidents", text)
+
+    def _alert(self, key: str, text: str, *, quiet_seconds: float = 3600) -> None:
+        """Tell the operator, without a model, that the harness itself stalled.
+
+        A watcher that hands its findings to cognition fails exactly when
+        cognition does; on 2026-10-04 every such handoff was refused by the
+        storage reserve it was reporting. This path is the transport alone.
+        Each key speaks at most once per quiet period.
+        """
+        now = time.monotonic()
+        if now - self._alerted.get(key, -quiet_seconds) < quiet_seconds:
+            return
+        self._alerted[key] = now
+        log.warning("operator alert %s: %s", key, text)
+        self._notify_topic("incidents", text[:3500])
 
     def _notify_topic(self, topic: str, text: str) -> None:
         service = self._telegram

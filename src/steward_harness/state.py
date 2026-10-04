@@ -751,8 +751,6 @@ class StateDatabase:
                 return None, "Task action rejected: repository work is not authorized."
             except LookupError:
                 task = None
-            if operator_id == "harness:desk-watch" and action.kind != "note":
-                return None, "Task action rejected: a desk observation cannot answer or retry held work."
             if task is None or task.owner not in {None, str(owner)}:
                 # A conversation is told the same thing whether the task is
                 # absent or someone else's, so the reply cannot be used to

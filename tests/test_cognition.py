@@ -724,3 +724,17 @@ def test_a_models_list_never_reaches_providers_outside_it_and_absent_list_is_unc
     single = ProcedureConfig(instructions="/etc/p.md", provider="claude", model=ModelChoice(model="m"))
     assert single.routing(("codex", "claude"))["entry_models"] == ()
     assert single.provider_order(("codex", "claude")) == ("claude", "codex")
+
+
+def test_a_storage_refusal_is_reported_once_seen_and_still_raised(tmp_path: Path) -> None:
+    from steward_harness.runtime.contracts import NativeStorageDeferred
+
+    class Full(FakeAdapter):
+        def execute(self, request: RuntimeRequest) -> RuntimeResult:
+            raise NativeStorageDeferred("native evidence storage reserve reached")
+
+    seen = []
+    cognition = Cognition({"codex": Full("codex")}, on_storage_deferred=seen.append)
+    with pytest.raises(NativeStorageDeferred):
+        cognition.run(_request(tmp_path, provider_order=("codex",)))
+    assert seen == ["native evidence storage reserve reached"]

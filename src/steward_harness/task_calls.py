@@ -179,8 +179,6 @@ class TaskCalls:
                     raise ValueError("repository work is not authorized")
             else:
                 self._owned(request["task_id"], operator_id)
-                if operator_id == "harness:desk-watch" and operation != "note":
-                    raise ValueError("a desk observation may only note owned work")
             # Search only accepted task first-parent histories: native work cannot
             # forge a controller receipt. No receipt database or second registry.
             try:
