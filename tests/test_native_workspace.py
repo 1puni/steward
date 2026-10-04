@@ -52,31 +52,47 @@ def test_original_records_write_directly_and_survive_private_cleanup(setup):
         assert not (native.home / 'state_5.sqlite').exists()
         record = native.home / 'sessions' / f'rollout-{SESSION}.jsonl'
         record.write_text('native original\n')
-        assert (request.cwd / 'artefacts/codex/sessions' / record.name).read_text() == 'native original\n'
         (native.home / 'memories/MEMORY.md').write_text('native interpretation')
-    assert native.home.exists()
+    # An anonymous launch home keeps its record and commits it like an owner's.
+    assert native.home.exists() and record.read_text() == 'native original\n'
+    assert _git(request.cwd, 'show', f':artefacts/codex/sessions/{record.name}') == 'native original\n'
     assert (home / 'auth.json').read_text() == 'provider credential'
     assert not (home / 'sessions').exists()
     assert not list(request.cwd.rglob('auth.json'))
     assert (request.cwd / 'memories/codex/MEMORY.md').read_text() == 'native interpretation'
     with mapped(setup, provider_session_id=SESSION) as resumed:
-        assert resumed.resume == str(request.cwd / 'artefacts/codex/sessions' / record.name)
         assert resumed.home != native.home
+        assert Path(resumed.resume).read_text() == 'native original\n'
 
 
 def test_two_active_workspaces_never_retarget_each_others_native_writes(setup, tmp_path):
     other = tmp_path / 'other'
     other.mkdir()
+    _git(other, 'init', '-q')
     with mapped(setup) as first, mapped(setup, cwd=other) as second:
         (first.home / 'sessions/first.jsonl').write_text('first')
         (second.home / 'sessions/second.jsonl').write_text('second')
         assert not (first.home / 'sessions/second.jsonl').exists()
         assert not (second.home / 'sessions/first.jsonl').exists()
-    assert (setup[1].cwd / 'artefacts/codex/sessions/first.jsonl').read_text() == 'first'
-    assert (other / 'artefacts/codex/sessions/second.jsonl').read_text() == 'second'
+    assert _git(setup[1].cwd, 'ls-files') == 'artefacts/codex/sessions/first.jsonl\n'
+    assert _git(other, 'ls-files') == 'artefacts/codex/sessions/second.jsonl\n'
 
 
-@pytest.mark.parametrize('component', ['artefacts', 'artefacts/codex', 'artefacts/codex/sessions', 'memories'])
+@pytest.mark.parametrize('component', ['artefacts', 'artefacts/codex', 'artefacts/codex/sessions'])
+def test_a_symlinked_record_path_in_the_checkout_receives_nothing(setup, tmp_path, component):
+    _, request, _ = setup
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    link = request.cwd / component
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside, target_is_directory=True)
+    with mapped(setup) as native:
+        (native.home / 'sessions/record.jsonl').write_text('record')
+    assert not list(outside.iterdir())
+    assert _git(request.cwd, 'show', ':artefacts/codex/sessions/record.jsonl') == 'record'
+
+
+@pytest.mark.parametrize('component', ['memories', 'memories/codex'])
 def test_native_mapping_rejects_symlinked_candidate_directories(setup, tmp_path, component):
     _, request, home = setup
     outside = tmp_path / 'outside'
@@ -112,7 +128,8 @@ def test_private_mapping_cleanup_does_not_erase_partial_work_on_failure(setup):
             (native.home / 'sessions/partial.jsonl').write_text('partial native record')
             raise RuntimeError('provider failure')
     assert native.home.exists()
-    assert (setup[1].cwd / 'artefacts/codex/sessions/partial.jsonl').exists()
+    assert (native.home / 'sessions/partial.jsonl').exists()
+    assert _git(setup[1].cwd, 'show', ':artefacts/codex/sessions/partial.jsonl') == 'partial native record'
 
 
 @pytest.mark.parametrize("name", ["commit", "git-reconciler"])
@@ -165,6 +182,7 @@ def test_owner_home_preserves_native_databases_across_turns_and_controller_resta
 def test_concurrent_owner_homes_and_generations_do_not_share_runtime_state(setup, tmp_path):
     other = tmp_path / 'other-world'
     other.mkdir()
+    _git(other, 'init', '-q')
     with mapped(setup, native_owner='one') as first, mapped(setup, native_owner='two', cwd=other) as second:
         (first.home / 'goals.sqlite').write_text('owner one')
         assert not (second.home / 'goals.sqlite').exists()
@@ -775,3 +793,22 @@ def test_direct_seed_temporary_directory_refuses_external_symlink(setup, tmp_pat
         with mapped(setup, sandbox_mode='read-only', resolved=resolve_model('claude', 'fast')):
             pytest.fail('must refuse a redirected private temp root')
     assert (external / 'evidence').read_bytes() == b'other owner'
+
+
+def test_a_read_only_run_commits_its_records_to_the_checkout_it_is_given(setup, tmp_path):
+    """Read-only limits what the agent writes, never whether its record is kept."""
+    _, request, _ = setup
+    organisation = tmp_path / 'organisation'
+    organisation.mkdir()
+    with mapped(setup, native_owner='task:review', sandbox_mode='read-only',
+                cwd=organisation, record_checkout=request.cwd) as native:
+        (native.home / f'sessions/rollout-{SESSION}.jsonl').write_text('review transcript\n')
+        (native.home / 'memories/MEMORY.md').write_text('review memory')
+    assert not list(organisation.iterdir())
+    assert _git(request.cwd, 'show', f':artefacts/codex/sessions/rollout-{SESSION}.jsonl') == 'review transcript\n'
+    assert _git(request.cwd, 'show', ':memories/codex/MEMORY.md') == 'review memory'
+    assert not (request.cwd / 'artefacts').exists() and not (request.cwd / 'memories').exists()
+    # Without a record checkout a read-only run has nowhere to commit; its home keeps it.
+    with mapped(setup, native_owner='task:other', sandbox_mode='read-only') as unrecorded:
+        (unrecorded.home / 'sessions/kept.jsonl').write_text('kept')
+    assert (unrecorded.home / 'sessions/kept.jsonl').read_text() == 'kept'

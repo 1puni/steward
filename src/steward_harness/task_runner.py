@@ -644,6 +644,9 @@ class TaskRunner:
             execution_id=execution_id,
             native_owner=str(task.session_id),
             native_generation=lambda provider: execution_generation + (provider != execution_provider),
+            # A read-only review, or one reading the organisation root, still
+            # commits its own record: on the task branch, with its evidence.
+            record_checkout=worktree,
             profile=lineage.profile,  # type: ignore[arg-type]
             prompt=build_task_prompt(
                 task.title,

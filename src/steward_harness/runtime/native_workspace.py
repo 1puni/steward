@@ -19,7 +19,7 @@ from steward_harness.runtime.native_evidence import CAPTURED_ROOT
 _PREPARE = r'''
 import json, os, pathlib, shutil, stat, subprocess, sys, tempfile, uuid
 
-source, mappings, session, pattern, bundled_skills, owner = json.load(sys.stdin)
+source, mappings, session, pattern, bundled_skills, owner, owned = json.load(sys.stdin)
 source = pathlib.Path(source)
 world = pathlib.Path.cwd()
 flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -135,17 +135,17 @@ try:
                 pass
             os.close(directory)
     private = persistent and not owner['writable']
-    # A retained home owns these records as real files. A writable owner's
-    # are staged into its checkout's index after each run, so the checkout
-    # never has to materialize them; see native_evidence.capture.
-    owned = set(owner['records']) if persistent else set()
+    # The home owns these records as real files; after each run they are
+    # staged into the record checkout's index, so no checkout has to
+    # materialize them. See native_evidence.capture.
+    owned = set(owned)
     record_root, world_pattern, session_mapping = world, pattern, None
     for name, relative in mappings.items():
         if name in owned:
             if pattern.startswith(relative + '/'):
                 pattern = name + pattern[len(relative):]
                 record_root, session_mapping = launch, (name, relative)
-            if owner['writable'] and (launch / name).is_symlink():
+            if persistent and owner['writable'] and (launch / name).is_symlink():
                 # This home used to write through into a world checkout. Those
                 # records are in the world's Git; the lineage's own are imported.
                 (launch / name).unlink()
@@ -355,6 +355,9 @@ def native_workspace(
             session_id=request.provider_session_id,
         )
     writable = request.sandbox_mode == "workspace-write"
+    # Every run's native records are committed somewhere: its own checkout when
+    # it writes, else the checkout its caller names (a read-only task's branch).
+    checkout = request.record_checkout or (request.cwd if writable else None)
     evidence_script = Path(__file__).with_name("native_evidence.py").read_text()
 
     def evidence(operation, native_home, records):
@@ -362,7 +365,7 @@ def native_workspace(
             [broker.python_executable, "-I", "-c", evidence_script],
             cwd=request.cwd, timeout=300,
             input_text=json.dumps([operation, str(native_home), records,
-                                  str(request.cwd) if writable else None]),
+                                  str(checkout) if checkout else None]),
         )
         if result.returncode:
             raise RuntimeExecutionError("Native evidence preservation failed; originals retained: "
@@ -388,8 +391,9 @@ def native_workspace(
                 "Native workspace setup exceeded execution deadline",
                 session_id=request.provider_session_id,
             )
-    # A writable owner's provider records live in its home and reach Git by
-    # capture; a read-only owner's stay private to its home.
+    # Provider records live in the home and reach Git by capture. A writable
+    # run's other mappings (native memory) are world files it edits directly;
+    # a read-only run can edit nothing, so the home owns and captures them all.
     owned = {name for name, relative in mappings.items()
              if not writable or relative.startswith(CAPTURED_ROOT)}
     owner_key = None if request.native_owner is None else (
@@ -410,13 +414,13 @@ def native_workspace(
                 None if owner_key is None else {
                     "key": owner_key,
                     "writable": writable,
-                    "records": sorted(owned),
                     "shared": ["auth.json", "config.toml", "requirements.toml", "plugins", "AGENTS.md",
                                "AGENTS.override.md", "rules", "prompts", "hooks.json", "agents"]
                     if request.resolved.provider == "codex" else
                     [".claude.json", "settings.json", "settings.local.json",
                      "plugins", "commands", "agents", "CLAUDE.md", "rules", "output-styles"],
                 },
+                sorted(owned),
             ]),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -432,7 +436,7 @@ def native_workspace(
         )
     record = json.loads(prepared.stdout)
     workspace = NativeWorkspace(Path(record["home"]), record["resume"], deadline)
-    captured = {name: mappings[name] for name in owned} if writable and owner_key else {}
+    captured = {name: mappings[name] for name in owned} if checkout else {}
     prepare_temporary(workspace.home)
     try:
         yield workspace

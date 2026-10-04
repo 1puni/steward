@@ -378,7 +378,9 @@ candidate's index after the provider process has exited, success or failure. An
 existing home cannot silently retarget its memory link to another candidate.
 Directory creation uses the execution broker, existing symlinks in mapped record
 directories are rejected, and setup shares the execution deadline. Anonymous
-writable homes still link their records into the candidate.
+launch homes (conflict resolution) hold and capture their records the same way.
+Read-only runs capture every mapping, native memory included, into the record
+checkout their caller names.
 
 The home persists, the process does not. Every invocation starts a new provider
 process, and no provider process is kept between turns. Goals and jobs therefore
