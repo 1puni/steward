@@ -138,6 +138,18 @@ def test_the_reserve_defers_admission_with_a_distinct_status(tmp_path):
 
     script = Path(native_evidence.__file__).read_text()
     refused = subprocess.run(
-        [sys.executable, '-I', '-c', script.replace('MIN_FREE_FRACTION = 0.05', 'MIN_FREE_FRACTION = 1.0')],
+        [sys.executable, '-I', '-c', script.replace('MIN_FREE_FRACTION = 0.05', 'MIN_FREE_FRACTION = 1.0').replace('MAX_RESERVE_BYTES = 10 * 1024 ** 3', 'MAX_RESERVE_BYTES = 1024 ** 6')],
         input=json.dumps(['check', str(tmp_path), {}, None]), capture_output=True, text=True)
     assert refused.returncode == 75 and 'storage reserve reached' in refused.stderr
+
+
+def test_the_reserve_has_a_ceiling_on_large_disks(tmp_path, monkeypatch):
+    usage = shutil.disk_usage(tmp_path)
+    tera = 1024 ** 4
+    monkeypatch.setattr(native_evidence.shutil, 'disk_usage',
+                        lambda _: type(usage)(2 * tera, 2 * tera - 80 * 1024 ** 3, 80 * 1024 ** 3))
+    native_evidence.check_headroom([tmp_path])  # 80 GB free of 2 TB admits work.
+    monkeypatch.setattr(native_evidence.shutil, 'disk_usage',
+                        lambda _: type(usage)(2 * tera, 2 * tera - 9 * 1024 ** 3, 9 * 1024 ** 3))
+    with pytest.raises(RuntimeError, match='storage reserve reached'):
+        native_evidence.check_headroom([tmp_path])
