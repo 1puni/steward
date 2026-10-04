@@ -125,6 +125,10 @@ telegram:
 # documentation map repository-owned until it needs a world.
 world:
   root: "/var/lib/steward/world"
+  # Optional. Other clones (a laptop, a phone host) push here, and every
+  # accepted turn is published here; the controller holds the credentials.
+  # remote_url: "git@github.com:owner/world.git"
+  # branch: main
   # Canonical durable knowledge belongs in docs/ at its lowest owning Git world.
 
 # Install instruction files and drivers as controller-owned files.

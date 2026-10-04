@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from steward_harness.git import (
     git_operation_paths,
@@ -22,12 +23,15 @@ from steward_harness.git import (
     run_agent_git,
     steward_commit_argv,
 )
-from steward_harness.git_reconcile import ResolveTurn, reconcile_git
+from steward_harness.git_reconcile import ResolveTurn, merge_git, reconcile_git
 from steward_harness.state import StateDatabase
 from steward_harness.runtime.native_evidence import CAPTURED_ROOT, EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.world.git_world import BASE_TRAILER, TURN_TRAILER, GitWorld
 from steward_harness.lease import Lease
+
+if TYPE_CHECKING:
+    from steward_harness.git_transport import ControllerGitTransport
 
 _WORKSPACE_PREFIX = "session-"
 
@@ -62,9 +66,11 @@ class WorldTurnCheckpoint:
         execution_broker: UntrustedExecutionBroker,
         state: StateDatabase,
         resolve_turn: ResolveTurn | None = None,
+        transport: ControllerGitTransport | None = None,
     ) -> None:
         self.world = world
         self.lease = lease
+        self.transport = transport
         self.worktrees_root = execution_broker.resolve_path(worktrees_root)
         self.broker = execution_broker
         self.state = state
@@ -287,6 +293,63 @@ class WorldTurnCheckpoint:
             finally:
                 self._remove_worktree(integration)
         raise WorldUpdatePending(f"world moved during reconciliation of {event_id}; candidate retained")
+
+    def converge(self) -> str | None:
+        """Take in what other writers pushed to the world's remote, then publish.
+
+        The remote is one more concurrent writer. Its commits join the world
+        under the lease the way a turn does: a fast-forward when the world has
+        nothing unpublished, otherwise a merge, since both sides are already
+        published and a rebase would rewrite them. The push is a
+        compare-and-swap on the tip just observed; a writer that pushed in
+        between is taken in on the next pass. Returns the published commit.
+        """
+        if self.transport is None:
+            return None
+        remote = self.transport.fetch()
+        ref = self.transport.remote_ref
+        for _round in range(2):
+            with self.lease:
+                self.transport.push_to_agent(self.world.root, self.broker, f"+{ref}:{ref}")
+                head = self.world.input_cursor()
+                if self._is_ancestor(remote, head):
+                    break
+                if self._is_ancestor(head, remote):
+                    self._apply_revision(remote)
+                    return None
+                integration = self.worktrees_root / f"integration-{uuid.uuid4().hex}"
+                self._git(self.world.root, "worktree", "add", "--detach", str(integration), head)
+            try:
+                error = merge_git(integration, ref, "world-remote", broker=self.broker,
+                                  resolve_turn=self.resolve_turn)
+                if error is not None:
+                    raise WorldContentConflict(f"world remote conflicts with the world: {error}")
+                merged = self._git(integration, "rev-parse", "HEAD").stdout.strip()
+                with self.lease:
+                    # A turn may have been accepted while the merge ran.
+                    if self.world.input_cursor() != head:
+                        continue
+                    self._apply_revision(merged)
+                    head = merged
+                    break
+            finally:
+                self._remove_worktree(integration)
+        else:
+            raise WorldUpdatePending("world moved while taking in its remote; retried next pass")
+        if head == remote:
+            return None
+        self.transport.fetch_from_agent(self.world.root, self.broker,
+                                        f"+{head}:refs/steward/world/published")
+        if not self.transport.push_candidate(head, remote):
+            raise WorldUpdatePending("world remote moved during publication; retried next pass")
+        return head
+
+    def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        result = self._git(self.world.root, "merge-base", "--is-ancestor",
+                           ancestor, descendant, check=False)
+        if result.returncode not in {0, 1}:
+            raise RuntimeError(f"world ancestry check failed: {result.stderr.strip()}")
+        return result.returncode == 0
 
     def _rebase_trailer(self, integration: Path, event_id: str, head: str) -> None:
         """Keep the closing commit's base truthful once it sits on a new one."""
