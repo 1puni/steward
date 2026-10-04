@@ -26,6 +26,7 @@ from steward_harness.runtime.contracts import (
     validated_uuid,
 )
 from steward_harness.runtime.process import ProcessController, ProcessInput
+from steward_harness.runtime.native_evidence import record_mappings
 from steward_harness.runtime.native_workspace import native_workspace
 from steward_harness.runtime.providers.codex_read_scope import (
     PROFILE, prepare_scope, scope_config, verify_scope_config,
@@ -130,11 +131,7 @@ class CodexAppServerRuntime:
             request, home = prepare_scope(self._controller.broker, request, home)
         with native_workspace(
             self._controller.broker, request, home,
-            mappings={
-                "sessions": "artefacts/codex/sessions",
-                "archived_sessions": "artefacts/codex/archived_sessions",
-                "memories": "memories/codex",
-            },
+            mappings=record_mappings("codex"),
             resume_pattern="artefacts/codex/sessions/**/rollout-*{session}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)

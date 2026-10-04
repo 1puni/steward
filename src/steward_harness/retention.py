@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import json
 import logging
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -130,3 +131,128 @@ def prune_world_sessions(checkpoint, idle_seconds: int) -> None:
             continue
         except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
             log.warning("retained world workspace %s: %s", path, error)
+
+
+# Runs as the execution identity, which owns the homes and the repositories.
+_VERIFY_HOME = r'''
+import json, os, pathlib, subprocess, sys, time
+home, repository, commit, mappings, quiet_seconds = json.load(sys.stdin)
+home = pathlib.Path(home)
+env = {**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1'}
+def git(*args, text=None):
+    return subprocess.run(['git', *args], cwd=repository, input=text, capture_output=True,
+                          text=True, env=env, timeout=240, check=True).stdout
+newest = 0
+for directory, _, names in os.walk(home):
+    for name in names:
+        newest = max(newest, os.lstat(os.path.join(directory, name)).st_mtime)
+if newest > time.time() - quiet_seconds:
+    print(json.dumps({'retire': False, 'reason': 'changed within the quiet period'}))
+    sys.exit()
+records = []
+for name, relative in mappings.items():
+    root = home / name
+    if root.is_symlink():
+        # A home from before capture wrote into a checkout. A missing target
+        # was a clean checkout removed after commit; an existing one is checked.
+        root = pathlib.Path(os.readlink(root))
+    if not root.is_dir():
+        continue
+    for directory, _, names in os.walk(root):
+        for file in names:
+            path = pathlib.Path(directory) / file
+            if path.is_file() and not path.is_symlink():
+                records.append((relative + '/' + path.relative_to(root).as_posix(), str(path)))
+if records:
+    blobs = git('hash-object', '--no-filters', '--stdin-paths',
+                text=''.join(path + '\n' for _, path in records)).split()
+    tree = {}
+    for line in git('ls-tree', '-r', '-z', commit, '--', *mappings.values()).split('\0'):
+        if line:
+            meta, path = line.split('\t', 1)
+            tree[path] = meta.split()[2]
+    missing = [path for (path, _), blob in zip(records, blobs) if tree.get(path) != blob]
+    if missing:
+        print(json.dumps({'retire': False, 'reason': f'{len(missing)} records not in {commit[:12]}, e.g. {missing[0]}'}))
+        sys.exit()
+print(json.dumps({'retire': True, 'records': len(records)}))
+'''
+
+
+def _home_key(provider: str, generation: int) -> str:
+    return hashlib.sha256(json.dumps([provider, generation]).encode()).hexdigest()[:16]
+
+
+def retire_native_homes(state, broker, native_homes, world_root, repositories,
+                        *, quiet_seconds: int = 3600) -> None:
+    """Remove provider homes whose records Git already holds and no run needs.
+
+    A home is superseded when its owner's lineage moved to another generation
+    or provider, or its task finished. Its records must match the accepted
+    world head (or the task's tip) byte for byte, nothing in it may have
+    changed for an hour, and its owner may have no running turn. Its private
+    provider state (databases, caches) goes with it. Unknown owners stay.
+    """
+    homes = {family: Path(path) for family, path in native_homes.items()}
+    with state.connect() as connection:
+        lineages = {row[0]: (row[1], row[2]) for row in connection.execute(
+            "SELECT conversation_id, provider, generation FROM conversations")}
+        running = {row[0] for row in connection.execute(
+            "SELECT DISTINCT conversation_id FROM turns WHERE state='running'")}
+    owners = {hashlib.sha256(owner.encode()).hexdigest()[:32]: owner for owner in lineages}
+    tasks = {str(task.session_id): task for task in state.tasks.all()}
+    world_head = agent_git(broker, "rev-parse", "HEAD", cwd=world_root, timeout=60) if world_root else None
+    for family, root in homes.items():
+        if not broker.path_exists(root):
+            continue
+        for home in broker.child_directories(root):
+            name = home.name
+            if name.startswith(".steward-owner-"):
+                prefix, _, key = name[len(".steward-owner-"):].partition("-")
+                owner = owners.get(prefix)
+                if owner is None or owner in running:
+                    continue
+                provider, generation = lineages[owner]
+                current = {_home_key(p, generation + (p != provider)) for p in homes}
+                task = tasks.get(owner)
+                if task is not None:
+                    finished = task.status.value in {"done", "cancelled"}
+                    if task.status.value in {"running", "queued"} or task.tip is None:
+                        continue
+                    repository = repositories.get(task.repository)
+                    target = (Path(repository), task.tip) if repository else None
+                else:
+                    finished = False
+                    target = (Path(world_root), world_head) if world_head else None
+                if (key in current and not finished) or target is None:
+                    continue
+            elif name.startswith(".steward-launch-"):
+                if not world_head:
+                    continue
+                target = (Path(world_root), world_head)
+            else:
+                continue
+            _retire(broker, family, home, target, quiet_seconds)
+
+
+def _retire(broker, family, home: Path, target, quiet_seconds: int) -> None:
+    from steward_harness.runtime.native_evidence import record_mappings
+
+    repository, commit = target
+    checked = broker.run([broker.python_executable, "-I", "-c", _VERIFY_HOME], cwd="/", timeout=600,
+                         input_text=json.dumps([str(home), str(repository), commit,
+                                                record_mappings(family), quiet_seconds]))
+    if checked.returncode:
+        log.warning("native home %s kept: verification failed: %s", home, checked.stderr.strip()[-300:])
+        return
+    verdict = json.loads(checked.stdout)
+    if not verdict["retire"]:
+        log.debug("native home %s kept: %s", home, verdict["reason"])
+        return
+    removed = broker.run([broker.python_executable, "-I", "-c",
+                          "import shutil,sys; shutil.rmtree(sys.argv[1])", str(home)],
+                         cwd="/", timeout=600)
+    if removed.returncode:
+        log.warning("native home %s could not be removed: %s", home, removed.stderr.strip()[-300:])
+    else:
+        log.info("retired native home %s: %d records held at %s", home, verdict["records"], commit[:12])
