@@ -459,6 +459,20 @@ absent history alone establishes missed execution. An offline observer unable
 to read the path guard or receipts says `input_unobserved` or
 `accepted_receipt_unobserved` instead of inventing a due/settled verdict.
 
+A `held` entry's `due_at` is its captured index multiplied by the rhythm's
+*current* `schedule`, not the schedule in effect when that index was
+captured. Nothing stores the latter. Reconfiguring a rhythm's `schedule`
+(`e0cdd9c6` moved `inbox` from 300 to 3600) therefore reinterprets any older
+held index under the new schedule and reports a `due_at` scaled by the ratio
+of new to old schedule — a captured index of 20 under a 300s schedule now
+reads back as `20 * 3600` instead of `20 * 300`, a 12x jump that lands far in
+the future. This is display-only: a `held` entry is never `eligible`
+(`world_rhythm_observation`), so a corrupted `due_at` cannot change which
+rhythm `due_world_rhythms` actually admits. It only misleads a reader of
+`/rhythm list` or `/healthz` about when a held obligation was originally due.
+There is no held obligation old enough to predate a schedule change that is
+not already an operator-visible hold awaiting `/rhythm run` or cleanup.
+
 Health `ok` and `sha` still attest only the loaded release. They do not certify
 scheduler freshness, successful firing, or the quality of a reflection. Verify
 release identity, current admission state, and accepted execution separately.
