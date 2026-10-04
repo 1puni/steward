@@ -28,9 +28,6 @@ from steward_harness.runtime.contracts import (
 from steward_harness.runtime.process import ProcessController, ProcessInput
 from steward_harness.runtime.native_evidence import record_mappings
 from steward_harness.runtime.native_workspace import native_workspace
-from steward_harness.runtime.providers.codex_read_scope import (
-    PROFILE, prepare_scope, scope_config, verify_scope_config,
-)
 
 
 def _declines_turn(message: str) -> bool:
@@ -83,7 +80,7 @@ class CodexAppServerRuntime:
     """Map native lifecycle and steering; the provider owns tools and children."""
 
     family: ProviderFamily = "codex"
-    capabilities = ProviderCapabilities(images=True, ongoing_input=True, scoped_reads=True)
+    capabilities = ProviderCapabilities(images=True, ongoing_input=True)
 
     def __init__(
         self, executable: Path = Path("/usr/bin/codex"), *,
@@ -126,16 +123,13 @@ class CodexAppServerRuntime:
             raise RuntimeExecutionError(
                 "Provision the steward's Codex native home before execution"
             )
-        home = self.native_home
-        if request.read_scope is not None:
-            request, home = prepare_scope(self._controller.broker, request, home)
         with native_workspace(
-            self._controller.broker, request, home,
+            self._controller.broker, request, self.native_home,
             mappings=record_mappings("codex"),
             resume_pattern="artefacts/codex/sessions/**/rollout-*{session}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)
-            if request.provider_session_id and workspace.resume and workspace.home != home:
+            if request.provider_session_id and workspace.resume and workspace.home != self.native_home:
                 self._relocate_thread(workspace.home, request.provider_session_id, workspace.resume)
             turn = _AppServerTurn(request, resume_path=workspace.resume,
                 unrestricted=self._controller.broker.enabled
@@ -437,13 +431,6 @@ class _AppServerTurn:
             self.writer.write(
                 json.dumps({"method": "initialized", "params": {}}) + "\n"
             )
-            if self.request.read_scope is not None:
-                self.send("config/read", {"includeLayers": False, "cwd": str(self.request.cwd)})
-                return
-        if method == "config/read":
-            verify_scope_config(result.get("config", {}),
-                                scope_config(self.request.read_scope.roots, self.request.cwd))
-        if method in {"initialize", "config/read"}:
             params = {
                 "cwd": str(self.request.cwd),
                 "model": self.request.resolved.model,
@@ -454,9 +441,6 @@ class _AppServerTurn:
                 "approvalsReviewer": "auto_review",
                 "sandbox": "danger-full-access" if self.unrestricted else self.request.sandbox_mode,
             }
-            if self.request.read_scope is not None:
-                params.pop("sandbox")
-                params.update(permissions=PROFILE, approvalPolicy="never", approvalsReviewer="user")
             # No effort resolved means Codex keeps whatever its own
             # configuration says, so the override is not sent at all.
             if self.request.resolved.reasoning_effort is not None:
@@ -472,11 +456,6 @@ class _AppServerTurn:
                 params,
             )
         elif method in {"thread/start", "thread/resume"}:
-            if self.request.read_scope is not None:
-                if ((result.get("activePermissionProfile") or {}).get("id") != PROFILE
-                        or result.get("approvalPolicy") != "never"
-                        or result.get("approvalsReviewer") != "user"):
-                    raise RuntimeExecutionError("Codex did not confirm the public read boundary")
             thread_id = result["thread"]["id"]
             if validated_uuid(thread_id) is None or (
                 self.request.provider_session_id is not None
@@ -504,8 +483,7 @@ class _AppServerTurn:
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    **({"permissions": PROFILE} if self.request.read_scope is not None
-                       else {"sandboxPolicy": sandbox}),
+                    "sandboxPolicy": sandbox,
                     "input": [
                         {"type": "text", "text": self.request.prompt},
                         *[

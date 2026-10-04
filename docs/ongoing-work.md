@@ -77,7 +77,7 @@ waiting for an earlier task. See the [call contract](git-native-tasks.md#live-co
 
 The repository must be configured; configuring it is the authority to work in
 it. Title and brief are required strings, capped at 256 and 8000 characters.
-Read-only desk conversations and rhythms receive no task tool.
+Rhythms receive no task tool.
 
 An admitted conversation task is **queued immediately**. There is no
 confirmation step for it — `/task confirm` exists for tasks that arrive held as
