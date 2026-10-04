@@ -29,6 +29,7 @@ from steward_harness.git_transport import (
     ControllerGitTransport,
     GitTransportError,
     controller_transport,
+    world_transport,
 )
 from steward_harness.incidents.kernel import IncidentProbeLoop
 from steward_harness.kernel import Dispatch, Owner, StewardKernel, repository_lease
@@ -57,6 +58,9 @@ from steward_harness.lease import Busy, Lease
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldContentConflict, WorldUpdatePending
 
 log = logging.getLogger(__name__)
+
+#: How often the world exchanges with its remote, when it has one.
+WORLD_EXCHANGE_SECONDS = 30
 
 DESK_INGRESS_POLL_SECONDS = 0.5
 DESK_BUSY_RETRY_SECONDS = 5.0
@@ -970,7 +974,27 @@ class StewardDaemon:
             except (OSError, GitTransportError, Busy, subprocess.CalledProcessError) as error:
                 log.warning("result discovery deferred: %s", error)
 
-        lanes = (kernel.owners, probes, desk_messages, rhythm, targets, assessments)
+        def converge_world() -> None:
+            try:
+                published = checkpoint.converge()
+            except (Busy, GitTransportError, OSError, RuntimeError,
+                    subprocess.TimeoutExpired, WorldContentConflict, WorldUpdatePending) as error:
+                log.warning("world remote deferred: %s", deferral_cause(error))
+            else:
+                if published:
+                    log.info("world published %s", published)
+
+        next_world_exchange = [0.0]
+
+        def world_remote() -> Iterator[Owner]:
+            # Publication, like repository publication, continues while paused.
+            if checkpoint is None or checkpoint.transport is None:
+                return
+            if time.monotonic() >= next_world_exchange[0]:
+                next_world_exchange[0] = time.monotonic() + WORLD_EXCHANGE_SECONDS
+                yield ("world", "remote"), converge_world
+
+        lanes = (kernel.owners, probes, desk_messages, rhythm, targets, assessments, world_remote)
 
         def sync_tasks():
             try:
@@ -1024,6 +1048,7 @@ class StewardDaemon:
             execution_broker=self.broker,
             state=state,
             resolve_turn=resolve,
+            transport=world_transport(self.config),
         )
 
     @staticmethod

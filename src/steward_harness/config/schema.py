@@ -430,6 +430,10 @@ class ProviderConfig(BaseModel):
         return (self.default_family, *self.fallback_families)
 
 
+#: The controller store name of the world's remote transport.
+WORLD_TRANSPORT = "world"
+
+
 class WorldConfig(BaseModel):
     """Configured Git-world cognitive storage."""
 
@@ -440,12 +444,19 @@ class WorldConfig(BaseModel):
     # Optional shared controller-owned lock directory. Set this only when an
     # external process already serializes writes to the same Git world.
     lock_dir: str | None = None
+    # Optional remote the world exchanges with every pass: other writers push
+    # there, and every accepted turn is published there.
+    remote_url: str | None = None
+    branch: str = "main"
 
     @model_validator(mode="after")
     def validates_paths(self) -> "WorldConfig":
         _require_bounded_absolute("world root", self.root)
         if self.lock_dir is not None:
             _require_bounded_absolute("world lock_dir", self.lock_dir)
+        if self.remote_url is not None:
+            validate_git_remote_url(self.remote_url, allow_local=True)
+        validate_git_branch(self.branch)
         return self
 
     def lock_path(self, state_db: str | Path) -> Path:
@@ -654,6 +665,12 @@ class StewardConfig(BaseModel):
 
     @model_validator(mode="after")
     def validates_cross_references(self) -> "StewardConfig":
+        if self.world and self.world.remote_url is not None:
+            if WORLD_TRANSPORT in self.repositories:
+                raise ValueError(f"repository name {WORLD_TRANSPORT!r} is reserved for the world remote")
+            if any(Path(repository.path) == Path(self.world.root)
+                   for repository in self.repositories.values()):
+                raise ValueError("a world with a remote cannot also be a managed repository")
         if (self.desk and self.desk.provider is not None
                 and self.desk.provider not in self.provider.family_order):
             raise ValueError("desk provider must be in provider.family_order")
