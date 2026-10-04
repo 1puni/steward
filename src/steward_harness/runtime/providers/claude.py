@@ -733,7 +733,7 @@ class ClaudeRuntime:
             # retirement is still pending, so these retained homes can grow.
             cleanupPeriodDays=NATIVE_RETENTION_DAYS,
             autoMemoryEnabled=request.sandbox_mode == "workspace-write",
-            autoMemoryDirectory=str(request.cwd.resolve() / "memories" / self.family),
+            autoMemoryDirectory=str((request.record_checkout or request.cwd).resolve() / "memories" / self.family),
         )
         command = [
             str(self.executable),

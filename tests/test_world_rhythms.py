@@ -1006,3 +1006,17 @@ def test_continuation_replays_prior_notification_receipt_through_native_tool(tmp
     assert len(state.pending_result_receipts()) == 1
     assert state.result_receipt("rhythm:sleep:20")["done"]
     assert state.tasks.all() == []
+
+
+def test_a_dependent_added_later_starts_at_its_predecessors_newest_interval():
+    from steward_harness.procedures import world_rhythm_interval
+
+    rhythms = {"staging": SimpleNamespace(after=None, offset=0, schedule=300),
+               "chaos": SimpleNamespace(after="staging", offset=0, schedule=None)}
+    accepted = [SimpleNamespace(state="completed")]
+    staging = {20: accepted, 21: accepted, 22: accepted}
+    receipt = lambda _key: True
+    # New: only the newest accepted predecessor interval, not its history.
+    assert world_rhythm_interval(rhythms, "chaos", 23 * 300 + 1, {}, staging, receipt) == 22
+    # Established: every predecessor interval since its own newest run.
+    assert world_rhythm_interval(rhythms, "chaos", 23 * 300 + 1, {20: accepted}, staging, receipt) == 21
