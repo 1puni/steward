@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID
 
+from steward_harness.lease import Busy
 from steward_harness.provider_types import (
     ModelChoice,
     ProviderFamily,
@@ -46,6 +47,14 @@ SESSION_WORKSPACE_CAPABILITIES = ProviderCapabilities()
 
 class RuntimeUnavailable(RuntimeError):
     """Raised when the specifically requested provider cannot run."""
+
+
+class NativeStorageDeferred(Busy):
+    """Storage refused admission before any provider started.
+
+    Nothing ran, so nothing happened: the caller withdraws the turn and the
+    source stays queued, as for any other contention.
+    """
 
 
 class RuntimeExecutionError(RuntimeError):

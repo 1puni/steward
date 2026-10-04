@@ -17,7 +17,9 @@ from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
-from steward_harness.runtime.contracts import ReadScope, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable
+from steward_harness.runtime.contracts import (
+    NativeStorageDeferred, ReadScope, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable,
+)
 from steward_harness.world.orientation import repository_orientation, world_orientation
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldTurnWorktree, WorldUpdatePending, WorldContentConflict
 from steward_harness.lease import Busy, Lease
@@ -473,6 +475,15 @@ class ConversationService:
                 # work. A process crash or unretained completed reply remains
                 # uncertain and requires its original evidence to be inspected.
                 self._state.release_claim(turn.turn_id)
+            if isinstance(error, NativeStorageDeferred) and not withdrawn:
+                # Storage refused before any provider started: the turn never
+                # happened, so its source stays queued and starts it afresh.
+                try:
+                    if not keep_unclaimed:
+                        self._state.withdraw_turn(turn.turn_id)
+                    withdrawn = True
+                except RuntimeError:
+                    pass  # Linked or claimed after all: interrupt it below.
             if (not withdrawn and self._state.prepared_turn(event_id) is None
                     and not self._claimed(event_id)):
                 self._state.interrupt_turn(

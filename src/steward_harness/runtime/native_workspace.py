@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeRequest
+from steward_harness.runtime.contracts import NativeStorageDeferred, RuntimeExecutionError, RuntimeRequest
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.native_evidence import CAPTURED_ROOT
 
@@ -370,6 +370,8 @@ def native_workspace(
             input_text=json.dumps([operation, str(native_home), records,
                                   str(checkout) if checkout else None]),
         )
+        if result.returncode == 75 and operation == "check":
+            raise NativeStorageDeferred(result.stderr.strip()[-500:])
         if result.returncode:
             raise RuntimeExecutionError("Native evidence preservation failed; originals retained: "
                                         + result.stderr.strip()[-500:])

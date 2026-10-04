@@ -129,3 +129,15 @@ def test_capture_keeps_a_private_index_per_repository(tmp_path, world):
     (home / 'sessions/a.jsonl').write_text('a2')
     native_evidence.capture(home, {'sessions': 'artefacts/codex/sessions'}, world)
     assert _git(world, 'show', ':artefacts/codex/sessions/a.jsonl') == 'a2'
+
+
+def test_the_reserve_defers_admission_with_a_distinct_status(tmp_path):
+    import json
+    import sys
+    from pathlib import Path
+
+    script = Path(native_evidence.__file__).read_text()
+    refused = subprocess.run(
+        [sys.executable, '-I', '-c', script.replace('MIN_FREE_FRACTION = 0.05', 'MIN_FREE_FRACTION = 1.0')],
+        input=json.dumps(['check', str(tmp_path), {}, None]), capture_output=True, text=True)
+    assert refused.returncode == 75 and 'storage reserve reached' in refused.stderr
