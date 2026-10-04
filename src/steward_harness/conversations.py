@@ -406,8 +406,8 @@ class ConversationService:
             if not self._read_only_desk(conversation.conversation_id):
                 task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel,
                                                      notify_owner=notify_owner))
-                prompt += (NOTIFY_DIRECTIVE if conversation.conversation_id.kind == "rhythm"
-                           else task_calls.prompt + "\n" + NOTIFY_DIRECTIVE)
+                if conversation.conversation_id.kind != "rhythm":
+                    prompt += "\n\n" + task_calls.prompt + "\n" + NOTIFY_DIRECTIVE
             return CognitionRequest(
                 execution_id=event_id,
                 task_call_socket=task_calls.path if task_calls else None,

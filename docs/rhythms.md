@@ -177,7 +177,11 @@ configured repository authority. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
 repeating accepted world edits or follow-up admission.
 
-A finished rhythm run queues a message only through a native `notify` call ([what a rhythm sends](#what-a-rhythm-sends)). Its prompt says so.
+A finished rhythm run queues a message only through a native `notify` call ([what a rhythm sends](#what-a-rhythm-sends)). The shared turn prompt supplies that tool
+contract once; the conversation runner supplies the capability. Procedures say
+when a notification is useful, without repeating the tool instructions. Instance
+procedures may point to world-owned conduct instead of copying its authority and
+workflow into a second editable home.
 Otherwise the result lane never selects it: no assessment turn, no model call,
 no message. What it did is kept either way. A review's findings are its evidence
 commit, retained on the task ref. A writing run's work publishes like any task's,
