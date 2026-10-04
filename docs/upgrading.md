@@ -182,3 +182,29 @@ attempt source keys and ordinary turns/receipts own this behavior. Older release
 do not understand continuation keys when deciding interval eligibility, so
 rolling back after a continuation can misreport completion or strand its chain.
 See the [world-rhythm contract](rhythms.md#world-rhythms).
+
+
+## One inbox for Telegram and the desk
+
+Telegram updates and desk messages now share one inbox format and one drain.
+The desk inbox, its event log and the `desk` configuration keys are unchanged,
+so desk clients need nothing. Telegram's retained updates move from
+`<state_db>.telegram-receipts/<chat>/<update>.json` to
+`<state_db>.telegram-inbox/<chat>/`, and the poll offset, which used to live
+only in memory, is persisted there as `offset`.
+
+The conversion is automatic and needs no operator step. On its first start,
+before polling, the Telegram ingress queues every unfinished receipt with its
+saved reply and confirmed pieces and sets the offset past every receipt. The
+previous release removed a receipt only after a poll had acknowledged its
+update, so every update it answered but had not yet acknowledged still has
+one, and none is answered twice. The persisted offset marks completion, so
+later starts skip the step. Receipts are never edited or removed, and
+`task-results/` there still holds result delivery receipts. If the receipts
+cannot be read, the controller logs `Telegram ingress NOT started` at critical
+level and runs without Telegram rather than polling from offset 0; desk
+messages, tasks and rhythms continue, and Telegram results stay pending.
+Repair the receipt directory and restart.
+
+Rolling back after the new controller has answered messages is not clean: the
+old release ignores the inbox and starts from offset 0.

@@ -15,7 +15,7 @@ import pytest
 from state_fixtures import admit_task
 from steward_harness.config.schema import StewardConfig, UntrustedExecutionConfig
 from steward_harness.daemon import StewardDaemon
-from steward_harness.desk import DeskEvents
+from steward_harness.inbox import EventLog
 from steward_harness.incidents.kernel import IncidentProbeLoop
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.state import StateDatabase, TaskSpec
@@ -84,14 +84,14 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
         profile="balanced",
     )
     delivered = threading.Event()
-    append = DeskEvents.append
+    append = EventLog.append
 
     def record(events, kind, text, msg_id=""):
         append(events, kind, text, msg_id)
         if "Task cancelled" in text:
             delivered.set()
 
-    monkeypatch.setattr(DeskEvents, "append", record)
+    monkeypatch.setattr(EventLog, "append", record)
 
     def queue_desk():
         # Publish a complete job atomically while the inbox reader is active.

@@ -27,6 +27,7 @@ from steward_harness.daemon import StewardDaemon
 from steward_harness.kernel import Dispatch, StewardKernel
 from steward_harness.state import StateDatabase, TaskSpec
 from steward_harness.telegram.api import TelegramAPI
+from steward_harness.inbox import InboxDrain
 from steward_harness.telegram.service import TelegramService
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.lease import Busy
@@ -261,8 +262,8 @@ def test_a_faulting_worker_does_not_release_the_lease_over_a_live_peer(tmp_path,
         pass
 
 
-def test_telegram_drains_its_executor_before_the_lease_is_released(tmp_path, monkeypatch):
-    """Telegram is the one writer still concurrent with the pass."""
+def test_inbound_answers_drain_before_the_lease_is_released(tmp_path, monkeypatch):
+    """The inbox drain is the one writer still concurrent with the pass."""
     token = tmp_path / "token"
     token.write_text("test-token")
     config = StewardConfig.model_validate({
@@ -306,14 +307,16 @@ def test_telegram_drains_its_executor_before_the_lease_is_released(tmp_path, mon
             execution_broker=daemon.broker,
         )
         monkeypatch.setattr(service.api, "_request", network)
-        # Queued in memory, as the poll loop would have; an executor thread
-        # must still claim it once the service starts.
+        # Retained, as the poll loop would have; the drain must still claim it
+        # once it starts.
         service._ingest_update({
             "update_id": 1,
             "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": "Work"},
         })
         daemon._telegram = service
         service.start()
+        daemon._inbox = InboxDrain([service.source])
+        daemon._inbox.start()
         assert active.wait(3)
         raise failure
 

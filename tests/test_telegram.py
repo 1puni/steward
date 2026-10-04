@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +13,9 @@ import httpx
 import pytest
 
 from steward_harness.config.schema import TelegramConfig, UntrustedExecutionConfig
-from steward_harness.runtime.contracts import RuntimeExecutionError
+from steward_harness import inbox as inbox_module
+from steward_harness.inbox import InboxDrain
+from steward_harness.runtime.contracts import NativeStorageDeferred, RuntimeExecutionError
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.state import ConversationBusy, StateDatabase
 from steward_harness.telegram import api as api_module
@@ -52,15 +56,49 @@ def test_task_result_replays_only_unconfirmed_pieces_after_restart(tmp_path, mon
 
 
 def _drain(service: "TelegramService", timeout: float = 10.0) -> None:
-    """Run one executor pass to completion, as the worker pool does in production.
+    """Run the shared inbox drain over this service until it is idle or stopped.
 
-    Only usable where the test arranges for request_stop() to be reached; the
-    loop keeps draining while anything is pending.
+    A message deferred forever keeps it busy, so such a test arranges for
+    request_stop() to be reached.
     """
-    worker = threading.Thread(target=service._executor_loop, daemon=True)
-    worker.start()
-    worker.join(timeout=timeout)
-    assert not worker.is_alive(), "executor loop did not finish"
+    drain = InboxDrain([service.source])
+    drain.start()
+    deadline = time.monotonic() + timeout
+    try:
+        # Files first, then the drain's own claims: a message being renamed
+        # between queued and claimed is always held by one of them.
+        while not service._stop.is_set() and (
+            any(path.suffix in (".json", ".claimed") for path in service.inbox.dir.iterdir())
+            or drain._in_flight
+        ):
+            assert time.monotonic() < deadline, "the drain did not finish"
+            service._stop.wait(0.01)  # not time.sleep, which tests record
+    finally:
+        drain.stop()
+
+
+def _owed(service: "TelegramService") -> list[str]:
+    """Ids of the messages queued in this service's inbox, in drain order."""
+    return [message.msg_id for message in service.inbox.pending()]
+
+
+def _answer(service: "TelegramService", update: dict[str, Any]) -> None:
+    """Retain an update as the poller does, then answer it as one drain worker does.
+
+    Unlike the drain, errors reach the caller; a failed message is requeued.
+    An acknowledged update that is no longer owed is not answered again.
+    """
+    service._ingest_update(update)
+    owed = [m for m in service.inbox.pending() if m.msg_id == f"tg_{update['update_id']}"]
+    if not owed:
+        return
+    claimed = service.inbox.claim(owed[0])
+    try:
+        service.answer(claimed)
+    except BaseException:
+        service.inbox.requeue(claimed)
+        raise
+    service.inbox.done(claimed)
 
 
 class _FakeResponse:
@@ -552,7 +590,7 @@ def test_group_administrator_is_admitted_without_being_an_allowed_user(
         {"update_id": 1, "message": {"chat": {"id": 1}, "from": {"id": 7}, "text": "status"}}
     )
 
-    assert service._has_pending()
+    assert _owed(service)
 
 
 def test_a_plain_member_stays_out_when_administrators_are_admitted(
@@ -569,7 +607,7 @@ def test_a_plain_member_stays_out_when_administrators_are_admitted(
         {"update_id": 1, "message": {"chat": {"id": 1}, "from": {"id": 8}, "text": "status"}}
     )
 
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_administrators_are_not_re_read_for_every_message(
@@ -612,7 +650,7 @@ def test_an_unreachable_telegram_neither_admits_nor_sticks(
     service._ingest_update(
         {"update_id": 1, "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": "status"}}
     )
-    assert service._has_pending()
+    assert _owed(service)
     monkeypatch.setattr(
         service.api,
         "get_chat_administrators",
@@ -658,7 +696,7 @@ def test_administrators_are_ignored_unless_the_flag_is_set(
         {"update_id": 1, "message": {"chat": {"id": 1}, "from": {"id": 7}, "text": "status"}}
     )
 
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_start_probes_before_registering_commands(
@@ -827,22 +865,25 @@ def test_controller_command_overtakes_an_already_active_turn(
     # a real network request inside this bounded concurrency regression.
     monkeypatch.setattr(service.api, "send_chat_action", lambda *args, **kwargs: None)
 
+    drain = InboxDrain([service.source])
     service.start()
+    drain.start()
     try:
         assert service._stop.wait(3)
     finally:
+        drain.stop()
         service.stop()
 
     assert cancelled.is_set()
     assert commands == [command.split()[0].replace("-", "_")]
     # Every ingested update was consumed: the control command overtook the busy
     # topic inline and the unauthorized one was dropped at the trust boundary.
-    assert not service._has_pending()
+    assert not list(service.inbox.dir.glob("*.json*"))
 
 
 @pytest.mark.parametrize("text", ["/git reconcile app", "/rhythm run sleep", "/build", "work"])
 def test_external_work_does_not_enter_the_polling_control_path(text):
-    assert not TelegramService._is_control_command({"message": {"text": text}})
+    assert not TelegramService._is_control_command(text)
 
 
 def test_bare_slash_gets_a_reply_without_blocking_its_topic(tmp_path, monkeypatch):
@@ -868,16 +909,14 @@ def test_bare_slash_gets_a_reply_without_blocking_its_topic(tmp_path, monkeypatc
             "update_id": update_id,
             "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": text},
         })
-    worker = threading.Thread(target=service._executor_loop, daemon=True)
-    worker.start()
     try:
-        assert service._stop.wait(3)
+        _drain(service)
+        assert service._stop.is_set()
     finally:
         service.stop()
-        worker.join(timeout=3)
     assert received == ["Hello"]
     assert replies == ["Use Telegram's command menu.", "Hello back"]
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_unknown_slash_command_never_reaches_model(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -900,7 +939,8 @@ def test_unknown_slash_command_never_reaches_model(tmp_path, monkeypatch: pytest
         lambda chat_id, topic_id, text, **_kw: replies.append(text),
     )
 
-    service._handle_update(
+    _answer(
+        service,
         {
             "update_id": 12,
             "message": {
@@ -915,7 +955,7 @@ def test_unknown_slash_command_never_reaches_model(tmp_path, monkeypatch: pytest
     assert replies == ["Unknown command /buidl. Use Telegram's command menu."]
 
 
-@pytest.mark.parametrize("busy", [Busy, ConversationBusy])
+@pytest.mark.parametrize("busy", [Busy, ConversationBusy, NativeStorageDeferred])
 def test_busy_owner_returns_persisted_turn_to_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, busy: type[RuntimeError]
 ) -> None:
@@ -948,18 +988,15 @@ def test_busy_owner_returns_persisted_turn_to_pending(
         },
     }
     service._ingest_update(update)
+    service._ingest_update({**update, "update_id": 17})
 
-    worker = threading.Thread(target=service._executor_loop, daemon=True)
-    worker.start()
-    worker.join(timeout=5)
-    # A busy owner must never hold the executor open: stop() joins these.
-    assert not worker.is_alive()
+    # A busy owner must never hold the drain open: stopping it returns.
+    _drain(service)
 
-    # The turn stays at the front of its topic, and its receipt retains it for
-    # the next start.
-    assert list(service._pending[(1, 0)]) == [update]
-    receipt = service._read_receipt(service._receipt_path(update))
-    assert receipt["update"] == update and not receipt.get("done")
+    # The turn stays at the front of its topic, ahead of the message behind
+    # it, and its file retains it for the next start.
+    assert _owed(service) == ["tg_16", "tg_17"]
+    assert (service.inbox.dir / "000000000016.json").exists()
 
 
 def test_worker_pool_runs_different_topics_concurrently(
@@ -1007,18 +1044,10 @@ def test_worker_pool_runs_different_topics_concurrently(
             }
         )
 
-    workers = [
-        threading.Thread(target=service._executor_loop, daemon=True)
-        for _ in range(2)
-    ]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join(timeout=5)
+    _drain(service)
 
-    assert not any(worker.is_alive() for worker in workers)
     assert sorted(completed) == [10, 20]
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_foreign_chat_is_rejected_even_when_all_configured_chat_members_are_allowed(
@@ -1049,7 +1078,7 @@ def test_foreign_chat_is_rejected_even_when_all_configured_chat_members_are_allo
     )
 
     assert turns == []
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_user_outside_configured_allowlist_is_rejected(tmp_path) -> None:
@@ -1080,7 +1109,7 @@ def test_user_outside_configured_allowlist_is_rejected(tmp_path) -> None:
     )
 
     assert turns == []
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_empty_allowlist_cannot_fail_open_when_validation_is_bypassed(tmp_path) -> None:
@@ -1112,7 +1141,7 @@ def test_empty_allowlist_cannot_fail_open_when_validation_is_bypassed(tmp_path) 
     )
 
     assert turns == []
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_photo_without_caption_is_downloaded_and_passed_to_turn(
@@ -1162,8 +1191,8 @@ def test_photo_without_caption_is_downloaded_and_passed_to_turn(
             ],
         },
     }
-    service._handle_update(update)
-    service._handle_update(update)  # a delivered update is silent on replay
+    _answer(service, update)
+    _answer(service, update)  # an acknowledged update is not answered again
 
     assert downloads == ["large"]
     assert [turn[4] for turn in turns] == [
@@ -1200,7 +1229,8 @@ def test_image_document_caption_is_preserved(
     monkeypatch.setattr(service.api, "send_chat_action", lambda *args, **kwargs: None)
     monkeypatch.setattr(service, "send_reply", lambda *args, **_kw: None)
 
-    service._handle_update(
+    _answer(
+        service,
         {
             "update_id": 62,
             "message": {
@@ -1243,7 +1273,12 @@ def test_a_spooled_image_is_reused_rather_than_downloaded_again(
         execution_broker=_broker(),
     )
     spool = tmp_path / "telegram-input"
-    monkeypatch.setattr(service.api, "send_chat_action", lambda *args, **kwargs: None)
+
+    def typing_unavailable(*_args, **_kwargs):
+        raise TelegramAPIError("typing indicator unavailable")
+
+    # The first attempt downloads the image and then defers, so it is retried.
+    monkeypatch.setattr(service.api, "send_chat_action", typing_unavailable)
     monkeypatch.setattr(service, "send_reply", lambda *args, **_kw: None)
 
     def download(_file_id, destination, **_kwargs):
@@ -1260,18 +1295,22 @@ def test_a_spooled_image_is_reused_rather_than_downloaded_again(
             "photo": [{"file_id": "recover", "file_size": 24}],
         },
     }
-    service._handle_update(update)
+    with pytest.raises(TelegramAPIError):
+        _answer(service, update)
 
     # One file, and only one: the spool entry is not a two-file transaction.
     assert [path.suffix for path in sorted(spool.iterdir())] == [".image"]
+    assert _owed(service) == ["tg_65"]
 
     monkeypatch.setattr(
         service.api,
         "download_file",
         lambda *args, **kwargs: pytest.fail("a spooled image must not be fetched twice"),
     )
-    service._handle_update(update)
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *args, **kwargs: None)
+    _answer(service, update)
     assert [path.suffix for path in sorted(spool.iterdir())] == [".image"]
+    assert not _owed(service)
 
 
 def test_an_oversized_image_is_refused_without_wedging_its_topic(
@@ -1323,11 +1362,10 @@ def test_an_oversized_image_is_refused_without_wedging_its_topic(
             },
         }
     )
-    service._stop.set()
     _drain(service)
 
     assert replies == ["Telegram image exceeds configured 1MB cap"]
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_non_image_document_does_not_become_a_turn(tmp_path) -> None:
@@ -1344,7 +1382,8 @@ def test_non_image_document_does_not_become_a_turn(tmp_path) -> None:
         execution_broker=_broker(),
     )
 
-    service._handle_update(
+    _answer(
+        service,
         {
             "update_id": 64,
             "message": {
@@ -1789,7 +1828,7 @@ def test_attached_native_source_finishes_without_duplicate_execution_reply(tmp_p
     sent = []
     monkeypatch.setattr(service.api, "send_chat_action", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(service, "send_reply", lambda *_args, **_kw: sent.append(_args))
-    service._handle_update({"update_id": 74, "message": {
+    _answer(service, {"update_id": 74, "message": {
         "chat": {"id": 1}, "from": {"id": 2}, "text": "correction",
     }})
     assert not sent
@@ -1827,15 +1866,16 @@ def test_accepted_world_reply_delivery_retries_without_repeating_cognition(tmp_p
     with state.connect() as connection:
         receipts = connection.execute("SELECT * FROM turns WHERE state='completed'").fetchall()
     # Delivery failed, so the update is still queued for another attempt.
-    assert list(service._pending[(1, 7)]) == [update]
+    assert _owed(service) == ["tg_90"]
     assert len(receipts) == 1
     assert len(attempts) == 3
     assert cognition.calls == 1
     assert len(state.tasks.all()) == 1
     accepted_head = checkpoint.world._git("rev-parse", "HEAD")
     saved_files = checkpoint.world._git("show", "HEAD:decision.md")
+    service._stop.clear()
     _drain(service)
-    assert not service._has_pending()
+    assert not _owed(service)
     assert cognition.calls == 1
     assert len(state.tasks.all()) == 1
     assert len(attempts) == 4 and attempts[-1] == attempts[0]
@@ -1873,19 +1913,19 @@ def test_interrupted_reply_replay_reports_retained_work_without_rerunning(
     monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
     monkeypatch.setattr(service.api, "send_message", unavailable)
     if failure_type is ValueError:
-        # A defect escapes the handler untouched; the executor pool logs it.
+        # A defect escapes the handler untouched; the drain logs and parks it.
         with pytest.raises(ValueError) as caught:
-            service._handle_update(update)
+            _answer(service, update)
         assert caught.value is failure
     else:
         # An interrupted execution is reported to the operator, but the reply
         # transport is down too, so delivery fails.
         with pytest.raises(TelegramAPIError):
-            service._handle_update(update)
+            _answer(service, update)
     replies = []
     monkeypatch.setattr(service.api, "send_message", lambda _chat, text, **kw: replies.append(text) or 93)
-    # Telegram redelivers the same update_id; the replay must not re-run cognition.
-    service._handle_update(update)
+    # Answering the same source again must not re-run cognition.
+    _answer(service, update)
     assert len(replies) == 1
     if failure_type is ValueError:
         assert "no durable acceptance receipt" in replies[0]
@@ -1919,7 +1959,7 @@ def test_route_logs_distinguish_missing_thread_and_harness_reply(tmp_path, monke
         service._ingest_update(general)
         service._ingest_update(dump)
         service.send_result(1, 8, "private reply", "task_result:example")
-    assert set(service._pending) == {(1, 0), (1, 8)}
+    assert {message.topic_id for message in service.inbox.pending()} == {0, 8}
     assert "thread_present=False wire_thread=None routed_topic=0" in caplog.text
     assert "thread_present=True wire_thread=8 routed_topic=8" in caplog.text
     assert "update=91 chat=1 message=21 sender=1" in caplog.text
@@ -1949,7 +1989,7 @@ def test_a_passive_topic_consumes_its_update_without_acting(tmp_path, monkeypatc
 
     service._poll_updates()
 
-    assert not service._has_pending()
+    assert not _owed(service)
     assert service._offset == 91
 
 
@@ -1963,7 +2003,7 @@ def test_a_command_in_a_passive_topic_is_not_executed(tmp_path, monkeypatch, com
 
     service._ingest_update(_update(90, command, topic=311))
 
-    assert not service._has_pending()
+    assert not _owed(service)
 
 
 def test_an_undeclared_topic_is_still_admitted_beside_a_passive_one(tmp_path):
@@ -1978,7 +2018,7 @@ def test_an_undeclared_topic_is_still_admitted_beside_a_passive_one(tmp_path):
 
     service._ingest_update(update)
 
-    assert list(service._pending[(1, 544)]) == [update]
+    assert _owed(service) == ["tg_90"]
 
 
 def test_a_passive_topic_drop_is_visible_in_the_log(tmp_path, caplog):
@@ -2000,7 +2040,7 @@ def test_passive_topics_must_name_a_declared_topic():
 
 
 def test_polled_updates_are_acknowledged_once_retained_and_requeued_after_restart(tmp_path, monkeypatch):
-    """The offset is the acknowledgement: an update is retained, then acknowledged."""
+    """The persisted offset is the acknowledgement: an update is retained, then acknowledged."""
     service = _service(tmp_path)
     updates = [_update(90), _update(91, "/tasks")]
     telegram = list(updates)
@@ -2016,35 +2056,79 @@ def test_polled_updates_are_acknowledged_once_retained_and_requeued_after_restar
     for _ in range(3):
         service._poll_updates()
     assert telegram == [], "both updates are acknowledged although one is still owed"
-    assert list(service._pending[(1, 7)]) == [updates[0]]
+    assert _owed(service) == ["tg_90"]
     assert len(commands) == 1
 
-    # Restart before the owed update ran: its receipt, not Telegram, owes it.
+    # Restart before the owed update ran: the inbox, not Telegram, owes it.
     restarted = _service(tmp_path)
     restarted.command_handler = lambda *a: pytest.fail("completed command replayed")
     monkeypatch.setattr(restarted.api, "get_updates", get_updates)
-    restarted.requeue()
+    restarted.inbox.recover()
     restarted._poll_updates()
-    assert list(restarted._pending[(1, 7)]) == [updates[0]]
+    assert restarted._offset == 92
+    assert _owed(restarted) == ["tg_90"]
 
 
-def test_requeue_asks_admission_again(tmp_path, monkeypatch):
+def test_an_update_claimed_when_the_process_died_is_owed_after_restart(tmp_path, monkeypatch):
+    """A claim dies with its process; the message does not."""
+    service = _service(tmp_path)
+    service.turn_handler = lambda *a: pytest.fail("a dying worker never answered")
+    service._ingest_update(_update(90))
+    service.inbox.claim(service.inbox.pending()[0])
+    assert not _owed(service)
+
+    restarted = _service(tmp_path)
+    answered = []
+    restarted.turn_handler = lambda *a: answered.append(a[4]) or ""
+    monkeypatch.setattr(restarted.api, "send_chat_action", lambda *a, **kw: None)
+    assert restarted.inbox.recover() == 1
+    _drain(restarted)
+    assert answered == ["hello"]
+    assert not list(restarted.inbox.dir.glob("*.json*"))
+
+
+def test_a_finished_update_is_never_answered_again(tmp_path, monkeypatch):
+    """Telegram redelivers nothing below the persisted offset, and an update
+    below it is not retained again even if it is offered."""
+    service = _service(tmp_path)
+    turns = []
+    service.turn_handler = lambda *a: turns.append(a) or "done"
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
+    monkeypatch.setattr(service.api, "send_message", lambda *a, **kw: 5)
+    monkeypatch.setattr(service.api, "get_updates", lambda *a, **kw: [_update(90)])
+    service._poll_updates()
+    _drain(service)
+    assert len(turns) == 1
+    assert not list(service.inbox.dir.glob("*.json*"))
+
+    restarted = _service(tmp_path)
+    offsets = []
+    restarted.turn_handler = lambda *a: pytest.fail("a finished update ran again")
+    monkeypatch.setattr(restarted.api, "get_updates",
+                        lambda offset, **kw: offsets.append(offset) or [_update(90)])
+    restarted._poll_updates()
+    assert offsets == [91]
+    assert not _owed(restarted)
+
+
+def test_a_retained_update_is_asked_for_admission_again(tmp_path, monkeypatch):
     """A retained update is not a grant: a sender removed before restart stays out."""
     service = _service(tmp_path)
     monkeypatch.setattr(service.api, "get_updates", lambda *a, **kw: [_update(90)])
     service._poll_updates()
-    assert list(service._pending[(1, 7)])
+    assert _owed(service)
 
     restarted = _service(tmp_path, allowed_users=(2,))
+    restarted.turn_handler = lambda *a: pytest.fail("a removed sender's update ran")
     monkeypatch.setattr(restarted.api, "get_chat_administrators", lambda *a: [])
-    restarted.requeue()
-    assert not restarted._has_pending()
+    _drain(restarted)
+    assert not _owed(restarted)
     again = _service(tmp_path)
-    again.requeue()
-    assert not again._has_pending(), "a refused update is finished, not owed"
+    again.inbox.recover()
+    assert not _owed(again), "a refused update is finished, not owed"
 
 
-def test_requeue_keeps_an_update_whose_admission_could_not_be_read(tmp_path, monkeypatch):
+def test_an_update_whose_admission_could_not_be_read_stays_owed(tmp_path, monkeypatch):
     service = _service(tmp_path, allowed_users=(2,), allow_group_administrators=True)
     monkeypatch.setattr(service.api, "get_chat_administrators", lambda *a: [
         {"status": "administrator", "user": {"id": 1}}])
@@ -2055,14 +2139,21 @@ def test_requeue_keeps_an_update_whose_admission_could_not_be_read(tmp_path, mon
         raise TelegramAPIError("network down")
 
     restarted = _service(tmp_path, allowed_users=(2,), allow_group_administrators=True)
+    restarted.turn_handler = lambda *a: pytest.fail("admitted without an administrator list")
     monkeypatch.setattr(restarted.api, "get_chat_administrators", unreachable)
-    restarted.requeue()
-    assert not restarted._has_pending()
+    with pytest.raises(TelegramAPIError) as unread:
+        _answer(restarted, _update(90))
+    assert restarted.defers(unread.value), "an unread administrator list is not a refusal"
+    assert _owed(restarted) == ["tg_90"]
+
     recovered = _service(tmp_path, allowed_users=(2,), allow_group_administrators=True)
+    turns = []
+    recovered.turn_handler = lambda *a: turns.append(a) or ""
+    monkeypatch.setattr(recovered.api, "send_chat_action", lambda *a, **kw: None)
     monkeypatch.setattr(recovered.api, "get_chat_administrators", lambda *a: [
         {"status": "administrator", "user": {"id": 1}}])
-    recovered.requeue()
-    assert recovered._has_pending(), "an unread administrator list is not a refusal"
+    _answer(recovered, _update(90))
+    assert len(turns) == 1 and not _owed(recovered)
 
 
 def test_an_unread_administrator_list_retains_a_live_update(tmp_path, monkeypatch):
@@ -2074,36 +2165,38 @@ def test_an_unread_administrator_list_retains_a_live_update(tmp_path, monkeypatc
     monkeypatch.setattr(service.api, "get_chat_administrators", unreachable)
     monkeypatch.setattr(service.api, "get_updates", lambda *a, **kw: [_update(91)])
     service._poll_updates()
-    assert not service._has_pending()
-    # Telegram answers again while running: the retained update is re-asked.
+    # Unknown is not a refusal: it is retained and acknowledged, never run.
+    assert _owed(service) == ["tg_91"] and service._offset == 92
+    service.turn_handler = lambda *a: pytest.fail("admitted without an administrator list")
+    with pytest.raises(TelegramAPIError):
+        _answer(service, _update(91))
+    # Telegram answers again: the retained update is asked again and runs.
+    turns = []
+    service.turn_handler = lambda *a: turns.append(a) or ""
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
     monkeypatch.setattr(service.api, "get_chat_administrators", lambda *a: [
         {"status": "administrator", "user": {"id": 1}}])
-    monkeypatch.setattr(service.api, "get_updates", lambda *a, **kw: [])
-    service._poll_updates()
-    assert service._has_pending()
-    restarted = _service(tmp_path, allowed_users=(2,), allow_group_administrators=True)
-    monkeypatch.setattr(restarted.api, "get_chat_administrators", lambda *a: [
-        {"status": "administrator", "user": {"id": 1}}])
-    restarted.requeue()
-    assert restarted._has_pending()
+    _answer(service, _update(91))
+    assert len(turns) == 1 and not _owed(service)
 
 
 def test_unrecoverable_update_is_finished_rather_than_replayed_forever(tmp_path, monkeypatch):
     service = _service(tmp_path)
-    service._enqueue(_update(90))
 
-    def broken(update, **_kwargs):
-        service.request_stop()
+    def broken(*_args):
         raise ValueError("not a transient failure")
 
+    service.turn_handler = broken
     replies = []
-    monkeypatch.setattr(service, "_handle_update", broken)
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
     monkeypatch.setattr(service.api, "send_message", lambda chat, text, **kw: replies.append(text))
+    service._ingest_update(_update(90))
     _drain(service)
     assert replies == ["Could not process this message: not a transient failure"]
+    assert [path.name for path in service.inbox.dir.glob("*.failed")] == ["000000000090.json.failed"]
     restarted = _service(tmp_path)
-    restarted.requeue()
-    assert not restarted._has_pending()
+    restarted.inbox.recover()
+    assert not _owed(restarted)
 
 
 def test_a_reply_that_cannot_be_delivered_is_finished_not_replayed_forever(tmp_path, monkeypatch):
@@ -2121,7 +2214,6 @@ def test_a_reply_that_cannot_be_delivered_is_finished_not_replayed_forever(tmp_p
     def send_message(chat, text, **kw):
         if text != "the reply":
             replies.append(text)
-            service.request_stop()
             return 1
         send_attempts.append(text)
         raise TelegramAPIError(
@@ -2129,24 +2221,59 @@ def test_a_reply_that_cannot_be_delivered_is_finished_not_replayed_forever(tmp_p
         )
 
     monkeypatch.setattr(service.api, "send_message", send_message)
-    service._enqueue(_update(90, "hello"))
+    service._ingest_update(_update(90, "hello"))
     _drain(service)
     assert len(send_attempts) == service_module._SEND_ATTEMPTS
     assert len(replies) == 1 and "Bad Request" in replies[0]
     restarted = _service(tmp_path)
-    restarted.requeue()
-    assert not restarted._has_pending()
+    restarted.inbox.recover()
+    assert not _owed(restarted)
+
+
+def test_text_for_a_running_native_turn_becomes_its_live_input(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    live = []
+    service.turn_handler = lambda *a: pytest.fail("live input started a new turn")
+    service._native_turn_handler = lambda *a: live.append(a) or "noted"
+    monkeypatch.setattr(service, "_ongoing_topics", lambda: (7,))
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
+    sent = []
+    monkeypatch.setattr(service.api, "send_message", lambda chat, text, **kw: sent.append(text) or 5)
+
+    service._ingest_update(_update(90, "also check the logs"))
+
+    assert [(event, topic, text) for event, _chat, topic, _user, text, _images in live] == [
+        ("tg_90", 7, "also check the logs")]
+    assert sent == ["noted"]
+    assert not list(service.inbox.dir.glob("*.json*"))
+
+
+def test_live_input_awaiting_acceptance_waits_in_its_topic(tmp_path, monkeypatch):
+    """Input offered to a running turn is answered once that turn is accepted."""
+    service = _service(tmp_path)
+    offered = []
+
+    def offer(*args):
+        offered.append(args)
+        raise ConversationBusy("native input retained; awaiting execution acceptance")
+
+    service._native_turn_handler = offer
+    monkeypatch.setattr(service, "_ongoing_topics", lambda: (7,))
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
+    service._ingest_update(_update(90, "also check the logs"))
+    assert len(offered) == 1
+    assert _owed(service) == ["tg_90"]
 
 
 def test_live_input_does_not_overtake_retained_updates_in_its_topic(tmp_path, monkeypatch):
     service = _service(tmp_path)
-    service._native_turn_handler = lambda *a: pytest.fail("overtook a retained update")
-    monkeypatch.setattr(service, "_ongoing_topics", lambda: {7})
     monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
     first, second = _update(90, "first"), _update(91, "second")
-    service._enqueue(first)
+    service._ingest_update(first)
+    service._native_turn_handler = lambda *a: pytest.fail("overtook a retained update")
+    monkeypatch.setattr(service, "_ongoing_topics", lambda: {7})
     service._ingest_update(second)
-    assert list(service._pending[(1, 7)]) == [first, second]
+    assert _owed(service) == ["tg_90", "tg_91"]
 
 
 def test_partial_reply_resumes_after_restart_without_resending_confirmed_pieces(tmp_path, monkeypatch):
@@ -2166,19 +2293,19 @@ def test_partial_reply_resumes_after_restart_without_resending_confirmed_pieces(
     monkeypatch.setattr(service.api, "send_message", send)
     for _ in range(5):
         with pytest.raises(TelegramDeliveryError):
-            service._handle_update(_update(90))
+            _answer(service, _update(90))
     assert sent == ["first"]
 
     restarted = _service(tmp_path)
     restarted.turn_handler = lambda *a: pytest.fail("cognition repeated")
     monkeypatch.setattr(restarted.api, "send_message", lambda chat, text, **kw: sent.append(text) or 6)
-    restarted._handle_update(_update(90))
-    restarted._handle_update(_update(90))
+    _answer(restarted, _update(90))
+    _answer(restarted, _update(90))
     assert sent == ["first", "second"]
     # Equal content from a distinct update must still be delivered.
     restarted.turn_handler = lambda *a: "the reply"
     monkeypatch.setattr(restarted.api, "send_chat_action", lambda *a, **kw: None)
-    restarted._handle_update(_update(92))
+    _answer(restarted, _update(92))
     assert sent == ["first", "second", "first", "second"]
 
 
@@ -2197,7 +2324,7 @@ def test_busy_owner_does_not_spend_a_delivery_budget(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
     monkeypatch.setattr(service.api, "send_message", lambda chat, text, **kw: sent.append(text) or 5)
-    monkeypatch.setattr(service._stop, "wait", lambda *a: False)
+    monkeypatch.setattr(inbox_module, "RETRY_SECONDS", 0.01)
     service._ingest_update(_update(90))
     _drain(service)
     assert len(calls) == 6
@@ -2222,26 +2349,6 @@ def test_a_rate_limited_send_waits_as_long_as_telegram_asked(monkeypatch):
     assert slept == [32.0], "guessing a shorter wait spends a retry inside the window"
 
 
-def test_delivery_receipts_are_retained_until_poll_acknowledgement(tmp_path, monkeypatch):
-    service = _service(tmp_path)
-    monkeypatch.setattr(service.api, "send_message", lambda *a, **kw: 5)
-    service.command_handler = lambda *a: "tasks"
-    service._handle_update(_update(91, "/tasks"))
-    receipt = service._receipt_path(_update(91))
-    assert receipt.exists()
-    service._offset = 92
-
-    def unavailable(*a, **kw):
-        raise TelegramAPIError("poll unavailable")
-
-    monkeypatch.setattr(service.api, "get_updates", unavailable)
-    service._poll_updates()
-    assert receipt.exists()
-    monkeypatch.setattr(service.api, "get_updates", lambda *a, **kw: [])
-    service._poll_updates()
-    assert not receipt.exists()
-
-
 def test_inline_command_delivery_retry_does_not_execute_command_twice(tmp_path, monkeypatch):
     service = _service(tmp_path)
     commands = []
@@ -2253,23 +2360,24 @@ def test_inline_command_delivery_retry_does_not_execute_command_twice(tmp_path, 
 
     monkeypatch.setattr(service.api, "send_message", unavailable)
     service._ingest_update(_update(91, "/pause"))
-    assert service._has_pending()
+    assert _owed(service)
     assert len(commands) == 1
     restarted = _service(tmp_path)
     restarted.command_handler = lambda *a: pytest.fail("pause executed again")
     sent = []
     monkeypatch.setattr(restarted.api, "send_message", lambda chat, text, **kw: sent.append(text) or 5)
-    restarted.requeue()
-    restarted._ingest_update(_update(91, "/pause"))
-    update, _key = restarted._claim_next()
-    restarted._handle_update(update)
+    restarted.inbox.recover()
+    _answer(restarted, _update(91, "/pause"))
     assert sent == ["paused"]
+
+
 def test_redelivery_while_reply_is_owed_does_not_multiply(tmp_path, monkeypatch):
     """A redelivered update must not turn into many sends.
 
     Telegram redelivers whatever the last poll did not acknowledge. An update
-    already retained and owed a reply is recognized by its receipt; each
-    redelivery used to enqueue another copy, and every copy sent the reply.
+    already retained and owed a reply is recognized by the offset and its
+    name; each redelivery used to enqueue another copy, and every copy sent
+    the reply.
     """
     from test_world_durability import runtime
 
@@ -2301,14 +2409,14 @@ def test_redelivery_while_reply_is_owed_does_not_multiply(tmp_path, monkeypatch)
     service._ingest_update(update)
     _drain(service)
     # Delivery failed, so the reply is still owed and the update stays queued.
-    assert list(service._pending[(1, 7)]) == [update]
+    assert _owed(service) == ["tg_90"]
     sends_after_first = len(attempts)
 
-    # Telegram redelivers the same update because the offset never advanced.
+    # Telegram redelivers the same update.
     for _ in range(5):
         service._ingest_update(update)
 
-    assert list(service._pending[(1, 7)]) == [update]
+    assert _owed(service) == ["tg_90"]
     assert len(attempts) == sends_after_first
     assert cognition.calls == 1
 
@@ -2334,7 +2442,7 @@ def test_the_polling_thread_never_blocks_out_a_long_rate_limit(monkeypatch):
         )
     assert slept == [], "the poll thread must not wait out a 120s rate limit"
 
-    # An executor thread is free to wait: that is what it is for.
+    # A drain worker is free to wait: that is what it is for.
     with pytest.raises(TelegramAPIError):
         TelegramService._send_with_retry(
             rate_limited, max_wait_seconds=service_module._MAX_RETRY_AFTER_WAIT
@@ -2343,7 +2451,7 @@ def test_the_polling_thread_never_blocks_out_a_long_rate_limit(monkeypatch):
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_rate_limited_inline_reply_and_restart_replay_defer_to_executor(
+def test_rate_limited_inline_reply_and_restart_replay_defer_to_the_drain(
     tmp_path, monkeypatch, native
 ):
     service = _service(tmp_path)
@@ -2364,17 +2472,17 @@ def test_rate_limited_inline_reply_and_restart_replay_defer_to_executor(
     monkeypatch.setattr(service.api, "send_message", limited)
     service._ingest_update(update)
     assert sleeps == []
-    assert list(service._pending[(1, 7)]) == [update]
+    assert _owed(service) == ["tg_99"]
     assert len(executions) == 1
 
     restarted = _service(tmp_path)
     restarted.command_handler = lambda *a: pytest.fail("command rerun")
     restarted.turn_handler = lambda *a: pytest.fail("cognition rerun")
     monkeypatch.setattr(restarted.api, "send_message", limited)
-    restarted.requeue()
+    restarted.inbox.recover()
     restarted._ingest_update(update)
     assert sleeps == [], "the poller never replays a retained update itself"
-    assert list(restarted._pending[(1, 7)]) == [update]
+    assert _owed(restarted) == ["tg_99"]
     attempts = []
 
     def recover(chat, text, **kw):
@@ -2388,7 +2496,7 @@ def test_rate_limited_inline_reply_and_restart_replay_defer_to_executor(
     _drain(restarted)
     assert sleeps == [120]
     assert attempts == ["accepted reply", "accepted reply"]
-    assert restarted._read_receipt(restarted._receipt_path(update))["done"]
+    assert not list(restarted.inbox.dir.glob("*.json*"))
 
 
 @pytest.mark.parametrize("piece", ["artifact", "pin", "attachment-alert"])
@@ -2478,3 +2586,83 @@ def test_result_transport_is_bounded_text_and_does_not_wait_on_rate_limit(tmp_pa
     with pytest.raises(TelegramAPIError):
         service.send_result(1, 42, 'Retained evidence [[file:/tmp/private]]', 'result:bounded')
     assert len(sent) == 1
+
+
+def _legacy_receipts(tmp_path) -> Path:
+    """The previous release's layout: receipts per update, beside result receipts."""
+    legacy = tmp_path / "state.db.telegram-receipts" / "1"
+    (legacy / "task-results").mkdir(parents=True)
+    (legacy / "task-results" / "abc.json").write_text(json.dumps({"done": True}))
+    (legacy / "90.json").write_text(json.dumps({"update": _update(90, "finished"), "done": True}))
+    (legacy / "91.json").write_text(json.dumps({
+        "update": _update(91, "half delivered"), "reply": [1, 7, "the reply"],
+        "formatted_chunks": ["first", "second"], "pieces": {"text:0": 5},
+    }))
+    (legacy / "92.json").write_text(json.dumps({"update": _update(92, "never run")}))
+    (legacy / "93.json").write_text(json.dumps({"reply": [1, 7, "inline"], "done": True}))
+    return legacy
+
+
+def _start(service, monkeypatch, polls):
+    monkeypatch.setattr(service_module, "probe_chat_access", lambda *_a, **_kw: None)
+    monkeypatch.setattr(service, "_register_commands", lambda: None)
+
+    def get_updates(offset, **_kwargs):
+        polls.append(offset)
+        service.request_stop()
+        return [_update(90, "finished")]  # Telegram may still hold an unconfirmed one
+
+    monkeypatch.setattr(service.api, "get_updates", get_updates)
+    service.start()
+    assert service._stop.wait(3)
+    service.stop()
+
+
+def test_startup_carries_retained_receipts_into_the_inbox_exactly_once(tmp_path, monkeypatch):
+    """The first start owes exactly what the previous release owed."""
+    legacy = _legacy_receipts(tmp_path)
+    before = {path: path.read_bytes() for path in legacy.rglob("*") if path.is_file()}
+
+    service = _service(tmp_path)
+    polls: list[int] = []
+    _start(service, monkeypatch, polls)
+    assert polls == [94], "polling resumes past every receipt, answered or not"
+    assert _owed(service) == ["tg_91", "tg_92"]
+
+    turns, sent = [], []
+    service.turn_handler = lambda *a: turns.append(a[4]) or "fresh reply"
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
+    monkeypatch.setattr(service.api, "send_message", lambda chat, text, **kw: sent.append(text) or 6)
+    service._stop.clear()
+    _drain(service)
+    assert turns == ["never run"]
+    assert sent == ["second", "fresh reply"], "only the unconfirmed piece is resent"
+    assert {path: path.read_bytes() for path in legacy.rglob("*") if path.is_file()} == before
+
+    # The receipts are still there, but the offset says they were carried.
+    again = _service(tmp_path)
+    again.turn_handler = lambda *a: pytest.fail("an adopted update ran twice")
+    polls.clear()
+    _start(again, monkeypatch, polls)
+    assert polls == [94]
+    assert not _owed(again)
+    assert {path: path.read_bytes() for path in legacy.rglob("*") if path.is_file()} == before
+
+
+def test_startup_without_retained_receipts_changes_nothing(tmp_path, monkeypatch):
+    (tmp_path / "state.db.telegram-receipts" / "1" / "task-results").mkdir(parents=True)
+    service = _service(tmp_path)
+    polls: list[int] = []
+    _start(service, monkeypatch, polls)
+    assert polls == [0]
+    assert not _owed(service)
+
+
+def test_receipts_that_cannot_be_read_keep_the_ingress_from_polling(tmp_path, monkeypatch):
+    legacy = _legacy_receipts(tmp_path)
+    (legacy / "95.json").write_text("{not json")
+    service = _service(tmp_path)
+    monkeypatch.setattr(service.api, "get_updates", lambda *a, **kw: pytest.fail("polled from offset 0"))
+    with pytest.raises(service_module.TelegramReceiptsUnadopted):
+        service.start()
+    assert not (service.inbox.dir / "offset").exists()
