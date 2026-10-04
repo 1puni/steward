@@ -58,7 +58,8 @@ def test_world_rhythm_runs_once_per_interval_as_a_world_turn(tmp_path):
     assert request.sandbox_mode == "workspace-write"
     assert "Consolidate the world." in request.prompt and "TASK_PROPOSAL" not in request.prompt
     # It is told that nothing is sent unless it asks.
-    assert 'operation="notify"' in request.prompt
+    assert request.prompt.count('operation="notify"') == 1
+    assert request.prompt.count("Final replies from automatic runs are recorded only.") == 1
     # History is the world's Git, not a section of its files.
     assert "The world is Git." in request.prompt and "delete freely" in request.prompt
     # A rhythm receives a notification capability; it cannot admit tasks.
