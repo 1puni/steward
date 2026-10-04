@@ -14,6 +14,41 @@ a result delivery, or a scheduled obligation. Several boundaries already make
 the right distinctions. Removing all structured output or keeping every process
 alive would destroy useful guarantees.
 
+## Current completed and remaining map
+
+Source follow-up, 2026-10-04, based on `cb437dde` and the native-completion
+change on task `task-8438132eab195ca1b721d3bd8de07f26`. This table supersedes the
+recommendations below; their revision-scoped evidence stays historical.
+
+| Boundary | Completed behavior and provenance | Remaining distinction |
+| --- | --- | --- |
+| A, D: actions and ownership reads | `73802804` admits source-bound native calls during execution; `task_calls.py` and `task_query.py` own receipts and bounded reads. | A call authorizes a real action or asks a query; final prose cannot replace it. |
+| B: retained result delivery | The October 3 delivery change separates frozen evidence transport from optional assessment; `deliver_task_result` and the transport worker survive busy cognition. | At-least-once delivery and assessment are separate receipts. |
+| C: interrupted rhythms | `768d757a` retains interval obligations; `eeaaf067` reconciles continuation with callable notifications. | Uncertain external effects require explicit continuation, not inferred success. |
+| E: native task completion | `eb15d7b2`/`d5d875a5` removed suffix parsing but required typed close. The current change derives idle after correlated native completion and teardown, including no-diff/empty-reply turns, and removes revision-after-close repair for accepted understanding. | Optional ask/continue supplies state the adapters cannot yet map. Native question callbacks and provider goals need a separate direct mapping; prose is not scored. |
+| F: ordinary world completion | Successful empty replies now retain and accept their own world work and action receipts by default, just like automatic turns. | Low-level embedding callers can still explicitly require output. Truncation, errors, missing native completion and cancellation remain failures. |
+| F: notification instructions | `eb15d7b2` removed silence/notification markers. Finance's remaining `NOTIFY:` instruction now uses the shared native notification interface; reflection and security-review instructions no longer demand close. Retired task markers are refused without enforcing their obsolete syntax. | Notification is an explicit send decision, never inferred from completed cognition. |
+| Candidate reviews | One exact-candidate `VERDICT: PASS` or `VERDICT: FAIL` line remains gate evidence. It need not be the final line. | Native execution success does not tell whether a review passed. Missing/conflicting evidence still fails the gate. |
+| Attachments and pins | Existing transport syntax names payloads and message-bound actions under path/permission checks. | Completion state cannot supply a file path or operator pin decision. |
+| G: persistent processes | Provider homes persist, but processes remain invocation-scoped. | Process reuse still needs writer exclusion and is outside this correction. |
+
+Ownership queries for markers, delivery and rhythm returned no unfinished matches;
+closure returned only `task-5b0d0fb8c5ad57b1aeaa2bdfcbb8ebde`, waiting at
+`3ef93a9b`, at 2026-10-04 13:02 UTC. Its `f2c1befa` findings ask for removal
+provenance and contain no implementation. These bounded observations are not leases.
+The retained Glance (`7c39a5d`, `c434aba`, `da17099`) and organisation-world
+(`faa9b40`, `7d2ebf1`, `ad238b1`) checkpoint messages establish revision-after-close
+rejection followed by unchanged recovery. No raw native transcripts were inspected;
+those messages alone do not identify the exact intervening event. Controlled
+understanding-acceptance regressions reproduce the ordering without attributing an
+unobserved cause to either live execution.
+
+Validation follows behavior: task execution/no-change tests, both native adapter
+journeys with no close call, live-input/account races, shutdown and writer teardown,
+restart, world durability, result delivery and rhythm recovery. Local tests establish
+source behavior only; controller gates, exact-source publication and target activation
+remain independent observations.
+
 ## Ownership and scope
 
 The supported `TASK_QUERY` observation at `2026-10-02T13:12:57.337116+00:00`
@@ -339,7 +374,7 @@ ritual distorts the work. V also removed the `deliver` exception: changing a
 morning brief is document authorship, not a sending decision. Its readers own
 date-based freshness; only a callable notification sends it to an owner.
 The current contracts are [notification](rhythms.md#what-a-rhythm-sends) and
-[typed closure](execution-lifecycle.md#execution-closure-and-continuation).
+[native completion](execution-lifecycle.md#execution-closure-and-continuation).
 Findings D and E above retain their revision-scoped evidence; current ownership
 queries and closure now use the native tool. The former `QUESTION: TASK_QUERY`
 fallback is removed. The separate candidate-review verdict remains structured
@@ -354,9 +389,9 @@ pin retries share that message's durable delivery record. They retain the existi
 configured-chat permission checks and operator-request policy; they do not
 select execution closure or notification opt-in. Moving these actions to a separate API must preserve that
 message/receipt binding; this change does not introduce an independent pin queue.
-The retired `TASK_PROPOSAL`/`TASK_ACTION` parser remains rejection diagnostics
-only: it cannot admit or steer work, including on recovery. Its original raw
-output remains recorded. No `SILENT`, `QUESTION: NONE`, `DISPOSITION:` or
+Retired `TASK_PROPOSAL`/`TASK_ACTION` lines are rejected uniformly without parsing
+payloads or demanding a final-line position. They cannot admit or steer work, including
+on recovery. The original raw output remains recorded. No `SILENT`, `QUESTION: NONE`, `DISPOSITION:` or
 `NOTIFY:` token controls execution or automatic sending.
 
 Bound follow-ups by the fact they move, not by the module they edit. A and D

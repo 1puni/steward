@@ -788,7 +788,7 @@ def test_running_task_receives_notes_and_only_consumes_acknowledged_input(
             runner.flush_inputs()
             # This arrives too late to be offered; closing must retain it.
             state.tasks.note(task.task_id, "arrived at completion")
-            return super().execute(request)
+            return replace(super().execute(request), output="Native work completed.")
 
     runner = TaskRunner(
         state=state,

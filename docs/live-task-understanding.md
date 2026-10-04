@@ -89,7 +89,9 @@ Acceptance changes only the canonical account. Natural closure records findings 
 disposition in the product checkpoint and consumes only acknowledged operator input.
 It never rereads a product-side task file, and never overwrites an accepted account
 with one. When the turn ends, closure stops and joins the watcher, waiting out any
-acceptance in flight.
+acceptance in flight. The successful native result needs no close call; the checkpoint
+names this settled account baseline. An accepted account update does not invalidate
+completion or require another execution merely to repeat a decision.
 
 ## What acceptance does not do
 

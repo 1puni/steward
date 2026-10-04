@@ -73,36 +73,51 @@ checkout. Its HEAD and local work stay in place. Cognition can compare that work
 with the fresh source and accepted steering; a refresh does not rebase the task
 or change a procedure's pinned candidate.
 
-The session calls the native `steward_tasks` task tool:
+Successful native turn completion supplies the default `idle` disposition. No
+close call, nonempty final reply, keyword or working-tree diff is required.
+The built-in adapters validate the owning session/turn's successful terminal
+event and complete writer teardown before returning. Exit zero, silence, loss of
+a process, interruption, timeout and failed cleanup are not completion evidence.
+An unfinished reported native child also prevents successful Codex completion.
+
+The controller revokes the execution's native capability, joins the account
+watcher, stages the settled tree, and commits findings and disposition. The
+checkpoint names the execution and its latest accepted account baseline. An
+understanding acceptance is bookkeeping, not a reason to repeat completed work.
+Only prompt inputs and acknowledged live inputs are consumed. Unresolved, rejected
+or late input stays pending and keeps idle work queued; cancellation and pending
+input are rechecked at publication. A receipt-only response cannot replace the
+working findings. Before a settled checkpoint, restart resumes retained work;
+after that checkpoint, recovery can accept it without rerunning cognition.
+
+### Explicit waiting and ongoing work
+
+Native terminal success does not identify a blocking question or deliberate
+next-slice continuation. The adapters do not yet map Codex
+`item/tool/requestUserInput` or Claude `AskUserQuestion` into durable task waits,
+and do not query provider-owned goals between invocations. Until those surfaces
+are connected, use the existing task tool only when that extra state is needed:
 
 ```json
-{"operation":"close","key":"finish","subject":"feat: implement the request","disposition":"idle"}
+{"operation":"close","key":"question","subject":"steward: wait for source selection","disposition":"ask","question":"Which source is authoritative?"}
 ```
 
-`continue` means more work remains; `ask` additionally requires a `question`
-string; `idle` requests landing through the configured gates. Omit `question`
-for other dispositions. The subject is one nonempty line of at most 120
-characters; a question is at most 1,000 characters. Keys have 1–128 ASCII
-letters, digits, `_`, `.`, `:` or `-`.
+`continue` requests another execution; only `ask` takes a question. The optional
+`idle` spelling remains compatible with retained sessions. A subject is one
+nonempty line of at most 120 characters, a question at most 1,000 characters,
+and keys use 1–128 ASCII letters, digits, `_`, `.`, `:` or `-`.
+An identical replay returns the pending receipt. Invalid or conflicting explicit
+requests retain blocked work: a malformed wait cannot become implicit success.
+A replacement writer cannot inherit a previous writer's request. A valid request
+still requires successful native completion and teardown; it grants no publication
+mid-write. Its receipt's revision records when it was requested, not an exact-base
+condition on later understanding acceptance.
 
-The call returns **pending intent**, bound to the task, this execution and the
-accepted task revision. An identical replay returns the same intent. Conflicting
-calls invalidate the decision; no later valid call overrides them. A later task
-revision invalidates stale intent. A replacement native writer (fallback or
-session rotation) gets a new execution identity and cannot inherit pending intent. The controller revokes the native capability,
-waits for writer teardown and outstanding account acceptance, then binds the
-intent to the settled tree in its checkpoint commit. The commit carries execution
-and task-revision trailers alongside disposition. No tool call publishes mid-write.
-
-Final narration is retained verbatim as findings. Extra text, marker-like text,
-or an empty final reply cannot change the disposition. Missing or invalid intent
-retains work without granting publication; the task requires retry. A crash
-before the checkpoint cannot carry an old pending intent into a new execution.
-Even a findings-only slice commits. `idle` leaves a publication obligation;
-`continue` resumes ordinary execution; `ask` waits for an operator answer.
-Cancellation and pending operator input still prevent publication at the
-publisher's final boundary. Receipt-only native answers cannot replace the
-working result or its callable intent.
+A question or statement of ongoing work in final prose alone cannot establish
+those states. This is a specific missing native mapping, not a text-classification
+problem. Final narration is retained as findings only. Idle is source completion;
+it leaves the ordinary integration, gate and publication obligation. Operator
+outcome and exact-revision target health remain separate observations.
 
 Candidate review procedures still return one `VERDICT: PASS` or `VERDICT: FAIL`
 line as structured gate evidence. This is a separate candidate-bound review
@@ -111,7 +126,7 @@ task disposition or send a message. Replacing the review evidence schema is a
 separate gate-interface change. Ordinary procedures and rhythms have no verdict
 requirement.
 
-Ordinary task cognition has no routine invocation deadline; it ends at closure,
+Ordinary task cognition has no routine invocation deadline; it ends at native completion,
 cancellation, controller shutdown or containment. Procedure runs keep the provider
 deadline. A procedure deadline with the durably bound native session, or a controller
 shutdown, autosaves partial work where possible and permits continuation on a later

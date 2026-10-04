@@ -51,7 +51,7 @@ stored in SQL. The frontmatter fields are `repository`, `title`, `origin`,
 **The work branch** lives in the product repository's agent-side clone, named
 `tasks/<task-id>`. The native session commits there as it likes, and its commits
 stay on the branch. Each slice ends with one checkpoint commit the harness
-makes: its subject comes from the session's typed close operation, its message body is the
+makes: its subject is supplied by the controller or an optional explicit decision, its message body is the
 session's findings, and its `Disposition:` and `Reason:` trailers record the
 disposition. A slice that changed nothing still gets that commit, empty, so its
 findings land in history. There is no task-prose file in the product checkout;
@@ -123,20 +123,21 @@ Work happens in **slices**. One slice is one provider execution holding the
 task's lock, in a retained checkout of `tasks/<task-id>`, ending in one commit
 the harness makes.
 
-The session calls the native `steward_tasks` tool with `operation="close"`, a
-stable `key`, a commit `subject` and an explicit `disposition`:
+Successful native completion records `idle` after writer teardown. Workspace-write
+work then owes publication through the normal gates. No final suffix, close call,
+nonempty reply or diff is needed.
 
-- `continue` — more work remains on this exact task. It will be picked up again
-  on a later pass, with the same branch and, when it survives, the same provider
-  session.
-- `ask` — it cannot proceed without an answer, which goes in the call's `question` field. The
-  task waits.
-- `idle` — finished. Workspace-write work now owes a publication.
+Use the existing `steward_tasks` `close` operation only for an explicit state the
+native adapters cannot yet convey: `continue` for more work on the same task,
+or `ask` with a blocking `question`. These calls take a stable `key` and commit
+`subject`. An optional `idle` call remains compatible with older sessions.
+See the [native completion contract](execution-lifecycle.md#execution-closure-and-continuation)
+for the question-mapping gap and receipt semantics.
 
-If the close operation is missing, invalid or conflicting, the harness keeps the work, commits it, and blocks
-the task rather than guessing what the session meant. A slice that crashes or is
-killed leaves no half-state: the lock is a `flock`, so it dies with the process,
-and the task simply never left the queue.
+Invalid or conflicting explicit decisions retain blocked work. Crashes, timeout,
+cancellation and failed writer containment cannot establish successful completion.
+The task lock is a `flock`; its release proves only that the lock is free.
+Settled checkpoints and accepted input determine recovery, not lock-file existence.
 
 **What carries.** Everything durable is in Git before the slice is over:
 

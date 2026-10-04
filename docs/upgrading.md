@@ -151,8 +151,12 @@ messages replay exactly; unprepared final markers acquire no sending authority.
 A retained query-shaped waiting question is now ordinary operator input, so
 inspect any such waiting tasks and answer or retry them deliberately.
 
-New world rhythms and procedure tasks use callable notification and task closure.
-No tool capability means recorded-only notification and no inferred idle intent.
+World rhythms and procedure tasks use callable notification. Successful native
+completion no longer requires a close call; task waits and explicit continuation
+still use the existing tool until native callbacks are connected. No notification
+capability means recorded-only findings. Ordinary conversations also accept an empty
+reply after successful native completion, preserving that turn's own world changes
+and action receipts rather than passing them to another source.
 Verify tonight's schedule, current procedure files, provider MCP startup, a
 notification receipt, settled task closure and brief document freshness on
 the deployed host. Local scripted-provider tests do not establish those live

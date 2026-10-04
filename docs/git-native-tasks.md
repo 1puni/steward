@@ -296,7 +296,8 @@ Repository task and procedure executions receive the same invocation-bound tool.
 at most ten unfinished matches and 7,500 JSON characters, with observation time,
 revision, ownership relation and truncation. It excludes the querying task and
 discloses no peer briefs or owner addresses. `notify` queues text to the task's
-bound owner; `close` records execution intent for acceptance after writer teardown
+bound owner; optional `close` records a wait or continuation for acceptance after
+successful native completion and writer teardown. Ordinary completion needs no call
 ([execution lifecycle](execution-lifecycle.md#execution-closure-and-continuation)).
 Tasks cannot submit or steer peer work. World rhythms receive notification-only
 authority. Public read-only conversations remain excluded.

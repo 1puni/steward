@@ -15,9 +15,9 @@ Production runs these on a Linux host under the separate execution identity.
 There is no container execution backend.
 
 Task-result assessment is completion cognition in the owning conversation.
-Working tasks report findings and normal closure; they do not decide whether to
+Working tasks report findings and finish their native turn; they do not decide whether to
 notify the operator or produce a silence token. Completion may finish without a
-final message. Only these calls opt into empty output, and only a correlated,
+final message. Conversation, task and automatic turns allow empty output; only a correlated,
 successful native terminal result can establish it. Codex commentary is never
 used as final output. Missing completion, failure and truncated streams remain
 errors. Accepted world changes and task actions survive a quiet completion;
