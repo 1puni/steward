@@ -739,3 +739,52 @@ def test_startup_cleanup_preserves_interrupted_native_evidence(tmp_path):
     with pytest.raises(WorldUpdatePending, match='native evidence preservation is pending'):
         checkpoint.startup_cleanup()
     assert (integration / 'native-result').read_text() == 'not yet archived'
+
+
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def test_checkouts_leave_provider_records_to_git(tmp_path):
+    """A world keeps every session; no owner checkout needs to hold them."""
+    world = _git_world(tmp_path / "world")
+    record = "artefacts/codex/sessions/2026/10/04/rollout-old.jsonl"
+    (world.root / record).parent.mkdir(parents=True)
+    (world.root / record).write_text("another owner's session\n")
+    (world.root / "tasks.md").write_text("- one\n")
+    _commit_all(world.root, "records and knowledge")
+    checkpoint = _checkpoint(world, tmp_path)
+    turn = checkpoint.checkout(workspace_id="conversation-records")
+    assert (turn.path / "tasks.md").read_text() == "- one\n"
+    assert not (turn.path / "artefacts").exists()
+    assert _git("status", "--porcelain", cwd=turn.path) == ""
+    (turn.path / "tasks.md").write_text("- one\n- two\n")
+    _finish(checkpoint, turn, "records", "add two", "added")
+    assert _git("show", f"HEAD:{record}", cwd=world.root) == "another owner's session"
+    # Another writer's new and changed records arrive by merge and leave again.
+    newer = "artefacts/codex/sessions/2026/10/04/rollout-new.jsonl"
+    (world.root / newer).write_text("new session\n")
+    (world.root / record).write_text("another owner's session\nresumed\n")
+    _commit_all(world.root, "more records")
+    again = checkpoint.checkout(workspace_id="conversation-records")
+    assert again.path == turn.path
+    assert _git("show", f"HEAD:{newer}", cwd=again.path) == "new session"
+    assert not (again.path / "artefacts").exists()
+    assert (again.path / "tasks.md").read_text() == "- one\n- two\n"
+    assert _git("status", "--porcelain", cwd=again.path) == ""
+
+
+def test_a_checkout_from_before_capture_gives_its_records_back(tmp_path):
+    world = _git_world(tmp_path / "world")
+    record = "artefacts/claude/projects/steward/session.jsonl"
+    (world.root / record).parent.mkdir(parents=True)
+    (world.root / record).write_text("committed\n")
+    _commit_all(world.root, "records")
+    checkpoint = _checkpoint(world, tmp_path)
+    legacy = checkpoint.workspace("conversation-legacy")
+    _git("worktree", "add", "--detach", str(legacy), "HEAD", cwd=world.root)
+    assert (legacy / record).exists()
+    checkpoint.checkout(workspace_id="conversation-legacy")
+    assert not (legacy / record).exists()
+    assert _git("status", "--porcelain", cwd=legacy) == ""

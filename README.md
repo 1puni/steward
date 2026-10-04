@@ -183,7 +183,7 @@ voice, built on top. GG is the voice. Steward is the workshop.)
 
 ## Five minutes, then an afternoon
 
-Python 3.11+, Git, rsync and [`uv`](https://docs.astral.sh/uv/). macOS or Linux is fine
+Python 3.11+, Git and [`uv`](https://docs.astral.sh/uv/). macOS or Linux is fine
 for this part.
 
 ```sh
