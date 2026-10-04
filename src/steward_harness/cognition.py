@@ -47,6 +47,8 @@ class CognitionRequest:
     # The accepted lineage owns storage, not a turn id or a checkout path.
     native_owner: str | None = None
     native_generation: Callable[[ProviderFamily], int] = lambda _provider: 1
+    # Where this run's native records are committed; see RuntimeRequest.
+    record_checkout: Path | None = None
     # Pins the model of the first provider in `provider_order` only.
     model: ModelChoice | None = None
     # An ordered model list's exact choice per provider. A provider named here
@@ -213,6 +215,7 @@ class Cognition:
                         resolved=resolved,
                         native_owner=request.native_owner,
                         native_generation=request.native_generation(provider),
+                        record_checkout=request.record_checkout,
                         provider_session_id=provider_session_id,
                         prompt=request.prompt,
                         cwd=request.cwd,

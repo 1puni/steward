@@ -8,11 +8,11 @@ to materialize `artefacts/`; see `leave_to_git`.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
-import stat
 import subprocess
 import sys
 
@@ -38,10 +38,11 @@ def check_headroom(paths: list[Path], required: int = 0) -> None:
             raise RuntimeError('native evidence storage reserve reached; retain evidence and stop new native work')
 
 
-def _git(workspace: Path, *args: str, input_text: str | None = None) -> str:
+def _git(workspace: Path, *args: str, input_text: str | None = None,
+         env: dict[str, str] | None = None) -> str:
     result = subprocess.run(
         ['git', *args], cwd=workspace, input=input_text, capture_output=True, text=True,
-        timeout=240, check=False, env={**os.environ, **_GIT_ENV},
+        timeout=240, check=False, env={**os.environ, **_GIT_ENV, **(env or {})},
     )
     if result.returncode:
         raise RuntimeError(f'native record capture: git {args[0]} failed: {result.stderr.strip()[-500:]}')
@@ -51,35 +52,47 @@ def _git(workspace: Path, *args: str, input_text: str | None = None) -> str:
 def capture(home: Path, mappings: dict[str, str], workspace: Path) -> int:
     """Stage every record under home/<name> at <relative>/... in `workspace`'s index.
 
+    Each mapping keeps a private Git index in the home, so Git's stat cache
+    hashes only what changed since the last capture into this repository.
     Entries are marked skip-worktree: the checkout does not hold these files,
     and a later `git add --all` must not read their absence as deletion. Files
     the provider removed stay in Git; capture only adds and updates.
     """
-    entries: list[tuple[str, Path]] = []
+    roots = {name: home / name for name in mappings}
+    if not any(files for root in roots.values() if root.is_dir() and not root.is_symlink()
+               for _, _, files in os.walk(root)):
+        return 0  # Nothing written, so nothing to ask Git about.
+    git_dir = _git(workspace, 'rev-parse', '--absolute-git-dir').strip()
+    common = _git(workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip()
+    # Blobs live in one repository; an index from another would name missing ones.
+    tag = hashlib.sha256(common.encode()).hexdigest()[:16]
+    entries: list[tuple[str, str, str]] = []
     for name, relative in mappings.items():
         root = home / name
         if root.is_symlink() or not root.is_dir():
             continue
-        for directory, dirs, files in os.walk(root, followlinks=False):
-            dirs.sort()
-            for file in sorted(files):
-                path = Path(directory) / file
-                if stat.S_ISREG(path.lstat().st_mode):
-                    entries.append((relative + '/' + path.relative_to(root).as_posix(), path))
+        index = home / f'.steward-index-{tag}-{name}'
+        # Only this capture writes this index; a lock left by a killed one is stale.
+        Path(str(index) + '.lock').unlink(missing_ok=True)
+        private = {'GIT_DIR': git_dir, 'GIT_WORK_TREE': str(root), 'GIT_INDEX_FILE': str(index)}
+        _git(root, 'add', '--all', '--force', '--', '.', env=private)
+        for line in _git(root, 'ls-files', '--stage', '-z', env=private).split('\0'):
+            if not line:
+                continue
+            meta, path = line.split('\t', 1)
+            mode, blob, _ = meta.split(' ')
+            if mode in {'100644', '100755'}:
+                entries.append((mode, blob, f'{relative}/{path}'))
     if not entries:
         return 0
-    blobs = _git(workspace, 'hash-object', '-w', '--no-filters', '--stdin-paths',
-                 input_text=''.join(f'{path}\n' for _, path in entries)).split()
-    if len(blobs) != len(entries):
-        raise RuntimeError('native record capture: git hashed a different number of records')
     _git(workspace, 'update-index', '--add', '-z', '--index-info', input_text=''.join(
-        f'100644 {blob}\t{target}\0' for (target, _), blob in zip(entries, blobs)))
+        f'{mode} {blob}\t{target}\0' for mode, blob, target in entries))
     _git(workspace, 'update-index', '-z', '--skip-worktree', '--stdin',
-         input_text=''.join(f'{target}\0' for target, _ in entries))
+         input_text=''.join(f'{target}\0' for _, _, target in entries))
     # A checkout from before capture may still hold an older copy. The home is
     # the authority now; left in place, a later release would commit it back.
     root = Path(os.path.realpath(workspace))
-    for target, _ in entries:
+    for _, _, target in entries:
         stale = workspace / target
         if Path(os.path.realpath(stale.parent)) == root / Path(target).parent and stale.is_file():
             stale.unlink()

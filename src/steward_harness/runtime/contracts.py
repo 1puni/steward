@@ -225,6 +225,9 @@ class RuntimeRequest:
     timeout_seconds: int | None
     native_owner: str | None = None
     native_generation: int = 1
+    # The Git checkout whose index receives this run's native records, whatever
+    # the run may write itself. None means `cwd` when writable, else nowhere.
+    record_checkout: Path | None = None
     # Output tokens, reasoning included, after which the run is stopped the
     # way a deadline stops it. None means unmetered.
     token_budget: int | None = None
@@ -253,6 +256,8 @@ class RuntimeRequest:
             raise ValueError("Prompt must be non-empty and bounded")
         if not self.cwd.is_absolute():
             raise ValueError("Working directory must be absolute")
+        if self.record_checkout is not None and not self.record_checkout.is_absolute():
+            raise ValueError("Record checkout must be absolute")
         if self.timeout_seconds is not None and self.timeout_seconds < 1:
             raise ValueError("Timeout must be at least 1 second")
         if self.token_budget is not None and self.token_budget < 1:

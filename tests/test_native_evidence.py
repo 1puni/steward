@@ -109,3 +109,23 @@ def test_capture_removes_an_older_checkout_copy_of_a_home_record(tmp_path, world
     native_evidence.leave_to_git(world)
     _git(world, 'add', '--all')
     assert _git(world, 'show', ':artefacts/codex/sessions/rollout.jsonl') == 'old\nnew\n'
+
+
+def test_capture_keeps_a_private_index_per_repository(tmp_path, world):
+    home = tmp_path / 'home'
+    (home / 'sessions').mkdir(parents=True)
+    (home / 'sessions/a.jsonl').write_text('a')
+    other = tmp_path / 'other'
+    other.mkdir()
+    _git(other, 'init', '-q')
+    native_evidence.capture(home, {'sessions': 'artefacts/codex/sessions'}, world)
+    native_evidence.capture(home, {'sessions': 'artefacts/codex/sessions'}, other)
+    assert len(list(home.glob('.steward-index-*-sessions'))) == 2
+    for repository in (world, other):
+        assert _git(repository, 'show', ':artefacts/codex/sessions/a.jsonl') == 'a'
+    # A lock left by a killed capture does not wedge the next one.
+    index = next(home.glob('.steward-index-*-sessions'))
+    (index.parent / (index.name + '.lock')).write_text('')
+    (home / 'sessions/a.jsonl').write_text('a2')
+    native_evidence.capture(home, {'sessions': 'artefacts/codex/sessions'}, world)
+    assert _git(world, 'show', ':artefacts/codex/sessions/a.jsonl') == 'a2'
