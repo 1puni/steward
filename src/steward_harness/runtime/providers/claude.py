@@ -6,7 +6,7 @@ from steward_harness.runtime.task_call_mcp import server_config
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from threading import RLock
@@ -34,6 +34,7 @@ from steward_harness.runtime.process import ProcessController, ProcessInput
 # A finite mitigation, not disabled cleanup. Claude 2.1.281 rejects zero.
 NATIVE_RETENTION_DAYS = 365000
 _MAX_RESPONSE_CHARS = 64_000
+_MAX_ACTIVITY_CHARS = 120
 _SANDBOX_SETTINGS = json.dumps(
     {
         "sandbox": {
@@ -127,11 +128,13 @@ class _ClaudeLifecycle:
         provider: str,
         *,
         sensitive_event_value: str | None = None,
+        on_progress: Callable[[str], None] = lambda _activity: None,
         allow_empty_output: bool = False,
     ) -> None:
         self._expected_session_id = expected_session_id
         self._provider = provider
         self._sensitive_event_value = sensitive_event_value
+        self._on_progress = on_progress
         self._allow_empty_output = allow_empty_output
         self.failure: RuntimeExecutionError | RuntimeUnavailable | None = None
         self.session_id: str | None = None
@@ -194,6 +197,7 @@ class _ClaudeLifecycle:
                 isinstance(block, dict) and block.get("type") == "tool_use"
                 for block in (content if isinstance(content, list) else ())
             )
+            self._report_activity(event)
         if event_type == "assistant" and event.get("parent_tool_use_id") is None:
             code = event.get("error")
             message = "\n".join(
@@ -240,6 +244,35 @@ class _ClaudeLifecycle:
                 session_id=self.session_id,
             )
         return self._output, self.session_id, self.effective_model
+
+    def _report_activity(self, event: Mapping[str, Any]) -> None:
+        """Narrate this turn's tool activity without touching lifecycle state.
+
+        Progress is advisory. A consumer that raises must not turn a healthy
+        turn into a failed one, so callback errors are dropped here rather
+        than escaping into stream validation.
+        """
+        content = event.get("message", {}).get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            arguments = block.get("input")
+            detail = ""
+            if isinstance(arguments, Mapping):
+                for key in ("file_path", "pattern", "query", "url", "command"):
+                    value = arguments.get(key)
+                    if isinstance(value, str) and value.strip():
+                        detail = value.strip()
+                        break
+            try:
+                self._on_progress(f"{name} {detail}".strip()[:_MAX_ACTIVITY_CHARS])
+            except Exception:
+                continue
 
     def _error(self, message: str) -> RuntimeExecutionError | RuntimeUnavailable:
         """Build the turn-ending error, or the refusal that tries someone else.
@@ -605,6 +638,7 @@ class ClaudeRuntime:
             session_id,
             self.display_name,
             sensitive_event_value=environment.get("ANTHROPIC_AUTH_TOKEN"),
+            on_progress=request.on_progress,
             allow_empty_output=request.allow_empty_output,
         )
         stream = ClaudeInputStream(request, lifecycle)
