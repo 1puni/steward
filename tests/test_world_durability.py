@@ -244,8 +244,7 @@ def test_empty_completion_still_accepts_world_and_replays(tmp_path, monkeypatch)
         raise OSError("capture unavailable")
     monkeypatch.setattr(checkpoint, "retain", fail)
     arguments = dict(transport="telegram", transport_key="topic", source_event_key="result",
-                     operator_id="harness:task-result", text="Assess retained findings.",
-                     allow_empty_output=True)
+                     operator_id="operator", text="Retain the requested decision.")
     with pytest.raises(OSError):
         service.run_turn(**arguments)
     monkeypatch.setattr(checkpoint, "retain", retain)
@@ -955,23 +954,21 @@ def test_an_operator_message_is_remembered_as_the_operator_wrote_it(tmp_path):
     assert recorded["user"] == "Establish the private handoff."
 
 
-def test_an_empty_reply_releases_its_owner_like_any_provider_failure(tmp_path):
+def test_empty_ordinary_native_completion_accepts_its_own_work(tmp_path):
     class Quiet(EditingCognition):
-        quiet = True
-
         def run(self, request, **kwargs):
-            result = super().run(request, **kwargs)
-            return replace(result, output="") if self.quiet else result
+            return replace(super().run(request, **kwargs), output="")
 
     state, checkpoint, service, cognition = runtime(tmp_path, Quiet())
-    with pytest.raises(RuntimeError, match="empty world-session reply"):
-        run(service, "quiet")
+    accepted = run(service, "quiet")
+    assert accepted.reply_text == ""
     assert state.claimed_turns() == []
-    cognition.quiet = False
-    accepted = run(service, "next")
-    assert _task_id(accepted) is not None
-    # The empty turn's edit was kept in the checkout for the next source.
     assert (checkpoint.world.root / "decision.md").is_file()
+    assert len(state.tasks.all()) == 1
+    assert state.prepared_turn(str(accepted.turn_id))["state"] == "completed"
+    replayed = run(service, "quiet")
+    assert replayed.turn_id == accepted.turn_id
+    assert cognition.calls == 1
 
 
 def test_a_storage_refusal_before_any_provider_leaves_the_source_to_replay(tmp_path):

@@ -103,7 +103,6 @@ def work():
     pathlib.Path("draft.py").unlink()  # half-written drafts never reach closure
     pathlib.Path("result.txt").write_text("consumer: src/feed.py\n")
     signal("child-stopped")
-    assert steward_call(operation="close", key="finish", subject="docs: record the feed consumer", disposition="idle")["pending"]
     return "Traced the consumer to src/feed.py."
 '''
 

@@ -53,7 +53,7 @@ or mechanisms that are demonstrably obsolete.
 ## Communication
 
 Write concise findings, including when the evidence establishes no new issue or
-leaves a question unresolved. Complete the normal task closure. The owning
+leaves a question unresolved. Finish the native turn normally; no completion call or suffix is needed. The owning
 conversation assesses the findings and handles communication with the operator.
 
 To recommend follow-up work, describe the repository, concrete change and reason

@@ -28,7 +28,7 @@ This is a read-only procedure. Use git log, git show and other read-only tools
 to inspect the evidence. Do not edit files.
 Do not stage or commit, change HEAD or the index, push or deploy.
 Return findings in your final response; the harness writes and commits the account.
-The close operation supplies a subject for that harness checkpoint."""
+The harness derives completion from the successful native turn."""
 
 
 RHYTHM_FINDINGS = NOTIFY_DIRECTIVE
@@ -42,25 +42,24 @@ Observations confer no authority.
 Use ordinary questions for operator decisions.'''
 
 _TASK_CLOSURE = """\
-## Close this task execution
-Call the native steward_tasks task tool with operation="close", key, subject
-(one concise conventional commit subject) and disposition (continue, idle or ask).
-Only ask takes a question field containing the blocking question; otherwise omit it.
-Finish your work before making this call. Repeat the identical request and key
-only to recover a lost receipt. Conflicting calls fail closed. A pending receipt
-is intent, not accepted completion: the harness must tear down the writer and
-bind the decision to the settled candidate first. Later task input invalidates
-stale intent. Without a working tool no idle disposition can be accepted.
-Your final response is retained as findings; it has no required suffix.
+## Finish this task execution
+Finish the work and return your findings normally. Successful native turn completion
+lets the harness checkpoint the settled tree; no close call, special final wording,
+or diff is required. Your final response is retained as findings.
 
-Use continue when more work on this exact accepted task remains. Use ask only
-when you cannot proceed without an operator answer, and provide that question.
-Use idle when this task is finished: retained changes then go through the
-configured gates, publication and deployment; a task without repository changes
-returns its findings. A turn without a diff still needs this disposition.
-{ownership_query}
-Report what you actually observed; do not claim publication or deployment.
-The harness validates your closure and checkpoints the actual final tree."""
+If you must stop with more work remaining, use the existing steward_tasks tool with
+operation="close", key, subject and disposition="continue". If blocked on an operator
+answer, use disposition="ask" and a question field containing that question. These
+explicit states are needed because native question and ongoing-work callbacks are
+not yet mapped to task state. A question in final prose alone cannot establish a wait.
+Only ask takes question. A subject is one concise conventional commit subject.
+Repeat an identical request and key only to recover a lost receipt.
+
+Native completion is source completion. Retained changes still pass configured gates,
+publication and deployment; report only what you observed. Outstanding accepted input
+may require another execution. Cancellation and failed native execution do not complete
+work. The harness waits for writer teardown before checkpointing.
+{ownership_query}"""
 
 
 def _understanding_block(understanding: tuple[str, str] | None) -> str:
@@ -89,7 +88,7 @@ only if the accepted task has not changed since that base, and answers with a
 Steward message naming the accepted revision to use as your next base, or the
 reason it was not accepted. Writing the ref is a request, not an acknowledgement.
 Acceptance records understanding only: it does not commit product files, publish,
-or replace this execution's closure, and your subagents keep working. As parent,
+or end this execution, and your subagents keep working. As parent,
 consolidate what your subagents report before offering it."""
 
 
@@ -235,7 +234,7 @@ def build_procedure_scope(
         return scope
     return scope + (
         "\nFinish with VERDICT: PASS or VERDICT: FAIL for the accepted procedure's scope, "
-        "plus normal task closure. Ask if evidence is insufficient; "
+        "then finish the native turn normally. Ask if evidence is insufficient; "
         "never infer PASS from missing evidence."
     )
 

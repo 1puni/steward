@@ -671,7 +671,7 @@ class TaskRunner:
                 lineage.provider if lineage.provider_session_id is not None else None
             ),
             sandbox_mode=procedure.access if procedure else "workspace-write",
-            allow_empty_output=True,  # The close operation owns disposition, not narration.
+            allow_empty_output=True,  # Native completion owns success, not narration.
             on_session_started=session_started,
             on_session_invalidated=session_invalidated,
             on_input_ready=input_ready,
@@ -742,7 +742,7 @@ class TaskRunner:
             reason=closure.blocking_question,
             findings=closure.findings,
             execution=calls.execution,
-            task_revision=calls.revision,
+            task_revision=live.baseline,
         )
         log.info("Task %s checkpoint: %s", task.task_id, closure.subject)
 

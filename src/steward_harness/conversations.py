@@ -29,9 +29,7 @@ from steward_harness.state import (
     ConversationId,
     StateDatabase,
     TaskAdmission,
-    TaskAction,
     TaskId,
-    TaskSpec,
     Turn,
     TurnId,
 )
@@ -61,69 +59,18 @@ class ConversationTurnResult:
         return self.reply_text if self.execution_turn_id is None else ""
 
 
-@dataclass(frozen=True, slots=True)
-class ParsedTaskIntent:
-    """One final-line admission or steering proposal and its visible reply."""
+def _retired_task_markers(reply: str) -> tuple[str, str | None]:
+    """Hide retired control lines and refuse their authority, regardless of syntax.
 
-    reply_text: str
-    spec: TaskSpec | None
-    error: str | None = None
-    action: TaskAction | None = None
-
-
-def parse_task_intent(reply: str) -> ParsedTaskIntent:
-    """Parse one admission or steering object from the final nonblank line."""
+    Historical completed turns replay their accepted receipts. Unaccepted output
+    is only narration; parsing an old proposal cannot make it an operation.
+    """
     lines = reply.rstrip().splitlines()
-    marker_lines = [
-        index
-        for index, line in enumerate(lines)
-        if line.startswith((_TASK_MARKER, _ACTION_MARKER))
-    ]
-    if not marker_lines:
-        return ParsedTaskIntent(reply.strip(), None)
-
-    visible = "\n".join(
-        line for index, line in enumerate(lines) if index not in marker_lines
-    ).strip()
-    if len(marker_lines) != 1 or marker_lines[0] != len(lines) - 1:
-        return ParsedTaskIntent(visible, None, "marker must be the final line")
-
-    is_action = lines[-1].startswith(_ACTION_MARKER)
-    marker = _ACTION_MARKER if is_action else _TASK_MARKER
-    payload = lines[-1][len(marker) :].strip()
-    try:
-        value = json.loads(payload)
-    except json.JSONDecodeError:
-        return ParsedTaskIntent(visible, None, "marker is not valid JSON")
-    if is_action:
-        if not isinstance(value, dict) or set(value) != {"task_id", "action", "text"}:
-            return ParsedTaskIntent(
-                visible, None, "action must contain task_id, action, and text"
-            )
-        if not all(isinstance(item, str) for item in value.values()):
-            return ParsedTaskIntent(visible, None, "action fields must be strings")
-        try:
-            action = TaskAction(
-                TaskId(value["task_id"]), value["action"], value["text"].strip()
-            )
-        except ValueError as error:
-            return ParsedTaskIntent(visible, None, str(error))
-        return ParsedTaskIntent(visible, None, action=action)
-    if not isinstance(value, dict) or set(value) != {"repository", "title", "brief"}:
-        return ParsedTaskIntent(
-            visible, None, "task must contain repository, title, and brief"
-        )
-    if not all(isinstance(value[field], str) for field in value):
-        return ParsedTaskIntent(visible, None, "task fields must be strings")
-    try:
-        spec = TaskSpec(
-            repository=value["repository"].strip(),
-            title=value["title"].strip(),
-            brief=value["brief"].strip(),
-        )
-    except ValueError as error:
-        return ParsedTaskIntent(visible, None, str(error))
-    return ParsedTaskIntent(visible, spec)
+    visible = [line for line in lines if not line.startswith((_TASK_MARKER, _ACTION_MARKER))]
+    rejection = None if len(visible) == len(lines) else (
+        "Final task markers are retired; use a live task call and its receipt. No operation was performed."
+    )
+    return "\n".join(visible).strip(), rejection
 
 
 class ConversationService:
@@ -204,7 +151,7 @@ class ConversationService:
         episode_input: str | None = None,
         images: tuple[Path, ...] = (),
         ongoing_only: bool = False,
-        allow_empty_output: bool = False,
+        allow_empty_output: bool = True,
         procedure: ProcedureConfig | None = None,
         reserved_rhythm: bool = False,
         notify_owner: str | None = None,
@@ -328,7 +275,7 @@ class ConversationService:
         episode_input: str,
         images: tuple[Path, ...],
         live_input: bool,
-        allow_empty_output: bool = False,
+        allow_empty_output: bool = True,
         procedure: ProcedureConfig | None = None,
         keep_unclaimed: bool = False,
         notify_owner: str | None = None,
@@ -518,7 +465,7 @@ class ConversationService:
         candidate_sha = checkpoint.retain(
             WorldTurnWorktree(checkpoint.workspace(ConversationId(row["conversation_id"]).workspace),
                               row["base_sha"]),
-            event_id, row["episode_input"], parse_task_intent(row["output"]).reply_text,
+            event_id, row["episode_input"], _retired_task_markers(row["output"])[0],
             row["source_event_key"],
         )
         self._state.record_candidate(event_id, candidate_sha)
@@ -647,22 +594,9 @@ class ConversationService:
             current = self._state.prepared_turn(event_id)
             if current["state"] == "completed":
                 return current
-            parsed = parse_task_intent(current["output"])
-            rejection = (
-                f"Malformed task proposal: {parsed.error}." if parsed.error else None
-            )
-            # Completed historical turns replay their existing receipt above.
-            # Unaccepted markers never gain authority on upgrade or recovery.
-            spec = action = None
-            if parsed.spec is not None or parsed.action is not None:
-                rejection = "Final task markers are retired; use a live task call and its receipt. No operation was performed."
+            visible, rejection = _retired_task_markers(current["output"])
             return self._state.accept_turn(
-                event_id,
-                visible_reply=parsed.reply_text,
-                spec=spec,
-
-                action=action,
-                rejection=rejection,
+                event_id, visible_reply=visible, spec=None, rejection=rejection,
             )
 
         if fresh and row["world_root"] is not None:

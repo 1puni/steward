@@ -53,7 +53,6 @@ def _native(tmp_path, *, finish_after=None, final="Worked past the provider dead
         if {finish_after!r} is not None:
             time.sleep({finish_after!r})
             pathlib.Path('result.txt').write_text('completed past the former deadline\\n')
-            assert steward_call(operation='close', key='finish', subject='feat: long native work', disposition='idle')['pending']
             emit(type='result', user_message_uuid=command['uuid'], subtype='success',
                  terminal_reason='completed', usage={{}}, result={final!r})
         else:
@@ -232,7 +231,7 @@ def test_a_finite_deadline_must_still_be_positive(tmp_path, timeout):
         )
 
 
-def test_native_tool_close_accepts_no_final_narration(tmp_path):
+def test_native_completion_accepts_no_close_or_final_narration(tmp_path):
     state, runner, task_id, bare, adapter, pids, heartbeat = _native(
         tmp_path, finish_after=0.1, final="")
     run_task(runner)

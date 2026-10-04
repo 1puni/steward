@@ -359,15 +359,18 @@ class TaskExecutionCalls:
     def closure(self, findings):
         """Resolve only after the native writer and its descendants are torn down.
 
-        The caller commits this decision onto the settled tree. A lost execution
-        has no accepted closure; its intent cannot be replayed into a new writer.
+        Call only after successful cognition: adapters validate correlated native
+        completion and containment. Process exit or a lost execution is not success.
+        Explicit ask/continue remains necessary until native questions and ongoing
+        work have a controller mapping. Final prose never selects disposition.
         """
         from dataclasses import replace
-        if self.intent is None or self.conflicted:
-            raise ValueError("missing or conflicting close operation")
-        if self.state.tasks.read(self.task_id)[0] != self.revision:
-            raise ValueError("task changed after close intent; work retained for continuation")
-        return replace(self.intent[1], findings=findings or "")
+        from steward_harness.landing.checkpoint import TickClosure
+        if self.conflicted:
+            raise ValueError("conflicting close operations")
+        decision = self.intent[1] if self.intent else TickClosure(
+            "steward: complete native task execution", "idle")
+        return replace(decision, findings=findings or "")
 
     def _close(self, request):
         from steward_harness.landing.checkpoint import TickClosure
@@ -401,7 +404,12 @@ class TaskExecutionCalls:
             with self.state.tasks.lease:
                 if self.state.tasks.cancelled(self.task_id):
                     raise ValueError("task was cancelled")
-                return self._close(request)
+                try:
+                    return self._close(request)
+                except ValueError:
+                    # An invalid explicit wait must not become implicit success.
+                    self.conflicted = True
+                    raise
         if not isinstance(request, dict) or request.get("operation") != "notify":
             return self.query(request)
         if set(request) != {"operation", "key", "text"}:

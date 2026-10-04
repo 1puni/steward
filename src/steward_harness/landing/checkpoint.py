@@ -25,7 +25,7 @@ class WorktreeCheckpointError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class TickClosure:
-    """Typed model proposal closing one coding tick over the staged diff."""
+    """Settled execution disposition over the staged diff."""
 
     subject: str
     disposition: Literal["continue", "idle", "ask"]

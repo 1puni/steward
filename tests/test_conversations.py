@@ -253,7 +253,9 @@ def test_final_marker_is_refused_without_replay_admission(tmp_path):
 @pytest.mark.parametrize(
     ("marker", "expected"),
     [
-        ("TASK_PROPOSAL: not-json", "Malformed task proposal"),
+        ("TASK_PROPOSAL: not-json", "markers are retired"),
+        ("TASK_ACTION: not-json\nMore narration.", "markers are retired"),
+        ("TASK_ACTION: {}\nTASK_PROPOSAL: {}", "markers are retired"),
         (
             'TASK_PROPOSAL: {"repository":"other","title":"X","brief":"Y"}',
             "markers are retired",

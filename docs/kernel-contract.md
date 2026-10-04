@@ -204,8 +204,10 @@ tasks; native work becomes a harness task only when it needs its own scope, admi
 or deliverable. A native subtask ID is correlation, not a task ID.
 
 Admission creates the accepted task document. A slice holds the task lock, resumes its
-native session, then commits its findings and a validated closure on the `tasks/<id>`
-branch.
+native session, then derives completion from successful native execution after writer
+teardown and commits findings and disposition on the `tasks/<id>` branch. No model
+close call is required; explicit waits and continuation use the existing optional
+decision primitive until their native mappings exist.
 
 The controller fetches that commit's object graph and accepts the decision with the work
 retained as a parent. These are separate crash boundaries: before acceptance, the local native

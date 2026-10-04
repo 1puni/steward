@@ -54,15 +54,17 @@ def test_task_prompt_allows_native_local_work_but_not_publication() -> None:
     assert "Do not stage or commit" not in prompt
 
 
-def test_task_execution_supplies_its_own_bounded_closure() -> None:
+def test_task_execution_finishes_natively_with_explicit_wait_escape() -> None:
     prompt = prompts.build_task_prompt(
         title="Change behavior", repository="app", procedure_scope="",
         brief="Do the thing.",
     )
-    assert 'operation="close"' in prompt
+    assert "no close call" in prompt
+    assert 'disposition="ask"' in prompt
+    assert 'disposition="continue"' in prompt
     assert 'Your final response is retained as findings' in prompt
     assert 'DISPOSITION:' not in prompt and 'QUESTION:' not in prompt
-    assert "configured gates, publication and deployment" in prompt
+    assert "publication and deployment" in prompt
 
 
 def test_requirement_audit_is_asked_for_the_verdict_its_gate_reads() -> None:
