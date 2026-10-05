@@ -28,7 +28,7 @@ from steward_harness.lease import Lease, Busy
 # every pass, because those are the states that need the loop.
 SATISFIED_REOBSERVE_SECONDS = 60.0
 
-# What is retained about a target is its outcome, never its progress.
+# What a person is told about a target is its outcome, never its progress.
 # Pending, busy, awaiting evidence and a moved ref are the loop doing its job;
 # on a live instance they were two thirds of every deploy's messages, and each
 # one handed to an owning task cost a full model turn to say "nothing to do".
@@ -137,8 +137,8 @@ class Targets:
         return None
 
     def _retain_result(self, name, message, repository, revision, observed, status):
-        # Only the exact published outcome supplies a task recipient. Failures
-        # without an owning task go to the operator.
+        # Only the exact published outcome supplies a task recipient. A push
+        # without an owning task still owes the operator its outcome.
         outcome = self._outcome(name, status)
         if outcome is None:
             return
@@ -174,7 +174,9 @@ class Targets:
             elif (was_revision, was) == (revision, "failed"):
                 reply = f"{name} recovered; target satisfied at {short}."
             else:
-                reply = ""
+                reply = f"{name}: target satisfied at {short}."
+            if outcome == "satisfied" and observed and observed.details == "no sites declared":
+                reply += f"\n{str(observed.details)[:1000]}"
             receipt = {
                 "owner": owner, "task_id": task_id, "source_key": source,
                 "target": name, "sequence": sequence, "observation": identity,
@@ -182,13 +184,10 @@ class Targets:
                                f"Desired revision: {revision}\n{message}\n"
                                + (f"Observed: {observed.model_dump_json()}" if observed else "No driver observation available."),
             }
-            # Routine success is evidence, not a send decision. Several targets
-            # can observe the same publication; none owes a second completion
-            # message. Persistent failures and their recovery still warrant attention.
+            # Live is fully stated by the observation, so an owner's model could
+            # only restate it. A failure is owed the owner's assessment.
             if task_id is None or outcome == "satisfied":
                 receipt["reply"] = reply
-                if not reply:
-                    receipt["done"] = True
             self.state.save_result_receipt(receipt)
 
     def _satisfied_age(self, name, revision):
