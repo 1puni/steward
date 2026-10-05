@@ -615,6 +615,7 @@ class ProcedureRhythmConfig(BaseModel):
     input: str
     owner: str | None  # Explicit null retains findings without assessment/delivery.
     workdir: str | None = None
+    drive_tasks: bool = False
     # What counts as input. For a world rhythm, world paths whose change since
     # its last accepted run is its input; for an organisation (`workdir`)
     # rhythm, the prefixes of its activity keys, such as `repositories/app/main`.
@@ -622,6 +623,8 @@ class ProcedureRhythmConfig(BaseModel):
 
     @model_validator(mode="after")
     def validates_workdir(self):
+        if self.drive_tasks and (self.input != "world" or self.workdir is not None or not self.owner):
+            raise ValueError("drive_tasks requires a world rhythm with a result owner")
         if self.workdir is not None:
             _require_bounded_absolute("rhythm workdir", self.workdir)
         if (self.schedule is None) == (self.after is None):

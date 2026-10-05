@@ -152,6 +152,7 @@ class ConversationService:
         procedure: ProcedureConfig | None = None,
         reserved_rhythm: bool = False,
         notify_owner: str | None = None,
+        drive_tasks: bool = False,
         automatic: bool = False,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
@@ -256,6 +257,7 @@ class ConversationService:
             procedure=procedure,
             keep_unclaimed=reserved_rhythm,
             notify_owner=notify_owner,
+            drive_tasks=drive_tasks,
             automatic=automatic,
         )
         assert isinstance(accepted, ConversationTurnResult)
@@ -274,6 +276,7 @@ class ConversationService:
         procedure: ProcedureConfig | None = None,
         keep_unclaimed: bool = False,
         notify_owner: str | None = None,
+        drive_tasks: bool = False,
         automatic: bool = False,
     ) -> ConversationTurnResult | Turn:
         """Run, retain and accept one declared world-session turn.
@@ -348,10 +351,13 @@ class ConversationService:
                 base_sha=worktree.base_sha if worktree else None,
             )
             task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel,
-                                                 notify_owner=notify_owner, telegram_admin=self._telegram_admin))
-            if conversation.conversation_id.kind != "rhythm":
+                                                 notify_owner=notify_owner, telegram_admin=self._telegram_admin,
+                                                 drive_tasks=drive_tasks))
+            if conversation.conversation_id.kind != "rhythm" or drive_tasks:
                 prompt += "\n\n" + task_calls.prompt
-                if not automatic:
+                if drive_tasks:
+                    prompt += "\nThis rhythm may submit, answer, retry or note tasks for its configured owner. It cannot cancel tasks or resume cancelled work. Results return to the owner for normal assessment."
+                if not automatic and conversation.conversation_id.kind != "rhythm":
                     prompt += "\n" + REPLY_DIRECTIVE
             return CognitionRequest(
                 execution_id=event_id,

@@ -463,8 +463,14 @@ Health `ok` and `sha` still attest only the loaded release. They do not certify
 scheduler freshness, successful firing, or the quality of a reflection. Verify
 release identity, current admission state, and accepted execution separately.
 
-The turn cannot propose or steer tasks, because a rhythm has no transport to
-receive their results; it records suggested work in world files instead.
+By default the turn cannot propose or steer tasks. With `drive_tasks: true`,
+a world rhythm with a configured owner can submit repository tasks and use
+answer, retry and note on that owner's tasks. New tasks belong to the configured
+owner, so normal result delivery and assessment continue the work there.
+It cannot cancel tasks or resume cancelled work; unowned and other-topic tasks
+remain inaccessible. Repository allowlists, source receipts, session fences,
+publication gates and deployment policy still apply. Retries retain their exact
+request keys across intervals; a new interval is not a new work intent.
 `/rhythm list` shows both the current clock interval and the selected obligation
 key, which may be older. `/rhythm run` explicitly continues a held obligation or
 recovers retained completion; it refuses an extra accepted run. Admission pause
@@ -530,6 +536,7 @@ See [procedure construction](../src/steward_harness/procedures.py),
 
 A world rhythm may use the native task tool's `list` and `show` operations to
 inspect tasks belonging to its configured notification owner. It cannot inspect
-other topics' task bodies or mutate tasks. It can retain findings in its world
+other topics' task bodies. Without `drive_tasks`, it cannot mutate tasks.
+It can retain findings in its world
 and notify its owner of a new, actionable blocker. Recurrence does not grant
 permission to install controller configuration or change host access.

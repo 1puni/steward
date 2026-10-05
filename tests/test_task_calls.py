@@ -524,3 +524,56 @@ def test_ownerless_rhythm_cannot_read_unowned_tasks(tmp_path):
     turn, _ = state.start_turn(owner.conversation_id, 'quiet:1', 'harness:rhythm', 'quiet')
     with pytest.raises(ValueError, match='no task inspection owner'):
         TaskCalls(state, turn.turn_id)({'operation': 'list'})
+
+
+def test_driving_rhythm_admits_to_topic_and_replays_across_runs(tmp_path):
+    state = StateDatabase(tmp_path / 'state.db')
+    state.tasks.repositories = {'app'}
+    owner = state.open_conversation(ConversationId('rhythm:drive'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'drive:1', 'harness:rhythm', 'work')
+    calls = TaskCalls(state, turn.turn_id, notify_owner='telegram:0', drive_tasks=True)
+    receipt = calls(submission())
+    task_id = TaskId(receipt['task_id'])
+    assert state.tasks.get(task_id).owner == 'telegram:0'
+    state.tasks.create(TaskSpec('app', 'Waiting', 'Needs evidence'), task_id=TaskId('task-waiting'),
+                       owner='telegram:0')
+    from test_conversations import close_task_slice
+    close_task_slice(state, TaskId('task-waiting'), 'ask', detail='Evidence?')
+    answer = dict(operation='answer', key='evidence', task_id='task-waiting', text='Verified evidence')
+    assert calls(answer)['accepted']
+    assert calls(answer)['replayed']
+    state.tasks.create(TaskSpec('app', 'Blocked', 'Needs repair'), task_id=TaskId('task-blocked'),
+                       owner='telegram:0', hold='blocked', reason='Unavailable')
+    assert calls(dict(operation='retry', key='repair', task_id='task-blocked', text='Now available'))['accepted']
+    assert calls(dict(operation='note', key='detail', task_id=str(task_id), text='Relevant context'))['accepted']
+    assert state.tasks.get(TaskId('task-waiting')).status.value == 'queued'
+    # New invocation has a new source, but stable intent produces no duplicate task.
+    state.interrupt_turn(turn.turn_id, 'Parent interrupted after accepted calls')
+    later, _ = state.start_turn(owner.conversation_id, 'drive:2', 'harness:rhythm', 'work')
+    again = TaskCalls(state, later.turn_id, notify_owner='telegram:0', drive_tasks=True)
+    assert again(submission()) == receipt | {'replayed': True}
+    assert len(again({'operation': 'list'})['tasks']) == 3
+    with pytest.raises(ValueError, match='different request'):
+        again(submission() | {'brief': 'Changed'})
+
+
+def test_driving_rhythm_cannot_cross_authority_or_undo_cancellation(tmp_path):
+    state = StateDatabase(tmp_path / 'state.db')
+    state.tasks.repositories = {'app'}
+    owner = state.open_conversation(ConversationId('rhythm:drive'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'drive:1', 'harness:rhythm', 'work')
+    calls = TaskCalls(state, turn.turn_id, notify_owner='telegram:0', drive_tasks=True)
+    for name, task_owner in [('other', 'telegram:24'), ('unowned', None)]:
+        task_id, _ = state.tasks.create(TaskSpec('app', name, 'Work'), owner=task_owner)
+        with pytest.raises(ValueError, match='does not own'):
+            calls(dict(operation='answer', key=name, task_id=str(task_id), text='Proceed'))
+    with pytest.raises(ValueError, match='not authorized'):
+        calls(submission() | {'repository': 'private'})
+    task_id, _ = state.tasks.create(TaskSpec('app', 'Cancelled', 'Work'), owner='telegram:0')
+    state.tasks.cancel(task_id, 'Operator stopped', source='operator:stop')
+    with pytest.raises(ValueError, match='cancelled'):
+        calls(dict(operation='retry', key='resume', task_id=str(task_id), text='Proceed'))
+    with pytest.raises(ValueError, match='only notify'):
+        calls(dict(operation='cancel', key='stop', task_id=str(task_id), text='Stop'))
+    with pytest.raises(ValueError, match='only notify'):
+        TaskCalls(state, turn.turn_id, drive_tasks=True)(submission())
