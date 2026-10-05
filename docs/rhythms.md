@@ -527,3 +527,9 @@ See [procedure construction](../src/steward_harness/procedures.py),
 [task execution](../src/steward_harness/task_runner.py),
 [convergence journeys](../tests/test_rewrite_convergence.py), and the
 [target contract](automatic-deployment.md).
+
+A world rhythm may use the native task tool's `list` and `show` operations to
+inspect tasks belonging to its configured notification owner. It cannot inspect
+other topics' task bodies or mutate tasks. It can retain findings in its world
+and notify its owner of a new, actionable blocker. Recurrence does not grant
+permission to install controller configuration or change host access.

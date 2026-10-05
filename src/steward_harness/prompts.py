@@ -134,7 +134,7 @@ def build_turn_prompt(
     """Current machine interface, observations, and input for every execution."""
     # A rhythm owns no transport, so it cannot receive a task's result, and
     # it speaks to its owner only by opting in.
-    interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE] if transport == "rhythm"
+    interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE, "The native steward_tasks tool can inspect your configured notification owner's tasks: operation=list, or operation=show with task_id. Task mutations and Telegram cosmetics are unavailable to world rhythms."] if transport == "rhythm"
                  else [])
     if transport == "telegram":
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")

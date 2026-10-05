@@ -489,3 +489,38 @@ def test_task_reads_reject_expired_execution(tmp_path, operation, invalidate):
         state.bind_conversation_provider(owner.conversation_id, 'claude', 'replacement')
     with pytest.raises(ValueError, match='active execution'):
         calls(request)
+
+
+def test_telegram_capability_uses_bound_conversation(tmp_path):
+    seen = []
+    def during(request):
+        receipt = call(request.task_call_socket, operation='telegram', action='info', key='inspect', text='')
+        assert receipt['accepted']
+    service = _service(tmp_path, CallingCognition(during))
+    service._telegram_admin = lambda scope, request: seen.append((scope, request)) or {'accepted': True}
+    _turn(service, 'cosmetics')
+    assert seen[0][0] == 'telegram:chat:topic'
+
+
+def test_rhythm_can_inspect_only_its_notification_owners_tasks(tmp_path):
+    state = StateDatabase(tmp_path / 'state.db')
+    state.tasks.repositories = {'app'}
+    mine, _ = state.tasks.create(TaskSpec('app', 'Owned work', 'Read me'), owner='telegram:0')
+    other, _ = state.tasks.create(TaskSpec('app', 'Other work', 'Private'), owner='telegram:99')
+    owner = state.open_conversation(ConversationId('rhythm:review'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'review:1', 'harness:rhythm', 'review')
+    calls = TaskCalls(state, turn.turn_id, notify_owner='telegram:0')
+    assert [r['task_id'] for r in calls({'operation': 'list'})['tasks']] == [str(mine)]
+    assert calls({'operation': 'show', 'task_id': str(mine)})['brief'] == 'Read me'
+    with pytest.raises(ValueError, match='does not own'):
+        calls({'operation': 'show', 'task_id': str(other)})
+    with pytest.raises(ValueError, match='only notify'):
+        calls(dict(operation='answer', key='no', task_id=str(mine), text='Continue'))
+
+
+def test_ownerless_rhythm_cannot_read_unowned_tasks(tmp_path):
+    state = StateDatabase(tmp_path / 'state.db')
+    owner = state.open_conversation(ConversationId('rhythm:quiet'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'quiet:1', 'harness:rhythm', 'quiet')
+    with pytest.raises(ValueError, match='no task inspection owner'):
+        TaskCalls(state, turn.turn_id)({'operation': 'list'})

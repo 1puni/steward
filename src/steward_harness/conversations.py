@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal, cast
 
-from steward_harness.task_calls import TaskCalls, TaskCallServer, NOTIFY_DIRECTIVE
+from steward_harness.task_calls import TaskCalls, TaskCallServer, REPLY_DIRECTIVE
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
@@ -88,6 +88,7 @@ class ConversationService:
         desk_profile: ProviderProfile | None = None,
         telegram_actions: tuple[str, ...] = (),
         delivery_roots: tuple[str, ...] = (),
+        telegram_admin=None,
     ) -> None:
         if not provider_order or len(set(provider_order)) != len(provider_order):
             raise ValueError("conversation provider order must be nonempty and unique")
@@ -111,6 +112,7 @@ class ConversationService:
         self._workspace = workspace
         self._timeout_seconds = timeout_seconds
 
+        self._telegram_admin = telegram_admin
         self._telegram_actions = telegram_actions
         self._delivery_roots = delivery_roots
 
@@ -150,6 +152,7 @@ class ConversationService:
         procedure: ProcedureConfig | None = None,
         reserved_rhythm: bool = False,
         notify_owner: str | None = None,
+        automatic: bool = False,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
 
@@ -253,6 +256,7 @@ class ConversationService:
             procedure=procedure,
             keep_unclaimed=reserved_rhythm,
             notify_owner=notify_owner,
+            automatic=automatic,
         )
         assert isinstance(accepted, ConversationTurnResult)
         return accepted
@@ -270,6 +274,7 @@ class ConversationService:
         procedure: ProcedureConfig | None = None,
         keep_unclaimed: bool = False,
         notify_owner: str | None = None,
+        automatic: bool = False,
     ) -> ConversationTurnResult | Turn:
         """Run, retain and accept one declared world-session turn.
 
@@ -343,9 +348,11 @@ class ConversationService:
                 base_sha=worktree.base_sha if worktree else None,
             )
             task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel,
-                                                 notify_owner=notify_owner))
+                                                 notify_owner=notify_owner, telegram_admin=self._telegram_admin))
             if conversation.conversation_id.kind != "rhythm":
-                prompt += "\n\n" + task_calls.prompt + "\n" + NOTIFY_DIRECTIVE
+                prompt += "\n\n" + task_calls.prompt
+                if not automatic:
+                    prompt += "\n" + REPLY_DIRECTIVE
             return CognitionRequest(
                 execution_id=event_id,
                 task_call_socket=task_calls.path,
@@ -557,6 +564,7 @@ class ConversationService:
             transport_key=conversation.transport_key,
             source_event_key=source_event_key,
             operator_id="harness:task-result",
+            automatic=True,
             text=text,
             allow_empty_output=True,
             # The episode names the result; it does not restate it. Everything

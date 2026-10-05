@@ -524,3 +524,25 @@ message-to-result journey against a fake Bot API and a scripted provider. The
 [native probes](../experiments/native_sessions/README.md) drive real installed
 providers. Scripted cognition cannot establish provider behaviour, and a successful
 isolated probe cannot establish the health of a deployed steward.
+
+### Telegram cosmetics and delivery
+
+An operator conversation's final reply is delivered automatically. `notify` is
+an additional message, reserved for a distinct update. Automatic result
+assessment and world rhythms retain their finals and use explicit notifications.
+
+The native task tool supports `operation: telegram` with string fields `action`,
+`key`, and `text`. `info` requires empty text and returns only the configured
+group's title, description, photo identity, and the bot's cosmetic rights.
+`set_description` takes at most 255 characters; `set_photo` takes an absolute
+PNG/JPEG path below `telegram.delivery_roots`, bounded to 5 MB. Every path
+component is opened without following symlinks. Enable each mutation explicitly
+in `telegram.agent_actions`; the bot also needs Telegram's Change Group Info
+right. The capability cannot select another chat, read invite links, change
+membership, or grant permissions. Procedure tasks and world rhythms cannot
+invoke it. Use it only for operator-authorized cosmetics.
+
+The controller retains an intent before mutation and a verified read-back after
+mutation. Identical completed requests replay their receipt. An ambiguous
+mutation is retained for reconciliation, never blindly repeated. Stable keys
+are scoped to the conversation or task; changing content under a key is refused.
