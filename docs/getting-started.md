@@ -259,6 +259,11 @@ limits a new installation must not mistake for guarantees.
 
 ## Use the onboarding skill
 
+If this steward is expected to advance organisational priorities autonomously,
+continue with [completing onboarding](onboarding-completion.md). The first useful
+task above is one acceptance case, not proof of proactive follow-through or an
+installed configuration lifecycle.
+
 The fork includes [skills/org-onboarding/SKILL.md](../skills/org-onboarding/SKILL.md).
 Ask your setup agent to read that file and onboard the named organisation or
 repositories. It is an operator-side setup skill: it writes controller config and

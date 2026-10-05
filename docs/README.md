@@ -14,6 +14,7 @@ block is in the [kernel contract](kernel-contract.md#configuration).
 | Read | For |
 | --- | --- |
 | [Getting started](getting-started.md) | The executable tour, a real host installation, and a first task you can actually believe |
+| [Completing organisational onboarding](onboarding-completion.md) | Prove proactive work, schedule creation and retirement, delegated configuration, meaningful gates and recovery before declaring an organisational steward ready |
 | [Give it a body of work](ongoing-work.md) | What a task is, how to admit one, how it carries across executions, when to reach for a rhythm instead, and what the harness will not do for you |
 | [Ways to use and connect stewards](stewardship-arrangements.md) | One repository, an organisation, a personal steward, a person and their company; who owns what, and the current connection limits |
 | [Organisation onboarding skill](../skills/org-onboarding/SKILL.md) | Hand this to your setup agent: inspect each repository's *existing* release path and write only configuration that selects implemented behaviour |
