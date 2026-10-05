@@ -166,7 +166,8 @@ class KernelCommands:
         if name == "status":
             owners = tuple(sorted(locked_tasks(
                 self.state.tasks.locks_root)))
-            blocked = [r for r in self.state.pending_result_receipts() if r.get("delivery_error")]
+            blocked = [r for r in self.state.pending_result_receipts(include_undeliverable=True)
+                       if r.get("delivery_error")]
             delivery = "" if not blocked else "\nUndeliverable results: " + "; ".join(
                 f"{r.get('owner') or r.get('target', 'unowned')}: {r['delivery_error']}"
                 for r in blocked[:10]
@@ -809,7 +810,11 @@ class StewardDaemon:
 
         def deliver_result(owner: ConversationId) -> None:
             """Report one finished task back to the transport that admitted it."""
+            sending: str | None = None
+
             def send(text: str, source_key: str) -> None:
+                nonlocal sending
+                sending = source_key
                 if owner.kind == "desk" and desk_events is not None:
                     desk_events.append("reply", text, source_key)
                 elif owner.kind == "telegram" and self._telegram is not None:
@@ -823,8 +828,8 @@ class StewardDaemon:
             except TelegramContentRejected as error:
                 # Telegram answers this reply the same way every time (a deleted
                 # topic, say): name it undeliverable instead of retrying each pass.
-                receipt = state.retain_pending_result(owner)
-                if receipt is not None:
+                receipt = state.result_receipt(sending) if sending is not None else None
+                if receipt:
                     receipt["undeliverable"] = True
                     receipt["delivery_error"] = str(error)
                     state.save_result_receipt(receipt)
@@ -930,9 +935,6 @@ class StewardDaemon:
                 receipt.pop("delivery_error", None)
                 state.save_result_receipt(receipt)
             for owner in state.pending_task_result_conversations():
-                pending = state.pending_task_result_for(owner)
-                if pending and state.result_receipt(pending[2]).get("undeliverable"):
-                    continue  # Reported by /status; resending gets the same rejection.
                 error = route_error(owner)
                 if error:
                     receipt = state.retain_pending_result(owner)

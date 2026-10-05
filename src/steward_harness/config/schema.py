@@ -390,7 +390,7 @@ class ProviderConfig(BaseModel):
         for provider_id in (*order, *self.models, *self.native_homes, *self.native_credential_homes):
             if re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", provider_id) is None:
                 raise ValueError(f"invalid provider ID: {provider_id!r}")
-        for provider_id, path in {**self.native_homes, **self.native_credential_homes}.items():
+        for provider_id, path in (*self.native_homes.items(), *self.native_credential_homes.items()):
             _require_bounded_absolute(f"provider native home {provider_id!r}", path)
         paths = [Path(path).resolve() for path in self.native_homes.values()]
         for i, path in enumerate(paths):
@@ -771,7 +771,7 @@ class StewardConfig(BaseModel):
                      *[Path(t.driver).resolve() for t in self.targets.values()]):
             if any(path == root or root in path.parents for root in git_roots):
                 raise ValueError("procedure and target authority must be outside model-writable roots")
-        for path in self.provider.native_homes.values():
+        for path in (*self.provider.native_homes.values(), *self.provider.native_credential_homes.values()):
             native_home = Path(path).resolve()
             if any(root == native_home or root in native_home.parents for root in git_roots):
                 raise ValueError("native provider homes contain private runtime data and must be outside Git worlds and repositories")
@@ -825,6 +825,7 @@ class StewardConfig(BaseModel):
             _absolute_path(self.execution.tmpdir),
             _absolute_path(self.provider.workdir),
             *(_absolute_path(path) for path in self.provider.native_homes.values()),
+            *(_absolute_path(path) for path in self.provider.native_credential_homes.values()),
             *(
                 _absolute_path(repository.path)
                 for repository in self.repositories.values()

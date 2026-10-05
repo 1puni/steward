@@ -1330,7 +1330,8 @@ class StateDatabase:
                     TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}):
                 continue
             key = f"task_result:{task.task_id}:{task.outcome}:{status.value}"
-            if self.result_receipt(key).get("done"):
+            receipt = self.result_receipt(key)
+            if receipt.get("done") or receipt.get("undeliverable"):
                 continue
             yield task, key
 
@@ -1402,13 +1403,14 @@ class StateDatabase:
     def save_result_receipt(self, receipt: dict) -> None:
         write_receipt(self.result_receipt_path(receipt["source_key"]), receipt)
 
-    def pending_result_receipts(self) -> list[dict]:
+    def pending_result_receipts(self, *, include_undeliverable: bool = False) -> list[dict]:
         receipts = [
             json.loads(path.read_text())
             for path in self.result_receipt_path("").parent.glob("*.json")
         ]
         return sorted(
-            (receipt for receipt in receipts if not receipt.get("done")),
+            (receipt for receipt in receipts if not receipt.get("done")
+             and (include_undeliverable or not receipt.get("undeliverable"))),
             key=lambda receipt: (receipt.get("target", ""), receipt.get("task_id") or "",
                                  receipt.get("sequence", 0), receipt["source_key"]),
         )

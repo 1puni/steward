@@ -1021,6 +1021,23 @@ def test_result_rejected_by_telegram_is_undeliverable_not_retried(tmp_path):
     receipt = state.result_receipt("task_result:gone")
     assert receipt["undeliverable"] and "thread not found" in receipt["delivery_error"]
     assert not receipt.get("done")
+    assert not state.pending_task_result_conversations()
+    # A rejected message is parked, not a permanent lock on its conversation.
+    state.save_result_receipt({
+        "owner": "telegram:44", "task_id": None, "source_key": "notify:later",
+        "result_text": "New update", "reply": "New update",
+    })
+    daemon, queued, step = _result_pass(tmp_path, config, StateDatabase(state.path))
+    sent = []
+    daemon._telegram = SimpleNamespace(config=config.telegram,
+                                       send_result=lambda *args: sent.append(args))
+    step()
+    for key, work in queued:
+        if key[0] == "result":
+            work()
+    assert [args[2] for args in sent] == ["New update"]
+    assert state.result_receipt("task_result:gone") == receipt
+    assert state.pending_result_receipts(include_undeliverable=True) == [receipt]
 
 
 def test_status_exposes_undeliverable_receipts(tmp_path):
@@ -1028,9 +1045,43 @@ def test_status_exposes_undeliverable_receipts(tmp_path):
     commands.state.save_result_receipt({
         "owner": "telegram:99", "task_id": None, "source_key": "target_result:missing",
         "result_text": "Retained", "delivery_error": "route is not a configured Telegram topic",
+        "undeliverable": True,
     })
     reply = commands("status", None, 1, 42, 7)
     assert "Undeliverable results: telegram:99: route is not a configured Telegram topic" in reply
+
+
+def test_transport_rejection_marks_the_sent_receipt_when_a_new_notice_arrives(tmp_path):
+    from steward_harness.telegram.service import TelegramContentRejected
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    state.save_result_receipt(dict(owner="telegram:42", task_id=None, source_key="notify:z",
+                                  result_text="Rejected content", reply="Rejected content"))
+    daemon, queued, step = _result_pass(tmp_path, config, state)
+    sent = []
+
+    def send(_chat, _topic, text, key):
+        sent.append(key)
+        if key == "notify:z":
+            # This sorts ahead of the selected receipt while transport is busy.
+            state.save_result_receipt(dict(owner="telegram:42", task_id=None, source_key="notify:a",
+                                          result_text="New update", reply="New update"))
+            raise TelegramContentRejected("Bad Request: rejected content")
+
+    daemon._telegram = SimpleNamespace(config=config.telegram, send_result=send)
+    for _ in range(2):
+        queued.clear()
+        step()
+        for key, work in queued:
+            if key[0] == "result":
+                work()
+    assert sent == ["notify:z", "notify:a"]
+    assert state.result_receipt("notify:z")["undeliverable"]
+    assert state.result_receipt("notify:a")["done"]
+    assert not state.result_receipt("notify:a").get("undeliverable")
 
 
 def test_status_counts_what_rhythms_recorded_without_sending(tmp_path):

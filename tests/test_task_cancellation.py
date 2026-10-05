@@ -104,6 +104,8 @@ def test_cancel_quiet_native_work_preserves_work_without_publication(tmp_path):
     native, ready, stopped = _quiet_native(tmp_path)
 
     class Worker(EditingAdapter):
+        capabilities = native.capabilities
+
         def execute(self, request):
             super().execute(request)
             return native.execute(request)

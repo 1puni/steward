@@ -3,6 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -294,6 +295,7 @@ def test_owner_home_does_not_link_instance_runtime_state_or_other_owners(setup):
     assert (source / '.steward-owner-uninspected').is_dir()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux file leases")
 def test_readonly_owner_imports_only_its_requested_legacy_original(setup):
     source = setup[2]
     records = source / 'sessions'
@@ -419,6 +421,7 @@ def test_claude_shaped_owner_homes_keep_user_instructions_and_styles(setup, prov
             assert (native.home / name / 'chosen.md').read_text() == name
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux file leases")
 def test_legacy_import_refuses_an_existing_writer_and_preserves_source(setup):
     records = setup[2] / 'sessions'
     records.mkdir()
@@ -436,6 +439,7 @@ def test_legacy_import_refuses_an_existing_writer_and_preserves_source(setup):
 
 
 @pytest.mark.parametrize("signal_mode", ["handled", "ignored", "blocked"])
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux file leases")
 def test_legacy_import_refuses_writer_arriving_during_copy(setup, monkeypatch, tmp_path, signal_mode):
     import concurrent.futures
     import importlib
@@ -484,6 +488,7 @@ def test_legacy_import_refuses_writer_arriving_during_copy(setup, monkeypatch, t
     assert not list(setup[2].glob('.steward-owner-*/sessions/.steward-import-*'))
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux file leases")
 def test_legacy_import_refuses_writable_mapping_after_descriptor_closes(setup):
     import mmap
 
@@ -586,6 +591,7 @@ def test_import_setup_failure_preserves_session_identity(setup, monkeypatch, fai
     assert error.value.__cause__ is not None
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux file leases")
 def test_large_import_sigkill_never_resumes_partial_record(setup, monkeypatch):
     import importlib
 
@@ -619,6 +625,7 @@ def test_large_import_sigkill_never_resumes_partial_record(setup, monkeypatch):
     assert original.read_bytes() == content
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux file leases")
 def test_import_real_timeout_reaps_preparer(setup, monkeypatch, tmp_path):
     import importlib
     import os
@@ -657,6 +664,7 @@ def test_path_validation_cannot_reset_import_deadline(setup, monkeypatch):
 
 
 @pytest.mark.parametrize('companion_kind', ['directory', 'file', 'dangling-symlink', 'late-directory'])
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux file leases")
 def test_claude_legacy_primary_refuses_visible_companion_state(setup, monkeypatch, companion_kind):
     import importlib
     module = importlib.import_module('steward_harness.runtime.native_workspace')
@@ -848,3 +856,16 @@ def test_codex_thread_record_follows_the_rollout_into_its_home(tmp_path):
     with sqlite3.connect(home / 'state_5.sqlite') as database:
         assert dict(database.execute('SELECT id, rollout_path FROM threads')) == {
             'a': rollout, 'b': '/elsewhere/b.jsonl'}
+
+
+@pytest.mark.skipif(sys.platform == "linux", reason="non-Linux refusal boundary")
+def test_legacy_import_requires_linux_without_modifying_the_original(setup):
+    records = setup[2] / 'sessions'
+    records.mkdir()
+    original = records / f'rollout-{SESSION}.jsonl'
+    original.write_text('retained original')
+    with pytest.raises(RuntimeExecutionError, match='requires an available Linux read lease'):
+        with mapped(setup, native_owner='reader', sandbox_mode='read-only', provider_session_id=SESSION):
+            pytest.fail('unsupported platform must not import a potentially active record')
+    assert original.read_text() == 'retained original'
+    assert not list(setup[2].glob('.steward-owner-*/sessions/*.jsonl'))

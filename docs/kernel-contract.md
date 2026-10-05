@@ -304,6 +304,11 @@ A failing route remains pending with diagnostics; unavailable transport cannot h
 a promised successful-delivery deadline. Host stalls and actual transport latency
 require deployed measurement.
 
+A permanent Telegram rejection parks only the exact receipt that was sent.
+Its delivery error remains visible in `/status`; later results and notifications
+for the same owner continue independently. Parked receipts are not marked
+delivered and are not retried automatically.
+
 Transport retries replay saved replies, including historical silence, without
 repeating cognition. Existing accepted assessment alone is not proof of delivery.
 Optional assessment follows delivery through the shared worker budget. Its accepted
