@@ -357,6 +357,10 @@ class Procedures:
         histories = {name: rhythm_attempts(self.state.rhythm_turns(ConversationId(f"rhythm:{name}")))
                      for name, rhythm in self.config.rhythms.items() if rhythm.input == "world"}
         claims = {row["turn_id"]: row for row in self.state.claimed_turns()}
+        # Retained output is accepted without new cognition, whether or not its
+        # candidate was captured before acceptance last deferred.
+        retained = {row["turn_id"] for row in [*claims.values(), *self.state.pending_turns()]
+                    if row["output"] is not None}
         for name, runs in histories.items():
             rhythm = self.config.rhythms[name]
             predecessors = histories.get(rhythm.after, {})
@@ -376,7 +380,7 @@ class Procedures:
                 self.config.rhythms, name, now, run=prior,
                 latest=self.state.latest_rhythm_turn(ConversationId(f"rhythm:{name}")),
                 receipt=receipt, before=before, changed=changed, index=index,
-                recoverable=bool(claim and claim["output"] is not None),
+                recoverable=bool(prior and str(prior.turn_id) in retained),
                 queued=bool(prior and prior.state == "running" and prior.rhythm_continuation
                             and claim is None), writer_active=writer_active)
         return observations

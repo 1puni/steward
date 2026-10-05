@@ -9,6 +9,7 @@ import pytest
 
 from steward_harness.config.schema import StewardConfig
 from steward_harness.daemon import StewardDaemon
+from steward_harness.lease import Busy
 from steward_harness.procedures import Procedures
 from steward_harness.runtime.contracts import RuntimeExecutionError
 from steward_harness.state import ConversationId
@@ -922,6 +923,28 @@ def test_retained_provider_output_recovers_after_rollover_without_native_replay(
     assert cognition.calls == 1
     assert state.result_receipt("rhythm:sleep:20")
     assert next(procedures.due_world_rhythms(now=NOW + DAY)) == ("rem", "rhythm:rem:20")
+
+
+def test_captured_candidate_deferred_by_world_contention_is_accepted_without_restart(tmp_path, monkeypatch):
+    # 2026-10-01 and 10-03: Staging finished in minutes, its acceptance met a
+    # held world lock, and the night owner waited for a daemon restart.
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path)
+    apply = type(checkpoint).apply
+    contended = []
+
+    def busy_once(self, *args, **kwargs):
+        if not contended:
+            contended.append(True)
+            raise Busy("busy (kernel lock contention)")
+        return apply(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(checkpoint), "apply", busy_once)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert state.pending_turns() and not state.result_receipt("rhythm:sleep:20")
+    assert procedures.world_rhythm_observations(now=NOW + 60)["sleep"]["progress"] == "acceptance_pending"
+    procedures.advance_world_rhythm(service)
+    assert cognition.calls == 1
+    assert state.result_receipt("rhythm:sleep:20")
 
 
 def test_policy_captured_after_admission_failure_survives_later_failures(tmp_path):
