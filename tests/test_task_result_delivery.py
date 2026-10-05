@@ -463,7 +463,7 @@ def test_automatic_assessment_keeps_recorded_only_final_instruction(tmp_path):
     assert 'Your final reply is delivered to the operator' not in prompt
 
 
-def test_publication_reports_once_when_two_targets_observe_the_landed_task(tmp_path):
+def test_publication_and_each_distinct_target_report_once(tmp_path):
     from steward_harness.targets import Observation, Targets
 
     service, facts, cognition, owner, task_id = admitted(tmp_path)
@@ -481,9 +481,14 @@ def test_publication_reports_once_when_two_targets_observe_the_landed_task(tmp_p
                                Observation(revision=revision, ready=True), 'satisfied')
     restarted = _service(tmp_path, cognition)
     restarted._state.tasks.transports = {'app': facts}
-    assert restarted.deliver_task_result(owner, send=lambda *args: sent.append(args)) is None
+    for _ in range(2):
+        restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    assert {text for text, _ in sent[1:]} == {
+        f'{name}: target satisfied at {revision[:12]}.'
+        for name in ('landing-sites', 'landing-pages')}
+    assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail('replayed result')) is None
     assert not restarted._state.pending_task_result_conversations()
-    assert len(sent) == 1 and len(cognition.requests) == 1
+    assert len(sent) == 3 and len(cognition.requests) == 1
 
 
 def test_rejected_task_outcome_is_not_rediscovered_ahead_of_later_notifications(tmp_path):
