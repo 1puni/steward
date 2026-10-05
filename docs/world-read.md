@@ -1,9 +1,9 @@
 # Reading a world at one commit
 
 `steward_harness.world_read` provides a shared Git reader for consumer adapters.
-GuruGee's Oracle and the independent steward dashboard retain their presentation,
-transport, access, source configuration and caches. Installing this module does
-not migrate either consumer or add a document feature to the task Mini App.
+Document browsers and dashboard adapters retain their presentation, transport,
+access, source configuration and caches. Installing this module does not migrate
+consumers or add a document feature to the task Mini App.
 
 ## Pins and observation
 
@@ -74,11 +74,11 @@ Consumers still own which repositories and documents a user may access.
 
 ## Consumer migration
 
-Oracle adapters map full `changes[...]["sha"]` to their display commit field and
+Document-browser adapters map full `changes[...]["sha"]` to their display commit field and
 add their source-name prefix to paths. Rendering, ranking, background refresh,
-local dirty/untracked documents and source state remain in Oracle. Dashboard
+local dirty/untracked documents and source state remain in the consumer. Dashboard
 adapters map the same data into their document/history projection and preserve
-response-level content/diff budgets and unavailable-source handling. Neither
+response-level content/diff budgets and unavailable-source handling. No
 consumer should resolve a moving ref again midway through a response.
 
 Before upgrading a consumer's harness dependency, verify its projection against
