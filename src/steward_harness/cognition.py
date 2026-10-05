@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
+import math
+import time
 
 from steward_harness.provider_types import (
     ModelChoice,
@@ -59,6 +61,8 @@ class CognitionRequest:
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
     allow_empty_output: bool = False
+    # Fresh text-only application call: no tools, owner, records or live input.
+    text_only: bool = False
     task_call_socket: str | None = None
     on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None
     on_session_started: Callable[[ProviderFamily, str], None] = (
@@ -72,6 +76,13 @@ class CognitionRequest:
     )
 
     def __post_init__(self) -> None:
+        if self.text_only and (
+            self.provider_session_id is not None or self.native_owner is not None
+            or self.record_checkout is not None or self.task_call_socket is not None
+            or self.images or self.sandbox_mode != "read-only"
+            or self.on_input_ready is not None or self.allow_empty_output
+        ):
+            raise ValueError("text-only requests require fresh, tool-free, unrecorded state")
         if not self.execution_id:
             raise ValueError("Cognition execution ID must be nonblank")
         if not self.prompt.strip():
@@ -175,7 +186,11 @@ class Cognition:
                 request = request()
             if request.execution_id != execution_id:
                 raise ValueError("prepared cognition changed its execution ID")
+            deadline = time.monotonic() + request.timeout_seconds if request.text_only and request.timeout_seconds else None
             for provider in request.provider_order:
+                remaining = math.ceil(deadline - time.monotonic()) if deadline else request.timeout_seconds
+                if remaining is not None and remaining <= 0:
+                    raise RuntimeExecutionError("Text-only inference deadline exceeded")
                 if cancelled():
                     raise RuntimeExecutionError(
                         f"Execution ID {request.execution_id!r} was cancelled"
@@ -183,6 +198,9 @@ class Cognition:
                 adapter = self._adapters.get(provider)
                 if adapter is None:
                     unavailable.append(f"{provider}: not registered")
+                    continue
+                if request.text_only and not adapter.capabilities.text_only:
+                    unavailable.append(f"{provider}: missing text-only capability")
                     continue
                 if request.images and not adapter.capabilities.images:
                     unavailable.append(f"{provider}: missing images")
@@ -222,11 +240,12 @@ class Cognition:
                         provider_session_id=provider_session_id,
                         prompt=request.prompt,
                         cwd=request.cwd,
-                        timeout_seconds=request.timeout_seconds,
+                        timeout_seconds=remaining,
                         token_budget=request.token_budget,
                         images=request.images,
                         sandbox_mode=request.sandbox_mode,
                         allow_empty_output=request.allow_empty_output,
+                        text_only=request.text_only,
                         writable_roots=self._writable_roots
                         if request.sandbox_mode == "workspace-write" else (),
                         task_call_socket=request.task_call_socket,

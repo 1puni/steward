@@ -333,8 +333,13 @@ def native_workspace(
     *,
     mappings: Mapping[str, str],
     resume_pattern: str,
+    credential_home: Path | None = None,
 ) -> Iterator[NativeWorkspace]:
     """Prepare native state and preserve independent, private recovery archives."""
+    if request.text_only:
+        with _text_workspace(broker, request, home, credential_home or home) as workspace:
+            yield workspace
+        return
     # Setup steps stay finite even when the native turn has no deadline.
     deadline, setup_timeout = (None, 30) if request.timeout_seconds is None else (
         time.monotonic() + request.timeout_seconds, min(30, request.timeout_seconds))
@@ -452,3 +457,38 @@ def native_workspace(
         # ProcessController has already torn down the provider and descendants.
         # Homes are retained; Git now holds a copy, not the only one.
         evidence("capture", workspace.home, captured)
+
+
+@contextmanager
+def _text_workspace(broker, request, home, credential_home):
+    """Only this call's directory is removed, after ProcessController teardown."""
+    from steward_harness.runtime.text_only import CODEX_CONFIG
+    deadline = time.monotonic() + (request.timeout_seconds or 180)
+    prepared = broker.run([
+        broker.python_executable, "-I", "-c", r'''import json,pathlib,shutil,sys,tempfile
+root,auth,family,config=json.load(sys.stdin)
+home=pathlib.Path(tempfile.mkdtemp(prefix=".inference-",dir=root))
+try:
+    (home/"work").mkdir(mode=0o700)
+    (home/".steward-tmp").mkdir(mode=0o700)
+    if family == "codex":
+        (home/"auth.json").symlink_to(pathlib.Path(auth)/"auth.json")
+        (home/"config.toml").write_text(config)
+    print(str(home))
+except BaseException:
+    shutil.rmtree(home)
+    raise
+'''], cwd="/", timeout=min(30, request.timeout_seconds or 30),
+        input_text=json.dumps([str(home), str(credential_home), request.resolved.provider, CODEX_CONFIG]))
+    if prepared.returncode:
+        raise RuntimeExecutionError("Text-only workspace preparation failed")
+    path = Path(prepared.stdout.strip())
+    if path.parent != home or not path.name.startswith(".inference-"):
+        raise RuntimeExecutionError("Invalid text-only workspace identity")
+    try:
+        yield NativeWorkspace(path, None, deadline)
+    finally:
+        removed = broker.run([broker.python_executable, "-I", "-c",
+            "import shutil,sys; shutil.rmtree(sys.argv[1])", str(path)], cwd="/", timeout=3)
+        if removed.returncode:
+            raise RuntimeExecutionError("Text-only workspace cleanup failed")

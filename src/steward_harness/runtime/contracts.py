@@ -38,6 +38,7 @@ class ProviderCapabilities:
     """
 
     images: bool = False
+    text_only: bool = False
     ongoing_input: bool = False
 
 
@@ -243,13 +244,22 @@ class RuntimeRequest:
     # Automatic observations can complete without an outward message. Native
     # terminal completion remains mandatory; this never permits a broken stream.
     allow_empty_output: bool = False
+    # Fresh text-only application call: no tools, owner, records or live input.
+    text_only: bool = False
 
     def __post_init__(self) -> None:
+        if self.text_only and (
+            self.provider_session_id is not None or self.native_owner is not None
+            or self.record_checkout is not None or self.task_call_socket is not None
+            or self.images or self.sandbox_mode != "read-only"
+            or self.on_input_ready is not None or self.allow_empty_output
+        ):
+            raise ValueError("text-only requests require fresh, tool-free, unrecorded state")
         if self.native_owner is not None and (not self.native_owner.strip() or len(self.native_owner) > 512):
             raise ValueError("Native owner must be nonblank and bounded")
         if type(self.native_generation) is not int or self.native_generation < 1:
             raise ValueError("Native generation must be a positive integer")
-        if not self.prompt.strip() or len(self.prompt) > 128_000:
+        if not self.prompt.strip() or len(self.prompt) > (2_097_152 if self.text_only else 128_000):
             raise ValueError("Prompt must be non-empty and bounded")
         if not self.cwd.is_absolute():
             raise ValueError("Working directory must be absolute")

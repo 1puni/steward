@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from steward_harness.runtime.task_call_mcp import server_config
+from steward_harness.runtime.text_only import verify_text_request, reject_claude_tools
 
 import json
 import os
@@ -398,6 +399,10 @@ class ClaudeInputStream:
         # identity. Native queue events can precede system/init, so hold their
         # identity separately until the ordinary lifecycle establishes it.
         event = self.lifecycle.decode(line)
+        if self.request.text_only:
+            reject_claude_tools(event)
+            if event.get("type") == "result" and isinstance(event.get("result"), str) and len(event["result"]) > _MAX_RESPONSE_CHARS:
+                raise RuntimeExecutionError("Text-only output exceeded limit")
         with self.lock:
             if event.get("type") == "stream_event":
                 self._meter(event)
@@ -504,6 +509,8 @@ class ClaudeInputStream:
         if not isinstance(command, str) or not isinstance(state, str):
             raise RuntimeExecutionError("native command stream reported malformed identity/state", session_id=self.session_id)
         if command not in self.commands:
+            if self.request.text_only:
+                raise RuntimeExecutionError("Unowned command in text-only inference")
             if state not in {"queued", "started"} or validated_uuid(command) is None:
                 raise RuntimeExecutionError("native command stream reported unowned work", session_id=self.session_id)
             # Native notifications/agents can enqueue their own work. Track its
@@ -561,7 +568,7 @@ class ClaudeRuntime:
     base URL and credential file are configured.
     """
 
-    capabilities = replace(SESSION_WORKSPACE_CAPABILITIES, ongoing_input=True)
+    capabilities = replace(SESSION_WORKSPACE_CAPABILITIES, ongoing_input=True, text_only=True)
 
     def __init__(
         self,
@@ -569,6 +576,7 @@ class ClaudeRuntime:
         *,
         controller: ProcessController,
         native_home: Path,
+        credential_home: Path | None = None,
         base_url: str | None = None,
         credential_path: Path | None = None,
         family: ProviderFamily = "claude",
@@ -582,6 +590,7 @@ class ClaudeRuntime:
         self.executable = executable
         self._controller = controller
         self.native_home = native_home
+        self.credential_home = credential_home or native_home
         self.base_url = base_url
         self.credential_path = credential_path
         self.family: ProviderFamily = family
@@ -601,6 +610,8 @@ class ClaudeRuntime:
         return Availability(True)
 
     def execute(self, request: RuntimeRequest) -> RuntimeResult:
+        if request.text_only:
+            request = verify_text_request(self._controller.broker, self.executable, self.family, request)
         if not self._controller.broker.is_directory(self.native_home):
             raise RuntimeExecutionError(
                 f"Provision the steward's {self.display_name} native home before execution"
@@ -613,10 +624,13 @@ class ClaudeRuntime:
         with native_workspace(
             self._controller.broker, request, self.native_home,
             mappings=record_mappings(self.family),
+            credential_home=self.credential_home,
             resume_pattern=f"artefacts/{self.family}/projects/*/{{session}}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)
-            environment = self.environment()
+            if request.text_only:
+                request = replace(request, cwd=workspace.home / "work")
+            environment = self.environment({} if request.text_only else None)
             environment["CLAUDE_CONFIG_DIR"] = str(workspace.home)
             environment["CLAUDE_CODE_TMPDIR"] = str(workspace.home / ".steward-tmp")
             if self.credential_path is not None:
@@ -698,7 +712,7 @@ class ClaudeRuntime:
         environment["CLAUDE_CONFIG_DIR"] = str(self.native_home)
         # Keep credential persistence and the native refresh lock in one private
         # authority even when runtime state moves into an owner-specific home.
-        environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(self.native_home)
+        environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(self.credential_home)
         if self.base_url is not None:
             try:
                 token = self._read_credential(self.credential_path)
@@ -761,6 +775,15 @@ class ClaudeRuntime:
                 else ()
             ),
         ]
+        if request.text_only:
+            # Explicit CLI settings suppress settings/plugin hooks while keeping OAuth.
+            settings.update(disableAllHooks=True, autoMemoryEnabled=False)
+            command = [str(self.executable), "--output-format", "stream-json", "--verbose",
+                "--settings", json.dumps(settings), "--setting-sources", "",
+                "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
+                "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
+                "--no-chrome", "--permission-mode", "dontAsk", "--model", request.resolved.model,
+                *(["--effort", request.resolved.reasoning_effort] if request.resolved.reasoning_effort else [])]
         if request.task_call_socket:
             command.extend(("--mcp-config", json.dumps({"mcpServers": {
                 "steward_tasks": server_config(request.task_call_socket)}})))
