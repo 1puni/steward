@@ -89,7 +89,9 @@ Acceptance changes only the canonical account. Natural closure records findings 
 disposition in the product checkpoint and consumes only acknowledged operator input.
 It never rereads a product-side task file, and never overwrites an accepted account
 with one. When the turn ends, closure stops and joins the watcher, waiting out any
-acceptance in flight.
+acceptance in flight. The successful native result needs no close call; the checkpoint
+names this settled account baseline. An accepted account update does not invalidate
+completion or require another execution merely to repeat a decision.
 
 ## What acceptance does not do
 
@@ -176,9 +178,12 @@ wherever the agent can write its repository's objects and refs.
 
 - A provider without live input gets no acknowledgement, and its offers are not
   evaluated during the turn; it records understanding at closure only.
-- On Claude, input queued after a result starts another native turn, so an
-  acknowledgement can cost one extra turn, which must again end with the closure
-  lines.
+- On Claude/GLM, input queued after a result can start another native turn.
+  Understanding acknowledgements are marked as controller receipts: their native
+  results are validated but do not replace the working turn's output or require
+  another closure. Ordinary late notes and corrections can still replace that
+  output. Codex steers within one native turn and cannot distinguish which input
+  caused its final answer.
 - Without a dropped execution identity, Codex sandboxing may protect `.git` inside
   writable roots, which would stop offers and native commits alike. Unverified.
 

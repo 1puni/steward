@@ -3,6 +3,7 @@ still publish real work — their findings, appended to the task's own file —
 and never claim a landing the harness did not perform."""
 
 from dataclasses import replace
+from task_tool_fixtures import TaskOutput
 from steward_harness.deploy.config import SystemdReleaseConfig
 
 import os
@@ -15,7 +16,7 @@ from textwrap import dedent
 import pytest
 
 from state_fixtures import accept_conversation_turn, advance
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import (
     RepositoryConfig,
     UntrustedExecutionConfig,
@@ -65,10 +66,10 @@ class InvestigationAdapter(EditingAdapter):
             )
         self.work_turns += 1
         question = "Which consumer is authoritative?" if self.disposition == "ask" else "NONE"
-        output = (
-            "The public consumer still reads the old feed. Evidence: src/feed.py.\n"
-            f"COMMIT: steward: inspect consumer\nDISPOSITION: {self.disposition}\nQUESTION: {question}"
-        )
+        output = TaskOutput(
+            "The public consumer still reads the old feed. Evidence: src/feed.py.",
+            subject="steward: inspect consumer", disposition=self.disposition,
+            question=question if self.disposition == "ask" else None)
         return replace(result, output=output)
 
 
@@ -209,7 +210,11 @@ def test_no_diff_final_turn_still_lands_prior_turn_changes(tmp_path):
 
 
 def test_restart_after_unchanged_checkpoint_does_not_repeat_investigation(tmp_path):
-    adapter = InvestigationAdapter()
+    class NativeCompletion(InvestigationAdapter):
+        def execute(self, request):
+            return replace(super().execute(request), output="Traced src/feed.py.")
+
+    adapter = NativeCompletion()
     state, runner, task_id, _ = setup_task(
         tmp_path, adapter, ExplodingCheckpointState
     )
@@ -237,34 +242,27 @@ def test_restart_after_unchanged_checkpoint_does_not_repeat_investigation(tmp_pa
     )
 
 
-@pytest.mark.parametrize("closure", [
-    "Task completed.",
-    "COMMIT: feat: work\nDISPOSITION: deploy\nQUESTION: NONE",
-    "COMMIT: feat: work\nDISPOSITION: ask\nQUESTION: NONE",
-    "COMMIT: feat: work\nDISPOSITION: idle\nQUESTION: NONE\nActually, more work remains.",
-])
-def test_invalid_working_session_closure_retains_retryable_work_without_publication(tmp_path, closure):
-    class InvalidOnceAdapter(EditingAdapter):
+@pytest.mark.parametrize("findings", ["Task completed.", "", "Findings without any protocol suffix."])
+def test_successful_no_diff_native_turn_needs_no_close(tmp_path, findings):
+    class NativeCompletion(InvestigationAdapter):
         def execute(self, request):
-            result = super().execute(request)
-            return replace(result, output=closure) if len(self.requests) == 1 else result
+            return replace(super().execute(request), output=findings)
 
-    adapter = InvalidOnceAdapter()
+    adapter = NativeCompletion()
     state, runner, task_id, bare = setup_task(tmp_path, adapter)
     original = _git(f"--git-dir={bare}", "rev-parse", "main", cwd=tmp_path)
-    run_task(runner)
+    runner.prepare(task_id)
     task = state.tasks.get(task_id)
-    assert task.status.value == "blocked"
-    assert "Invalid task closure" in result_text(state, task_id)
-    assert len(adapter.requests) == 1
+    assert task.publishable and task.landed is None
+    assert task.disposition == "idle"
     assert _git(f"--git-dir={bare}", "rev-parse", "main", cwd=tmp_path) == original
-    assert _git("show", f"{task.branch}:result.txt", cwd=runner.repositories["app"].path) == "completed"
-
-    state.tasks.retry(task_id, "Finish the task with its explicit closure.")
-    run_task(runner)
-    assert len(adapter.requests) == 2
-    assert adapter.requests[1].provider_session_id == "claude-session"
-    assert _git(f"--git-dir={bare}", "show", "main:result.txt", cwd=tmp_path) == "completed"
+    runner = restart(runner)
+    publish_task(runner)
+    assert len(adapter.requests) == 1
+    landed = runner.state.tasks.get(task_id).landed
+    assert landed and landed != original
+    assert _git(f"--git-dir={bare}", "rev-parse", "main", cwd=tmp_path) == landed
+    assert _git(f"--git-dir={bare}", "diff", original, landed, cwd=tmp_path) == ""
 
 
 def restart(runner):

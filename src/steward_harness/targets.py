@@ -28,7 +28,7 @@ from steward_harness.lease import Lease, Busy
 # every pass, because those are the states that need the loop.
 SATISFIED_REOBSERVE_SECONDS = 60.0
 
-# What a person is told about a target is its outcome, never its progress.
+# What is retained about a target is its outcome, never its progress.
 # Pending, busy, awaiting evidence and a moved ref are the loop doing its job;
 # on a live instance they were two thirds of every deploy's messages, and each
 # one handed to an owning task cost a full model turn to say "nothing to do".
@@ -39,8 +39,8 @@ FAILED = frozenset({"failed", "blocked", "failed-evidence"})
 # own shutdown drain makes every observe fail for a pass or two, and a target
 # that recovers before anyone could act has nothing to report. The clock
 # starts at the first failure since the target was last satisfied at this
-# revision, so flapping between failure and busy still accumulates. One
-# desk-watch cycle: long enough to span a restart, short against a real outage.
+# revision, so flapping between failure and busy still accumulates. Five
+# minutes: long enough to span a restart, short against a real outage.
 FAILURE_PERSISTS_SECONDS = 300.0
 
 
@@ -137,8 +137,8 @@ class Targets:
         return None
 
     def _retain_result(self, name, message, repository, revision, observed, status):
-        # Only the exact published outcome supplies a task recipient. A push
-        # without an owning task still owes the operator its outcome.
+        # Only the exact published outcome supplies a task recipient. Failures
+        # without an owning task go to the operator.
         outcome = self._outcome(name, status)
         if outcome is None:
             return
@@ -172,9 +172,9 @@ class Targets:
             if outcome == "failed":
                 reply = f"{name} is not reaching {short}.\n{message}"
             elif (was_revision, was) == (revision, "failed"):
-                reply = f"{name} recovered and is live at {short}."
+                reply = f"{name} recovered; target satisfied at {short}."
             else:
-                reply = f"{name} is live at {short}."
+                reply = ""
             receipt = {
                 "owner": owner, "task_id": task_id, "source_key": source,
                 "target": name, "sequence": sequence, "observation": identity,
@@ -182,10 +182,13 @@ class Targets:
                                f"Desired revision: {revision}\n{message}\n"
                                + (f"Observed: {observed.model_dump_json()}" if observed else "No driver observation available."),
             }
-            # Live is fully stated by the observation, so an owner's model could
-            # only restate it. A failure is owed the owner's assessment.
+            # Routine success is evidence, not a send decision. Several targets
+            # can observe the same publication; none owes a second completion
+            # message. Persistent failures and their recovery still warrant attention.
             if task_id is None or outcome == "satisfied":
                 receipt["reply"] = reply
+                if not reply:
+                    receipt["done"] = True
             self.state.save_result_receipt(receipt)
 
     def _satisfied_age(self, name, revision):

@@ -1,4 +1,5 @@
 """A rhythm admits a run only for input none of its finished runs has seen."""
+from task_tool_fixtures import TaskOutput
 from dataclasses import replace
 import os
 import subprocess
@@ -21,8 +22,7 @@ def quiet_harness(tmp_path):
     adapter = InvestigationAdapter()
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        "Existing findings are owned.\nVERDICT: FAIL\nCOMMIT: reviewed\n"
-        "DISPOSITION: idle\nQUESTION: NONE"))
+        TaskOutput('Existing findings are owned.\nVERDICT: FAIL', subject='reviewed', disposition='idle')))
     state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter)
     config, _ = setup_procedures(tmp_path, state, runner)
     config.rhythms["light"] = ProcedureRhythmConfig(owner=None, schedule={"quiet": 300},
@@ -614,7 +614,7 @@ def test_org_rhythm_paths_decide_whether_its_input_ref_wakes_it(tmp_path):
     procedures.advance_rhythms(now=300)
     assert len(state.tasks.queued()) == 1
 
-def writing_org_rhythm(tmp_path, *, edit, findings, session=False):
+def writing_org_rhythm(tmp_path, *, edit, findings, session=False, notify=None):
     """An organisation rhythm that consolidates into its input repository."""
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
     peer_clone = peer(tmp_path, state, runner)
@@ -634,7 +634,7 @@ def writing_org_rhythm(tmp_path, *, edit, findings, session=False):
             record.parent.mkdir(parents=True, exist_ok=True)
             record.write_text('{"role": "user"}\n')
         subject = "docs: consolidate launch" if edit else "no material change"
-        return replace(result, output=f"{findings}COMMIT: {subject}\nDISPOSITION: idle\nQUESTION: NONE")
+        return replace(result, output=TaskOutput(findings, subject=subject, notify=notify))
 
     adapter.execute = consolidate
     return clone, peer_clone, state, runner, procedures, adapter
@@ -652,13 +652,13 @@ def test_writing_org_rhythm_lands_its_consolidation_and_tells_no_one(tmp_path):
     runner.prepare(task)
     request = adapter.requests[-1]
     # It works in its own worktree, reads the organisation beside it, and
-    # learns that only NOTIFY reaches anyone.
+    # learns that notification is a callable operation.
     assert request.cwd != tmp_path and (request.cwd / ".git").exists()
     assert request.sandbox_mode == "workspace-write"
     assert f"siblings beneath {tmp_path}" in request.prompt
     assert f"your working directory {request.cwd}" in request.prompt
     assert f"Edit nothing beneath {tmp_path}" in request.prompt
-    assert "NOTIFY:" in request.prompt and "VERDICT:" not in request.prompt
+    assert 'operation="notify"' in request.prompt and "VERDICT:" not in request.prompt
     assert publish_task(runner) == task
     _git("fetch", "-q", "origin", cwd=clone)
     assert _git("show", "origin/main:launch.md", cwd=clone) == "Launch moved."
@@ -674,14 +674,14 @@ def test_writing_org_rhythm_lands_its_consolidation_and_tells_no_one(tmp_path):
     assert len(state.tasks.queued()) == 1
 
 
-def test_writing_org_rhythm_notifies_only_when_its_findings_ask(tmp_path):
+def test_writing_org_rhythm_notifies_through_a_call(tmp_path):
     clone, _, state, runner, procedures, _ = writing_org_rhythm(
-        tmp_path, edit="Launch moved.\n", findings="NOTIFY: the launch date moved.\n")
+        tmp_path, edit="Launch moved.\n", findings="Launch date changed.", notify="the launch date moved.")
     procedures.advance_rhythms(now=100)
     task = state.tasks.queued()[0]
     runner.prepare(task)
     assert publish_task(runner) == task
-    assert not state.tasks.get(task).quiet
+    assert state.tasks.get(task).quiet  # final findings remain evidence only
     assert tuple(map(str, state.pending_task_result_conversations())) == ("desk:steward",)
 
 
@@ -718,7 +718,7 @@ def test_writing_org_rhythm_findings_without_a_change_land_nothing(tmp_path):
 
 def test_writing_org_rhythm_notice_without_a_change_says_nothing_landed(tmp_path):
     clone, _, state, runner, procedures, _ = writing_org_rhythm(
-        tmp_path, edit="", findings="NOTIFY: the alias bounced.\n")
+        tmp_path, edit="", findings="Alias delivery failed.", notify="the alias bounced.")
     before = remote_main(clone)
     procedures.advance_rhythms(now=100)
     task = state.tasks.queued()[0]
@@ -726,7 +726,8 @@ def test_writing_org_rhythm_notice_without_a_change_says_nothing_landed(tmp_path
     assert publish_task(runner) is None and remote_main(clone) == before
     [conversation] = state.pending_task_result_conversations()
     _, text, _ = state.pending_task_result_for(conversation)
-    assert "Changed no files." in text and "Landed SHA" not in text
+    assert "Landed SHA" not in text
+    assert state.tasks.get(task).landed_nothing
     assert "the alias bounced" in text
 
 

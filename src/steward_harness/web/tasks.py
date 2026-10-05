@@ -31,15 +31,20 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 from steward_harness.state import StateDatabase, TaskId, TaskStatus
+from steward_harness.telegram.tasks import discussion_link
 
 #: How long one Telegram sign-in stays good for. Long enough to read a board,
 #: short enough that a captured `initData` is not a standing grant.
 AUTH_WINDOW_SECONDS = 3600
 
 #: What a browse is for: the ones that need the operator come first, the ones
-#: that need nobody come last. Within a rank the order is `GitTaskStore.all`'s —
-#: priority, age, slug — which a stable sort preserves and which is total, so
-#: two reads of an unchanged board serialize identically.
+#: that need nobody come last. Within a rank, higher priority first, then the
+#: newest; ties fall to the task ID, so the order is total and two reads of an
+#: unchanged board serialize identically.
+#:
+#: The listing cap chooses rows by a different order: all open work, then the
+#: most recently created finished work. Ranking first would spend the cap on
+#: last week's `done` before this morning's `cancelled`.
 _RANK = {
     TaskStatus.WAITING: 0,
     TaskStatus.BLOCKED: 1,
@@ -49,6 +54,10 @@ _RANK = {
     TaskStatus.DONE: 5,
     TaskStatus.CANCELLED: 6,
 }
+
+#: A soft listing budget: open work is never omitted; only finished work is capped.
+_LISTED = 200
+_FINISHED = (TaskStatus.DONE, TaskStatus.CANCELLED)
 
 _PREFIX = "/tasks"
 _ASSETS = {
@@ -117,8 +126,9 @@ def authenticate(
 class TaskBoard:
     """Every task the store knows, resolved against one Git snapshot."""
 
-    def __init__(self, state: StateDatabase) -> None:
+    def __init__(self, state: StateDatabase, chat_id: int | None = None) -> None:
         self.state = state
+        self.chat_id = chat_id
 
     def board(self) -> dict:
         """The whole board as one document; the browser does the rest.
@@ -126,17 +136,23 @@ class TaskBoard:
         There is no page, no offset and no server-side filter. The SQL those
         were written in had a `status` column and no longer does, and the
         Python that would replace it buys an offset that goes stale between
-        requests and a token covering one page of it. The board caps the
-        read at 200 rows, which is the ceiling this relies on.
+        requests and a token covering one page of it. The board keeps all open
+        work, filling any remaining `_LISTED` budget with finished work.
+        `counts` covers every task, including omitted finished work.
         """
-        rows = [self._summary(task) for task in self.state.tasks.all()[:200]]
-        rows.sort(key=lambda row: _RANK[TaskStatus(row["status"])])
+        tasks = sorted(self.state.tasks.all(),
+                       key=lambda task: (task.created_at, str(task.task_id)), reverse=True)
+        tasks.sort(key=lambda task: task.status in _FINISHED)
         counts: dict[str, int] = {}
-        for row in rows:
-            counts[row["status"]] = counts.get(row["status"], 0) + 1
+        for task in tasks:
+            counts[task.status.value] = counts.get(task.status.value, 0) + 1
+        open_count = sum(count for status, count in counts.items() if TaskStatus(status) not in _FINISHED)
+        listed = sorted(tasks[:max(_LISTED, open_count)],
+                        key=lambda task: (_RANK[task.status], -task.priority))
+        rows = [self._summary(task) for task in listed]
         return {"paused": self.state.paused(), "counts": counts, "tasks": rows}
 
-    def detail(self, task_id: TaskId) -> dict:
+    def detail(self, task_id: TaskId | str) -> dict:
         """One task, from the same accessors `/task show` reads.
 
         Deliberately the same ones: two surfaces reporting the same task from
@@ -144,8 +160,9 @@ class TaskBoard:
         `checkpoints` are one `git log` each, which is affordable exactly once
         and never in `board()`.
         """
-        task = self.state.tasks.get(task_id)
+        task = self.state.tasks.get(self.state.tasks.resolve(str(task_id)))
         return self._summary(task) | {
+            "discussion_url": discussion_link(task.definition.owner, self.chat_id),
             "brief": task.brief,
             "findings": task.findings,
             "pending_inputs": len(task.pending),
@@ -164,6 +181,7 @@ class TaskBoard:
         status = task.status
         return {
             "task_id": str(task.task_id),
+            "reference": task.task_id.short,
             "title": task.title,
             "repository": task.repository,
             "status": status.value,
@@ -232,7 +250,7 @@ class TaskWeb:
             query = dict(parse_qsl(split.query))
             requested = query.get("task")
             document = (
-                self.board.detail(TaskId(requested))
+                self.board.detail(requested)
                 if requested
                 else self.board.board()
             )

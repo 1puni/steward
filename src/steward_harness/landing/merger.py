@@ -22,6 +22,7 @@ from steward_harness.git_reconcile import (
 from steward_harness.git_transport import ControllerGitTransport, GitTransportError
 from steward_harness.landing.gates import GateResult, GateRunner
 from steward_harness.landing.worktree import WorktreeManager
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 
@@ -143,6 +144,8 @@ class PromotionEngine:
                         *steward_commit_argv("commit-tree", tree, "-p", parent),
                         cwd=worktree, input_text=message,
                         env={"GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp})
+                    if self.execution_broker.path_exists(worktree / EVIDENCE_PENDING):
+                        raise RuntimeExecutionError("native evidence preservation is pending; checkout retained")
                     self._agent_git("reset", "--hard", sha, cwd=worktree)
                     return sha
                 collapse(fork)

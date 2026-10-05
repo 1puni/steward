@@ -157,4 +157,3 @@ def popen(command: Sequence[str], cwd: str | Path, environment: Mapping[str, str
     except BaseException:
         shutil.rmtree(scratch)
         raise
-

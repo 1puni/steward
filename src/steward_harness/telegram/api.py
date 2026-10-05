@@ -24,11 +24,33 @@ class TelegramAPIError(RuntimeError):
 
     ``retry_after`` is Telegram's own instruction, in seconds, present only on
     a 429. It is the wait that will actually clear; anything shorter is spent.
+    ``status_code`` is the HTTP status Telegram answered with, when the
+    failure came from a non-200 response rather than a network or transport
+    fault; it is None for those, since they carry no such verdict.
     """
 
-    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+    def __init__(
+        self, message: str, *, retry_after: float | None = None,
+        status_code: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+        self.status_code = status_code
+
+    @property
+    def is_permanent_rejection(self) -> bool:
+        """A client error Telegram will answer the same way on every retry.
+
+        429 is excluded: it is rate-limiting, not a verdict on the content,
+        and already carries its own ``retry_after`` wait. 5xx and network
+        faults are excluded too: those are the server or the wire, not the
+        request, and may clear on their own.
+        """
+        return (
+            self.status_code is not None
+            and 400 <= self.status_code < 500
+            and self.status_code != 429
+        )
 
 
 #: Telegram never asks for more than a few minutes; a larger number is a bug
@@ -79,6 +101,7 @@ class TelegramAPI:
             raise TelegramAPIError(
                 f"Telegram API HTTP {res.status_code}: {res.text[:200]}",
                 retry_after=_retry_after(res),
+                status_code=res.status_code,
             )
 
         try:

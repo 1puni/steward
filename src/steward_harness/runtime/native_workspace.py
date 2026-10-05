@@ -1,29 +1,29 @@
-"""Private native launch configuration with direct, workspace-owned records."""
+"""Private native launch configuration; retained homes own their native records."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import math
 import subprocess
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeRequest
+from steward_harness.runtime.contracts import NativeStorageDeferred, RuntimeExecutionError, RuntimeRequest
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-
-log = logging.getLogger(__name__)
+from steward_harness.runtime.native_evidence import CAPTURED_ROOT
 
 _PREPARE = r'''
-import json, os, pathlib, shutil, stat, sys, tempfile, uuid
+import json, os, pathlib, shutil, stat, subprocess, sys, tempfile, uuid
 
-source, mappings, session, pattern, bundled_skills, owner = json.load(sys.stdin)
+source, mappings, session, pattern, bundled_skills, owner, owned, records = json.load(sys.stdin)
 source = pathlib.Path(source)
 world = pathlib.Path.cwd()
+# Where this run's records are committed, when that is not where it works.
+records = pathlib.Path(records) if records else world
 flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 # Config/auth remain private. Each invocation owns its links; no shared link
 # is retargeted when different worlds or concurrent conversations execute.
@@ -87,7 +87,7 @@ def record_at(root, relative):
 
 try:
     for entry in source.iterdir():
-        if entry.name.startswith(('.steward-launch-', '.steward-owner-')) or entry.name in mappings or entry.name == 'skills':
+        if entry.name.startswith(('.steward-launch-', '.steward-owner-', '.steward-evidence')) or entry.name in mappings or entry.name in {'skills', '.steward-tmp'}:
             continue
         # Durable runtime state belongs to this owner, never the seed home.
         if persistent and entry.name not in owner['shared']:
@@ -137,18 +137,79 @@ try:
                 pass
             os.close(directory)
     private = persistent and not owner['writable']
-    record_root = launch if private else world
+    # The home owns these records as real files; after each run they are
+    # staged into the record checkout's index, so no checkout has to
+    # materialize them. See native_evidence.capture.
+    owned = set(owned)
+    record_root, world_pattern, session_mapping = world, pattern, None
     for name, relative in mappings.items():
-        if private:
+        if name in owned:
             if pattern.startswith(relative + '/'):
                 pattern = name + pattern[len(relative):]
+                record_root, session_mapping = launch, (name, relative)
+            if persistent and owner['writable'] and (launch / name).is_symlink():
+                # This home used to write through into a world checkout. Those
+                # records are in the world's Git; the lineage's own are imported.
+                (launch / name).unlink()
             os.close(directory_at(launch, name, create=True))
         else:
-            os.close(directory_at(world, relative, create=True))
-            link(launch / name, world / relative, True)
+            # Native memory is a world file the run edits in its record checkout.
+            os.close(directory_at(records, relative, create=True))
+            link(launch / name, records / relative, True)
+
+    def place(relative, data):
+        # An interrupted copy can never masquerade as a complete resumable
+        # original. Existing records are never replaced.
+        directory = directory_at(launch, relative.parent, create=True)
+        temporary = '.steward-import-' + uuid.uuid4().hex
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=directory)
+            with os.fdopen(descriptor, 'wb') as imported:
+                imported.write(data)
+                imported.flush()
+                os.fsync(imported.fileno())
+            try:
+                os.link(temporary, relative.name, src_dir_fd=directory,
+                        dst_dir_fd=directory, follow_symlinks=False)
+            except FileExistsError:
+                pass
+            os.fsync(directory)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            os.close(directory)
+
+    def import_from_world():
+        # Only this lineage's session and its companions (Claude/GLM keep
+        # session-scoped children in <session>/). A file still in the checkout
+        # was written after the last capture and is newer than the index's.
+        name, relative = session_mapping
+        spec = world_pattern.format(session=session)
+        specs = [spec] + ([spec[:-len('.jsonl')] + '/**/*'] if spec.endswith(session + '.jsonl') else [])
+        git_env = {**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1'}
+        listed = subprocess.run(['git', 'ls-files', '-z', '--', *(':(glob)' + s for s in specs)],
+                                cwd=records, capture_output=True, check=True, env=git_env).stdout
+        tracked = {path for path in listed.decode().split('\0') if path}
+        inside = os.path.realpath(records) + os.sep
+        on_disk = {p.relative_to(records).as_posix() for s in specs for p in records.glob(s)
+                   if p.is_file() and not p.is_symlink() and os.path.realpath(p).startswith(inside)}
+        for path in sorted(tracked | on_disk):
+            if not path.startswith(relative + '/'):
+                continue
+            data = (records / path).read_bytes() if path in on_disk else subprocess.run(
+                ['git', 'cat-file', 'blob', ':' + path], cwd=records, capture_output=True,
+                check=True, env=git_env).stdout
+            place(pathlib.PurePosixPath(name, path[len(relative) + 1:]), data)
+        return list(launch.glob(pattern.format(session=session)))
+
     resume = None
     if session:
         matches = list(record_root.glob(pattern.format(session=session)))
+        if not matches and session_mapping and not private:
+            matches = import_from_world()
         if private and not matches:
             # Import only the requested lineage's original, never another
             # owner's database, queue or whole private history directory.
@@ -219,47 +280,34 @@ try:
         resume = str(matches[0])
     print(json.dumps({'home': str(launch), 'resume': resume}))
 except BaseException:
-    if not persistent:
-        shutil.rmtree(launch)
+    # Setup may have created unique native state; preserve it for recovery.
     raise
 '''
-
-_REMOVE = """
-import pathlib, shutil, sys
-path = pathlib.Path(sys.argv[1])
-if not path.name.startswith('.steward-launch-') or path.is_symlink():
-    raise ValueError('not a native launch directory')
-shutil.rmtree(path)
-"""
-
-# Removes every generation and provider of one owner. rmtree unlinks the links
-# into the seed home and the world checkout; it never follows them.
-_RETIRE = """
-import json, pathlib, shutil, sys
-homes, prefix = json.load(sys.stdin)
-for home in map(pathlib.Path, homes):
-    if home.is_dir():
-        for entry in home.iterdir():
-            if entry.name.startswith(prefix) and entry.is_dir() and not entry.is_symlink():
-                shutil.rmtree(entry)
-                print(entry)
-"""
 
 
 def _owner_prefix(owner: str) -> str:
     return ".steward-owner-" + hashlib.sha256(owner.encode()).hexdigest()[:32] + "-"
 
 
-def retire_native_owner(broker: UntrustedExecutionBroker, homes: Iterable[Path], owner: str) -> None:
-    """Delete an owner's durable homes; the caller holds the owner's admission fence."""
-    retired = broker.run(
-        [broker.python_executable, "-I", "-c", _RETIRE], cwd="/", timeout=60,
-        input_text=json.dumps([list(map(str, homes)), _owner_prefix(owner)]),
-    )
-    if retired.returncode:
-        raise RuntimeError("native owner home retirement failed: " + retired.stderr.strip()[-500:])
-    for path in retired.stdout.split():
-        log.info("retired native owner home %s", path)
+_PRIVATE_TEMP = r'''
+import os, stat, sys
+home = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    try:
+        os.mkdir('.steward-tmp', 0o700, dir_fd=home)
+    except FileExistsError:
+        pass
+    child = os.open('.steward-tmp', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=home)
+    try:
+        info = os.fstat(child)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError('native temporary directory must be private and owned by execution user')
+    finally:
+        os.close(child)
+    os.fsync(home)
+finally:
+    os.close(home)
+'''
 
 
 @dataclass(frozen=True)
@@ -285,8 +333,13 @@ def native_workspace(
     *,
     mappings: Mapping[str, str],
     resume_pattern: str,
+    credential_home: Path | None = None,
 ) -> Iterator[NativeWorkspace]:
-    """Prepare owner state before launch; only anonymous launch homes are removed."""
+    """Prepare native state and preserve independent, private recovery archives."""
+    if request.text_only:
+        with _text_workspace(broker, request, home, credential_home or home) as workspace:
+            yield workspace
+        return
     # Setup steps stay finite even when the native turn has no deadline.
     deadline, setup_timeout = (None, 30) if request.timeout_seconds is None else (
         time.monotonic() + request.timeout_seconds, min(30, request.timeout_seconds))
@@ -309,7 +362,38 @@ def native_workspace(
             "Invalid native execution paths: " + checked.stderr.strip()[-1000:],
             session_id=request.provider_session_id,
         )
-    if request.sandbox_mode != "workspace-write" and request.native_owner is None:
+    writable = request.sandbox_mode == "workspace-write"
+    # Every run's native records are committed somewhere: its own checkout when
+    # it writes, else the checkout its caller names (a read-only task's branch).
+    checkout = request.record_checkout or (request.cwd if writable else None)
+    evidence_script = Path(__file__).with_name("native_evidence.py").read_text()
+
+    def evidence(operation, native_home, records):
+        result = broker.run(
+            [broker.python_executable, "-I", "-c", evidence_script],
+            cwd=request.cwd, timeout=300,
+            input_text=json.dumps([operation, str(native_home), records,
+                                  str(checkout) if checkout else None]),
+        )
+        if result.returncode == 75 and operation == "check":
+            raise NativeStorageDeferred(result.stderr.strip()[-500:])
+        if result.returncode:
+            raise RuntimeExecutionError("Native evidence preservation failed; originals retained: "
+                                        + result.stderr.strip()[-500:])
+
+    def prepare_temporary(native_home):
+        if request.resolved.provider not in {"claude", "glm"}:
+            return
+        result = broker.run([broker.python_executable, "-I", "-c", _PRIVATE_TEMP,
+                             str(native_home)], cwd=request.cwd, timeout=setup_timeout)
+        if result.returncode:
+            raise RuntimeExecutionError("Native temporary directory preparation failed; originals retained")
+
+    evidence("check", home, {"workspace": str(request.cwd)})
+    # Only a read-only, ownerless run with nowhere to commit uses the seed home
+    # directly; given a record checkout it gets a launch home and is captured.
+    if request.sandbox_mode != "workspace-write" and request.native_owner is None and checkout is None:
+        prepare_temporary(home)
         yield NativeWorkspace(home, request.provider_session_id, deadline)
         return
     if deadline is not None:
@@ -319,6 +403,18 @@ def native_workspace(
                 "Native workspace setup exceeded execution deadline",
                 session_id=request.provider_session_id,
             )
+    # Provider records live in the home and reach Git by capture. A writable
+    # run's other mappings (native memory) are world files it edits directly;
+    # a read-only run can edit nothing, so the home owns and captures them all.
+    owned = {name for name, relative in mappings.items()
+             if not writable or relative.startswith(CAPTURED_ROOT)}
+    owner_key = None if request.native_owner is None else (
+        # One prefix per owner lets retirement find every generation.
+        _owner_prefix(request.native_owner)[len(".steward-owner-"):]
+        + hashlib.sha256(json.dumps([
+            request.resolved.provider, request.native_generation,
+        ]).encode()).hexdigest()[:16]
+    )
     try:
         prepared = broker.run(
             [broker.python_executable, "-I", "-c", _PREPARE], cwd=request.cwd,
@@ -327,19 +423,17 @@ def native_workspace(
                 str(home), dict(mappings), request.provider_session_id, resume_pattern,
                 {p.parent.name: p.read_text() for p in
                  (Path(__file__).resolve().parents[1] / "skills").glob("*/SKILL.md")},
-                None if request.native_owner is None else {
-                    # One prefix per owner lets retirement find every generation.
-                    "key": _owner_prefix(request.native_owner)[len(".steward-owner-"):]
-                    + hashlib.sha256(json.dumps([
-                        request.resolved.provider, request.native_generation,
-                    ]).encode()).hexdigest()[:16],
-                    "writable": request.sandbox_mode == "workspace-write",
+                None if owner_key is None else {
+                    "key": owner_key,
+                    "writable": writable,
                     "shared": ["auth.json", "config.toml", "requirements.toml", "plugins", "AGENTS.md",
                                "AGENTS.override.md", "rules", "prompts", "hooks.json", "agents"]
                     if request.resolved.provider == "codex" else
                     [".claude.json", "settings.json", "settings.local.json",
                      "plugins", "commands", "agents", "CLAUDE.md", "rules", "output-styles"],
                 },
+                sorted(owned),
+                str(checkout) if checkout else None,
             ]),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -355,13 +449,46 @@ def native_workspace(
         )
     record = json.loads(prepared.stdout)
     workspace = NativeWorkspace(Path(record["home"]), record["resume"], deadline)
+    captured = {name: mappings[name] for name in owned} if checkout else {}
+    prepare_temporary(workspace.home)
     try:
         yield workspace
     finally:
-        if request.native_owner is None:
-            removed = broker.run(
-                [broker.python_executable, "-I", "-c", _REMOVE, str(workspace.home)],
-                cwd=request.cwd, timeout=30,
-            )
-            if removed.returncode:
-                raise RuntimeExecutionError("Native private launch cleanup failed")
+        # ProcessController has already torn down the provider and descendants.
+        # Homes are retained; Git now holds a copy, not the only one.
+        evidence("capture", workspace.home, captured)
+
+
+@contextmanager
+def _text_workspace(broker, request, home, credential_home):
+    """Only this call's directory is removed, after ProcessController teardown."""
+    from steward_harness.runtime.text_only import CODEX_CONFIG
+    deadline = time.monotonic() + (request.timeout_seconds or 180)
+    prepared = broker.run([
+        broker.python_executable, "-I", "-c", r'''import json,pathlib,shutil,sys,tempfile
+root,auth,family,config=json.load(sys.stdin)
+home=pathlib.Path(tempfile.mkdtemp(prefix=".inference-",dir=root))
+try:
+    (home/"work").mkdir(mode=0o700)
+    (home/".steward-tmp").mkdir(mode=0o700)
+    if family == "codex":
+        (home/"auth.json").symlink_to(pathlib.Path(auth)/"auth.json")
+        (home/"config.toml").write_text(config)
+    print(str(home))
+except BaseException:
+    shutil.rmtree(home)
+    raise
+'''], cwd="/", timeout=min(30, request.timeout_seconds or 30),
+        input_text=json.dumps([str(home), str(credential_home), request.resolved.provider, CODEX_CONFIG]))
+    if prepared.returncode:
+        raise RuntimeExecutionError("Text-only workspace preparation failed")
+    path = Path(prepared.stdout.strip())
+    if path.parent != home or not path.name.startswith(".inference-"):
+        raise RuntimeExecutionError("Invalid text-only workspace identity")
+    try:
+        yield NativeWorkspace(path, None, deadline)
+    finally:
+        removed = broker.run([broker.python_executable, "-I", "-c",
+            "import shutil,sys; shutil.rmtree(sys.argv[1])", str(path)], cwd="/", timeout=3)
+        if removed.returncode:
+            raise RuntimeExecutionError("Text-only workspace cleanup failed")

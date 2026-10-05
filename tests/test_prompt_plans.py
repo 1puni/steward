@@ -6,8 +6,8 @@ from steward_harness.prompts import build_task_prompt, build_turn_prompt
 def test_turn_contains_current_interface_and_observations() -> None:
     turn = build_turn_prompt("  review this  ", "ORIENTATION-SENTINEL", "EVENT-SENTINEL", transport="telegram")
     assert "[[send_image:" in turn
-    assert "TASK_PROPOSAL:" in turn
-    assert "TASK_ACTION:" in turn
+    assert "TASK_PROPOSAL:" not in turn
+    assert "TASK_ACTION:" not in turn
     assert "EVENT-SENTINEL" in turn
     assert "ORIENTATION-SENTINEL" in turn
     assert turn.endswith("## Request\nreview this")
@@ -20,7 +20,7 @@ def test_turn_names_only_enabled_scoped_telegram_actions() -> None:
     desk = build_turn_prompt("review this", transport="desk", telegram_actions=("pin_reply", "pin_message"))
     assert "telegram_pin_" not in desk
     assert "[[send_image:" not in desk
-    assert "TASK_PROPOSAL:" in desk and "TASK_ACTION:" in desk
+    assert "TASK_PROPOSAL:" not in desk and "TASK_ACTION:" not in desk
 
 
 def test_turn_names_authorized_delivery_roots() -> None:

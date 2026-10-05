@@ -1,8 +1,8 @@
 # Durable world turns
 
 A model finishing a turn is an intermediate fact. Acceptance requires its exact
-world revision to be retained and applied, and the source completion and proposed
-task effect to be recorded. Only then can a reply claim accepted work.
+world revision to be retained and applied, and source completion to be recorded.
+Live task operations have their own [Git acceptance boundary](git-native-tasks.md#live-conversation-task-calls) and can be accepted before this boundary.
 
 ## The acceptance rule
 
@@ -15,12 +15,11 @@ native work in an owner checkout
   → record the captured candidate in that row
   → under world lease: already in base..HEAD? else fast-forward,
     else rebase in scratch (model resolver) and fast-forward
-  → atomically complete source and admit/reject task effect
+  → complete source and record its conversation receipt
   → render recorded receipt
 ```
 
-Git owns the content and the exchange. SQLite owns acceptance and dependent
-effects. The two stores are not one transaction: the world branch only
+Git owns the content and the exchange. SQLite owns conversation acceptance. The two stores are not one transaction: the world branch only
 fast-forwards under the lease, so "did this turn apply" is answered by the
 `Steward-Turn` trailers in its history since the turn's base, and a crash
 between application and SQL acceptance needs no application record.
@@ -68,7 +67,7 @@ checkout (world, base and the input the world will record; the checkout path is
 the owner's, derived from its conversation); when
 the provider returns it retains the completed output, provenance and execution
 generation; after Git capture it records the candidate; acceptance completes it
-with the reply and task effect. Each step is one SQL update on that row.
+with the reply. Each step is one SQL update on that row.
 If the checkout is contended before any provider starts, the turn is withdrawn and its
 replay starts it fresh: no provider saw it, so it never happened. A turn that reached a
 provider but has no retained output is never replayed automatically.
@@ -103,8 +102,8 @@ it collides with a path the revision writes.
 
 The trailer is as trustworthy as the world branch, which the agent identity can write:
 an agent could make its own pending turn read as applied by landing a commit that
-carries that turn's trailer. That only drops that turn's own edits; the task effect
-accepted with it is still checked against repository authority at acceptance.
+carries that turn's trailer. That only drops that turn's own edits; task calls
+check repository authority independently at their own acceptance boundary.
 
 The owner's retained checkout holds the candidate (a linked worktree's HEAD is a
 Git reachability root). The row records its base, candidate, source
@@ -117,16 +116,16 @@ copy back.
 
 ## Finalization and replay
 
-Acceptance completes the source and records one proposed effect: task admission,
-task action, rejection, or none. Admission uses the currently configured grant.
-A rejected task proposal can coexist with accepted world edits; the receipt
-must say which happened. Once accepted, policy changes do not rewrite that
-historical receipt or cause admission to run again.
+Acceptance completes the source and records the reply. Live task effects are
+already durable in task Git and are not gated by world application. Unaccepted
+historical final markers are refused; completed historical turns retain their
+recorded receipts.
 
 The world commit records the attributed exchange; SQL records the controller's
 decision. Read-only conversations use the same completion and effect transaction
-without a Git application. Transport sending follows acceptance and has its own
-failure semantics; see [task results](kernel-contract.md#task-results).
+without a Git application. Conversation replies follow acceptance. Retained task
+results already have their own accepted evidence and are delivered independently of
+assessment/world acceptance; see [task results](kernel-contract.md#task-results).
 
 ## Recovery and workspace retention
 
@@ -142,8 +141,7 @@ Owner checkouts are retained between turns, including ignored files such as an
 installed environment, until [idle retention](#idle-session-retention) retires a
 clean one. Integration checkouts are always disposable.
 
-Cancellation cannot erase applied world edits. It can suppress a still-unadmitted
-task effect. Clearing a session must not orphan its prepared update. Dirty or
+Cancellation cannot erase applied world edits. It does not withdraw an independently admitted task. Clearing a session must not orphan its prepared update. Dirty or
 unrelated operator work is not permission to reset the world.
 
 ## Idle session retention
@@ -165,6 +163,8 @@ Finished task worktrees follow the same rule, which keeps a venv or
 Refusals due to local work or pending recovery are logged. Removal uses Git
 `worktree remove` without force and `worktree prune`, keeping accepted history and
 native session records. The next turn recreates the checkout from the world.
+Owner homes hold their native records outright, so removing a checkout never
+strands them; see [native records in Git](native-provider-runtime.md#native-workflows-and-storage-boundary).
 [Retention tests](../tests/test_retention.py) exercise the age and custody boundaries.
 
 ## Verification
@@ -181,9 +181,18 @@ therefore cannot replace a valid reply.
 [World checkpoint tests](../tests/test_world_turn_checkpoint.py) and
 [world durability tests](../tests/test_world_durability.py) exercise real Git
 and SQLite boundaries: preparation, application, acceptance, replay, conflict,
-concurrent edits, retained evidence and dependent admission. They establish the
+concurrent edits, retained evidence and independently durable task admission. They establish the
 behavior exercised under their fixture identities, not native authentication
 or live Telegram delivery.
 
 An upgrade must preserve owner checkouts, world refs, native originals, unfinished
 checkouts, SQL and adjacent receipts together; see [upgrading](upgrading.md).
+
+
+A world-rhythm continuation can reserve its next source before the budgeted
+worker runs. That unclaimed source survives restart and world-lease contention;
+it is authorized work waiting for its first execution. Once the source claims
+its checkout, ordinary custody applies: a crash without retained provider
+completion requires evidence inspection, and cannot replay the provider. The
+[world-rhythm contract](rhythms.md#world-rhythms) defines interval obligations and
+explicit continuation.

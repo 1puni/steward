@@ -231,3 +231,68 @@ def test_success_cleans_descendants_with_grace_after_leader_exits(tmp_path):
     result = controller().run([sys.executable, "-c", parent], cwd=tmp_path, env=os.environ, timeout_seconds=10)
     assert result.returncode == 0
     assert marker.read_text() == "saved"
+
+
+def test_exhausted_budget_stops_like_a_deadline_and_drains(tmp_path):
+    from steward_harness.runtime.process import TokenBudgetExhausted
+    writers, observed = [], []
+    with pytest.raises(TokenBudgetExhausted, match="of its 10 budget"):
+        controller().run(
+            [sys.executable, "-c", "import sys; print('READY',flush=True); assert input() == 'interrupt'; print('CHECKPOINT',flush=True)"],
+            cwd=tmp_path, env=os.environ, timeout_seconds=30,
+            on_input_ready=writers.append,
+            on_stop=lambda: writers[0].write("interrupt\n"), on_stdout_line=observed.append,
+            over_budget=lambda: "provider used 12 output tokens of its 10 budget" if observed else None,
+        )
+    assert observed == ["READY", "CHECKPOINT"]
+
+
+def test_unretained_stream_is_consumed_without_counting_against_the_limit(tmp_path, monkeypatch):
+    from steward_harness.runtime import process
+    monkeypatch.setattr(process, "_STREAM_LIMIT_BYTES", 1000)
+    lines = []
+    output = controller().run(
+        [sys.executable, "-c", "[print('x' * 100) for _ in range(50)]"],
+        cwd=tmp_path, env=os.environ, timeout_seconds=30,
+        on_stdout_line=lines.append, retain_stdout=False,
+    )
+    assert output.returncode == 0 and output.stdout == "" and len(lines) == 50
+    with pytest.raises(RuntimeExecutionError, match="exceeded safe limit"):
+        controller().run(
+            [sys.executable, "-c", "[print('x' * 100) for _ in range(50)]"],
+            cwd=tmp_path, env=os.environ, timeout_seconds=30, on_stdout_line=lines.append,
+        )
+
+
+def test_storage_pressure_interrupts_live_writer_without_deleting_evidence(tmp_path, monkeypatch):
+    import steward_harness.runtime.process as process_module
+
+    low = False
+    inputs = []
+    stopped = []
+
+    def headroom(_paths):
+        if low:
+            raise RuntimeError('native evidence storage reserve reached')
+
+    def output(_line):
+        nonlocal low
+        low = True
+
+    def stop():
+        stopped.append(True)
+        inputs[0].write('stop\n')
+        inputs[0].close()
+
+    monkeypatch.setattr(process_module, 'check_headroom', headroom)
+    with pytest.raises(RuntimeExecutionError, match='storage reserve reached'):
+        controller().run(
+            [sys.executable, '-c',
+             "from pathlib import Path; import sys; Path('evidence').write_text('keep'); "
+             "print('READY',flush=True); sys.stdin.readline()"],
+            cwd=tmp_path, env=os.environ, timeout_seconds=10,
+            on_input_ready=inputs.append, on_stdout_line=output, on_stop=stop,
+            storage_paths=(tmp_path,),
+        )
+    assert stopped == [True]
+    assert (tmp_path / 'evidence').read_text() == 'keep'

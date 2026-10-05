@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from steward_harness.runtime.task_call_mcp import server_config
+from steward_harness.runtime.text_only import verify_text_request, reject_claude_tools
+
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from threading import RLock
@@ -23,13 +26,17 @@ from steward_harness.runtime.contracts import (
     RuntimeRequest,
     RuntimeResult,
     RuntimeUnavailable,
+    TokenMeter,
     validated_uuid,
 )
+from steward_harness.runtime.native_evidence import record_mappings
 from steward_harness.runtime.native_workspace import native_workspace
 from steward_harness.runtime.process import ProcessController, ProcessInput
 
+# A finite mitigation, not disabled cleanup. Claude 2.1.281 rejects zero.
 NATIVE_RETENTION_DAYS = 365000
 _MAX_RESPONSE_CHARS = 64_000
+_MAX_ACTIVITY_CHARS = 120
 _SANDBOX_SETTINGS = json.dumps(
     {
         "sandbox": {
@@ -123,11 +130,13 @@ class _ClaudeLifecycle:
         provider: str,
         *,
         sensitive_event_value: str | None = None,
+        on_progress: Callable[[str], None] = lambda _activity: None,
         allow_empty_output: bool = False,
     ) -> None:
         self._expected_session_id = expected_session_id
         self._provider = provider
         self._sensitive_event_value = sensitive_event_value
+        self._on_progress = on_progress
         self._allow_empty_output = allow_empty_output
         self.failure: RuntimeExecutionError | RuntimeUnavailable | None = None
         self.session_id: str | None = None
@@ -160,7 +169,8 @@ class _ClaudeLifecycle:
             raise RuntimeExecutionError(f"{self._provider} emitted a malformed event stream")
         return event
 
-    def consume_event(self, event: dict[str, Any], *, supersede: bool = True) -> str | None:
+    def consume_event(self, event: dict[str, Any], *, supersede: bool = True,
+                      completion_by_eof: bool = False) -> str | None:
         """Validate one event; a successful result becomes the output.
 
         Without `supersede` a result is validated but keeps the earlier
@@ -190,6 +200,7 @@ class _ClaudeLifecycle:
                 isinstance(block, dict) and block.get("type") == "tool_use"
                 for block in (content if isinstance(content, list) else ())
             )
+            self._report_activity(event)
         if event_type == "assistant" and event.get("parent_tool_use_id") is None:
             code = event.get("error")
             message = "\n".join(
@@ -205,7 +216,8 @@ class _ClaudeLifecycle:
                 or "reported a failed turn",
             )
         self.failure = None
-        if event.get("terminal_reason") != "completed":
+        if (event.get("terminal_reason") != "completed"
+                and not (completion_by_eof and "terminal_reason" not in event)):
             raise RuntimeExecutionError(
                 f"{self._provider} did not finish its native command",
                 session_id=self.session_id,
@@ -236,6 +248,35 @@ class _ClaudeLifecycle:
                 session_id=self.session_id,
             )
         return self._output, self.session_id, self.effective_model
+
+    def _report_activity(self, event: Mapping[str, Any]) -> None:
+        """Narrate this turn's tool activity without touching lifecycle state.
+
+        Progress is advisory. A consumer that raises must not turn a healthy
+        turn into a failed one, so callback errors are dropped here rather
+        than escaping into stream validation.
+        """
+        content = event.get("message", {}).get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            arguments = block.get("input")
+            detail = ""
+            if isinstance(arguments, Mapping):
+                for key in ("file_path", "pattern", "query", "url", "command"):
+                    value = arguments.get(key)
+                    if isinstance(value, str) and value.strip():
+                        detail = value.strip()
+                        break
+            try:
+                self._on_progress(f"{name} {detail}".strip()[:_MAX_ACTIVITY_CHARS])
+            except Exception:
+                continue
 
     def _error(self, message: str) -> RuntimeExecutionError | RuntimeUnavailable:
         """Build the turn-ending error, or the refusal that tries someone else.
@@ -289,6 +330,8 @@ class ClaudeInputStream:
         self.lifecycle = lifecycle
         self.writer: ProcessInput | None = None
         self.commands: dict[str, str | None] = {}
+        self.single_input = request.on_input_ready is None
+        self.echoed: set[str] = set()
         self.sources: set[str] = set()
         self.acknowledged: set[str] = set()
         self.started: set[str] = set()
@@ -306,16 +349,21 @@ class ClaudeInputStream:
         # Commands that carried a controller receipt. A native turn answering
         # one is the session acknowledging a notice, not the execution's word.
         self.receipts: set[str] = set()
+        self.meter = TokenMeter(request.token_budget)
+        # The message each (sub)agent is streaming: a usage delta names no message.
+        self.streaming: dict[object, object] = {}
         self.lock = RLock()
 
     def connect(self, writer: ProcessInput) -> None:
         self.writer = writer
         self._write(self.request.prompt, None)
+        if self.single_input:
+            writer.close()
 
     def stop(self) -> None:
         """Ask the native stream to interrupt; acknowledgement is not completion."""
         with self.lock:
-            if self.closed or self.interrupt_id is not None:
+            if self.single_input or self.closed or self.interrupt_id is not None:
                 return
             self.interrupt_id = str(uuid4())
             self.writer.write(json.dumps({
@@ -357,7 +405,14 @@ class ClaudeInputStream:
         # identity. Native queue events can precede system/init, so hold their
         # identity separately until the ordinary lifecycle establishes it.
         event = self.lifecycle.decode(line)
+        if self.request.text_only:
+            reject_claude_tools(event)
+            if event.get("type") == "result" and isinstance(event.get("result"), str) and len(event["result"]) > _MAX_RESPONSE_CHARS:
+                raise RuntimeExecutionError("Text-only output exceeded limit")
         with self.lock:
+            if event.get("type") == "stream_event":
+                self._meter(event)
+                return
             if event.get("type") == "control_response":
                 response = event.get("response", {})
                 if (not isinstance(response, dict) or self.interrupt_id is None
@@ -368,6 +423,9 @@ class ClaudeInputStream:
             if event.get("type") == "command_lifecycle":
                 self._command_event(event)
             else:
+                if event.get("type") == "user" and event.get("uuid") in self.commands:
+                    self._session(event.get("session_id"))
+                    self.echoed.add(event["uuid"])
                 if event.get("type") == "system" and event.get("subtype") == "task_notification":
                     self.notified = True
                 if event.get("type") == "result":
@@ -380,7 +438,15 @@ class ClaudeInputStream:
                     # turn of its own. That is this execution going on, and its
                     # result is the latest word, not a stray.
                     answers_receipt = False
-                    if not self._continuation(event):
+                    if self.single_input and not self.started:
+                        # Stock Claude emits a replayed user UUID and a terminal
+                        # result, but no command_lifecycle. EOF bounds this one
+                        # request; ongoing input still requires native queue IDs.
+                        if (len(self.commands) != 1 or self.echoed != set(self.commands)
+                                or self.results or event.get("user_message_uuid") not in (None, *self.commands)):
+                            raise RuntimeExecutionError("native result has no offered command identity", session_id=self.session_id)
+                        self.results.update(self.commands)
+                    elif not self._continuation(event):
                         if (not isinstance(command, str) or command not in self.expected_results
                                 or command in self.results):
                             raise RuntimeExecutionError("native result has no offered command identity", session_id=self.session_id)
@@ -397,7 +463,9 @@ class ClaudeInputStream:
                 elif event.get("type") == "result" and answers_receipt:
                     started = self.lifecycle.consume_event(event, supersede=False)
                 else:
-                    started = self.lifecycle.consume_event(event)
+                    started = self.lifecycle.consume_event(
+                        event, completion_by_eof=self.single_input and not self.started,
+                    )
                 if started is not None:
                     self._session(started)
                     self.request.on_session_started(started)
@@ -411,6 +479,27 @@ class ClaudeInputStream:
                          or (self.expected_results and self.results == self.expected_results))):
                 self.closed = True
                 self.writer.close()
+
+    def _meter(self, event: dict[str, Any]) -> None:
+        """Count a partial message's output; it carries no lifecycle.
+
+        Only `message_delta` reports a message's final output, thinking
+        included; the complete `assistant` event repeats its starting usage.
+        """
+        identity = event.get("session_id")
+        if self.lifecycle.session_id is not None and identity != self.lifecycle.session_id:
+            raise RuntimeExecutionError("native stream changed session identity", session_id=self.session_id)
+        native = event.get("event")
+        if not isinstance(native, dict):
+            raise RuntimeExecutionError("native stream reported a malformed partial message", session_id=self.session_id)
+        agent = event.get("parent_tool_use_id")
+        if native.get("type") == "message_start":
+            message = native.get("message")
+            self.streaming[agent] = message.get("id") if isinstance(message, dict) else None
+        elif native.get("type") == "message_delta":
+            usage = native.get("usage")
+            if isinstance(usage, dict):
+                self.meter.report((agent, self.streaming.get(agent)), usage.get("output_tokens"))
 
     def _continuation(self, event: dict[str, Any]) -> bool:
         """Whether a result belongs to a native turn a background notice opened.
@@ -439,6 +528,8 @@ class ClaudeInputStream:
         if not isinstance(command, str) or not isinstance(state, str):
             raise RuntimeExecutionError("native command stream reported malformed identity/state", session_id=self.session_id)
         if command not in self.commands:
+            if self.request.text_only:
+                raise RuntimeExecutionError("Unowned command in text-only inference")
             if state not in {"queued", "started"} or validated_uuid(command) is None:
                 raise RuntimeExecutionError("native command stream reported unowned work", session_id=self.session_id)
             # Native notifications/agents can enqueue their own work. Track its
@@ -483,6 +574,8 @@ class ClaudeInputStream:
                     self.request.on_input_result(RuntimeInputResult(source, "unresolved"))
 
     def finish(self) -> None:
+        if self.single_input and not self.started and self.results == set(self.commands):
+            return
         if (not self.expected_results or self.results != self.expected_results
                 or not self.completed.issuperset(self.commands)):
             raise RuntimeExecutionError("native stream ended before correlated command completion", session_id=self.session_id)
@@ -496,7 +589,7 @@ class ClaudeRuntime:
     base URL and credential file are configured.
     """
 
-    capabilities = replace(SESSION_WORKSPACE_CAPABILITIES, ongoing_input=True)
+    capabilities = replace(SESSION_WORKSPACE_CAPABILITIES, ongoing_input=True, text_only=True)
 
     def __init__(
         self,
@@ -504,6 +597,7 @@ class ClaudeRuntime:
         *,
         controller: ProcessController,
         native_home: Path,
+        credential_home: Path | None = None,
         base_url: str | None = None,
         credential_path: Path | None = None,
         family: ProviderFamily = "claude",
@@ -517,6 +611,7 @@ class ClaudeRuntime:
         self.executable = executable
         self._controller = controller
         self.native_home = native_home
+        self.credential_home = credential_home or native_home
         self.base_url = base_url
         self.credential_path = credential_path
         self.family: ProviderFamily = family
@@ -536,6 +631,8 @@ class ClaudeRuntime:
         return Availability(True)
 
     def execute(self, request: RuntimeRequest) -> RuntimeResult:
+        if request.text_only:
+            request = verify_text_request(self._controller.broker, self.executable, self.family, request)
         if not self._controller.broker.is_directory(self.native_home):
             raise RuntimeExecutionError(
                 f"Provision the steward's {self.display_name} native home before execution"
@@ -547,12 +644,16 @@ class ClaudeRuntime:
                 raise ValueError(f"Invalid persisted {self.display_name} session ID")
         with native_workspace(
             self._controller.broker, request, self.native_home,
-            mappings={"projects": f"artefacts/{self.family}/projects"},
+            mappings=record_mappings(self.family),
+            credential_home=self.credential_home,
             resume_pattern=f"artefacts/{self.family}/projects/*/{{session}}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)
-            environment = self.environment()
+            if request.text_only:
+                request = replace(request, cwd=workspace.home / "work")
+            environment = self.environment({} if request.text_only else None)
             environment["CLAUDE_CONFIG_DIR"] = str(workspace.home)
+            environment["CLAUDE_CODE_TMPDIR"] = str(workspace.home / ".steward-tmp")
             if self.credential_path is not None:
                 # Explicit router credentials must not fall back to a native
                 # first-party OAuth store, even on anonymous seed-home calls.
@@ -564,7 +665,8 @@ class ClaudeRuntime:
             return self._execute(request, session_id, environment, resume=workspace.resume)
 
     def _execute(self, request, session_id, environment, *, resume=None):
-        command = self._command(request, resume or session_id)
+        command = self._command(request, resume or session_id,
+                                native_tmp=environment.get("CLAUDE_CODE_TMPDIR"))
         if request.sandbox_mode == "workspace-write":
             environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "0"
         # Any configured router token must never survive into recorded events.
@@ -572,6 +674,7 @@ class ClaudeRuntime:
             session_id,
             self.display_name,
             sensitive_event_value=environment.get("ANTHROPIC_AUTH_TOKEN"),
+            on_progress=request.on_progress,
             allow_empty_output=request.allow_empty_output,
         )
         stream = ClaudeInputStream(request, lifecycle)
@@ -579,12 +682,18 @@ class ClaudeRuntime:
             output = self._controller.run(
                 command,
                 cwd=request.cwd,
+                storage_paths=(Path(environment["CLAUDE_CONFIG_DIR"]), request.cwd),
                 env=environment,
                 timeout_seconds=request.timeout_seconds,
                 on_stdout_line=stream.consume,
                 on_input_ready=stream.connect,
                 on_started=request.on_started,
+                on_process_started=request.on_process_started,
                 on_stop=stream.stop,
+                over_budget=stream.meter.exhausted if request.token_budget else None,
+                # Partial messages are only requested to meter; nothing reads
+                # the retained stream, and they would crowd its limit.
+                retain_stdout=request.token_budget is None,
             )
         except RuntimeExecutionError as error:
             if error.session_id is None:
@@ -624,7 +733,7 @@ class ClaudeRuntime:
         environment["CLAUDE_CONFIG_DIR"] = str(self.native_home)
         # Keep credential persistence and the native refresh lock in one private
         # authority even when runtime state moves into an owner-specific home.
-        environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(self.native_home)
+        environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(self.credential_home)
         if self.base_url is not None:
             try:
                 token = self._read_credential(self.credential_path)
@@ -643,8 +752,11 @@ class ClaudeRuntime:
         environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         return environment
 
-    def _command(self, request: RuntimeRequest, session_id: str | None) -> list[str]:
+    def _command(self, request: RuntimeRequest, session_id: str | None,
+                 *, native_tmp: str | None = None) -> list[str]:
         settings = json.loads(_SANDBOX_SETTINGS)
+        if native_tmp is not None:
+            settings["env"] = {"CLAUDE_CODE_TMPDIR": native_tmp}
         # A dropped OS identity is the boundary. Asking the provider to police
         # itself on top of an enforced boundary buys nothing and costs reasoning.
         unrestricted = self._controller.broker.enabled and request.sandbox_mode == "workspace-write"
@@ -657,7 +769,7 @@ class ClaudeRuntime:
             # retirement is still pending, so these retained homes can grow.
             cleanupPeriodDays=NATIVE_RETENTION_DAYS,
             autoMemoryEnabled=request.sandbox_mode == "workspace-write",
-            autoMemoryDirectory=str(request.cwd.resolve() / "memories" / self.family),
+            autoMemoryDirectory=str((request.record_checkout or request.cwd).resolve() / "memories" / self.family),
         )
         command = [
             str(self.executable),
@@ -671,6 +783,7 @@ class ClaudeRuntime:
                 "acceptEdits" if request.sandbox_mode == "workspace-write" else "dontAsk"),
             *([] if unrestricted else ["--allowed-tools",
                 *(_WORKSPACE_TOOLS if request.sandbox_mode == "workspace-write" else _READ_ONLY_TOOLS),
+                *(["mcp__steward_tasks__task"] if request.task_call_socket else []),
                 *(["Agent"] if request.sandbox_mode == "workspace-write" else [])]),
             "--model",
             request.resolved.model,
@@ -683,11 +796,26 @@ class ClaudeRuntime:
                 else ()
             ),
         ]
+        if request.text_only:
+            # Explicit CLI settings suppress settings/plugin hooks while keeping OAuth.
+            settings.update(disableAllHooks=True, autoMemoryEnabled=False)
+            command = [str(self.executable), "--output-format", "stream-json", "--verbose",
+                "--settings", json.dumps(settings), "--setting-sources", "",
+                "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
+                "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
+                "--no-chrome", "--permission-mode", "dontAsk", "--model", request.resolved.model,
+                *(["--effort", request.resolved.reasoning_effort] if request.resolved.reasoning_effort else [])]
+        if request.task_call_socket:
+            command.extend(("--mcp-config", json.dumps({"mcpServers": {
+                "steward_tasks": server_config(request.task_call_socket)}})))
         for root in request.writable_roots:
             command.extend(("--add-dir", str(root)))
         if session_id is not None:
             command.extend(("--resume", session_id))
         command.extend(("-p", "--input-format", "stream-json", "--replay-user-messages"))
+        if request.token_budget is not None:
+            # The only native source of a message's final output count.
+            command.append("--include-partial-messages")
         return command
 
     @staticmethod

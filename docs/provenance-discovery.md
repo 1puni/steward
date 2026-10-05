@@ -59,12 +59,14 @@ unverified delivery, not as a failure.
 
 ## Current ownership on request
 
-Historical Git evidence cannot prove who owns work now. A task that needs this
-read closes an ordinary slice with `DISPOSITION: ask` and a question such as
-`QUESTION: TASK_QUERY: {"repository":"app","text":"consumer"}`. The controller
-answers through the existing accepted task input and resumes that same task.
-A crash after the retained question leaves a waiting task whose next dispatch
-supplies the answer; no new query task, read server or snapshot directory exists.
+Historical Git evidence cannot prove who owns work now. An ordinary task calls
+the native `steward_tasks` task tool with `operation="query"`, `repository="app"`
+and `text="consumer"`. The bounded observation returns during the same execution
+through the [existing task-call bridge](git-native-tasks.md#ownership-reads-during-task-execution).
+Task execution cannot submit or steer peer work. It can also notify its bound
+owner and declare its own closure intent. Historical query-shaped questions are
+ordinary questions; there is no final-prose query fallback. No query task,
+parallel registry or snapshot directory is created.
 
 The configured repository set bounds the read. Results include up to ten accepted
 unfinished tasks whose titles contain every requested word, their observed status,
@@ -76,6 +78,6 @@ read, not a lease. Subsequent task actions still cross ordinary ownership and
 repository-authority checks. Model output and peer titles remain evidence, not
 instructions or grants. Ordinary questions still wait for an operator answer.
 
-This interface is available to task cognition (including reflection); conversation
-cognition can request a bounded investigation through its existing proposal path.
-It does not inject live peer state into every prompt.
+Task cognition uses the live query; reflection procedures retain the closure
+route. Conversation cognition can inspect its own work through live `list` and
+`show` calls. No route injects peer state into every prompt.

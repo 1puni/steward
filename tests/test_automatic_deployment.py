@@ -11,12 +11,15 @@ from steward_harness.daemon import StewardDaemon
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.state import StateDatabase, TaskSpec
 from test_task_no_changes import InvestigationAdapter
+from task_tool_fixtures import TaskAdapter
 from test_task_runner_kernel import _git, _repository
 
 
-@pytest.mark.parametrize("external_ready", [True, False])
-def test_daemon_publishes_task_and_independently_observes_target(tmp_path, external_ready):
+@pytest.mark.parametrize("external_ready,wrong_revision", [(True, False), (False, False), (True, True)])
+def test_daemon_publishes_task_and_independently_observes_target(tmp_path, external_ready, wrong_revision):
     remote, clone = _repository(tmp_path)
+    source = _git("rev-parse", "main", cwd=remote)
+    applied = tmp_path / "applied"
     destination = tmp_path / "external.json"
     driver = tmp_path / "installed-driver"
     driver.write_text(f"#!{sys.executable}\n" + f'''import json,sys
@@ -26,7 +29,8 @@ path=Path({str(destination)!r})
 if sys.argv[1]=='observe':
     print(path.read_text() if path.exists() else json.dumps(dict(revision=None,ready=False)))
 else:
-    path.write_text(json.dumps(dict(revision=request['revision'],ready={external_ready!r})))
+    path.write_text(json.dumps(dict(revision={source!r} if {wrong_revision!r} else request['revision'],ready={external_ready!r})))
+    Path({str(applied)!r}).write_text(request['revision'])
 ''')
     driver.chmod(0o755)
     config = StewardConfig.model_validate(dict(
@@ -39,7 +43,7 @@ else:
     Path(config.provider.workdir).mkdir()
     state = StateDatabase(config.provider.state_db)
     task, _ = state.tasks.create(TaskSpec("app", "Investigate", "Find the consumer"))
-    daemon = StewardDaemon(config, tmp_path / "config.yaml", adapters={"claude": InvestigationAdapter()},
+    daemon = StewardDaemon(config, tmp_path / "config.yaml", adapters={"claude": TaskAdapter(InvestigationAdapter())},
                            broker=UntrustedExecutionBroker(UntrustedExecutionConfig()))
     with daemon._daemon_lease():
         step = daemon._start_owned()
@@ -50,12 +54,14 @@ else:
                 current = StateDatabase(config.provider.state_db)
                 current.tasks.transports = daemon._targets.transports
                 landed = current.tasks.get(task).landed
-                if landed and destination.exists() and json.loads(destination.read_text())["revision"] == landed:
+                if landed and applied.exists() and applied.read_text() == landed:
                     break
                 assert time.monotonic() < deadline, "daemon did not advance publication and target"
                 time.sleep(.02)
             assert _git("rev-parse", "main", cwd=remote) == landed
             outcome = daemon._targets.advance("production")
-            assert ("satisfied" in outcome) is external_ready
+            assert ("satisfied" in outcome) is (external_ready and not wrong_revision)
+            assert current.tasks.get(task).status.value == "done"
+            assert json.loads(destination.read_text())["revision"] == (source if wrong_revision else landed)
         finally:
             daemon.stop()

@@ -25,7 +25,6 @@ from steward_harness.state import (
 from steward_harness.task_lock import locked_tasks, task_lock
 from steward_harness.config.schema import ProcedureConfig, _require_bounded_absolute
 from steward_harness.lease import Busy, Lease
-from steward_harness.notify import notification
 
 PREFIX = "refs/heads/tasks/"
 ZERO = "0" * 40
@@ -164,11 +163,10 @@ class Task:
         """A finished rhythm run that notifies no one: its commit is all it owes.
 
         A review's findings are its evidence commit's message and a writing
-        run's work has landed, so both are kept either way; only a `NOTIFY:`
-        line in the findings asks for the owner's attention.
+        run's work has landed, so both are kept either way; notifications are independent durable calls.
         """
         return (self.status is TaskStatus.DONE and self.procedure is not None
-                and self.procedure.event.startswith("rhythm:") and not notification(self.findings))
+                and self.procedure.event.startswith("rhythm:"))
 
     @property
     def landed_nothing(self) -> bool:
@@ -323,7 +321,7 @@ class GitTaskStore:
         # Subject, findings, trailers: drop the first paragraph, and the last
         # one only if it is ours. A slice that concluded nothing has two.
         paragraphs = message.partition("\n")[2].strip().split("\n\n")
-        if paragraphs and all(line.startswith(("Disposition:", "Reason:"))
+        if paragraphs and all(line.startswith(("Disposition:", "Reason:", "Steward-Execution:", "Steward-Task-Revision:"))
                               for line in paragraphs[-1].strip().splitlines() if line.strip()):
             paragraphs.pop()
         return replace(task, disposition=disposition.strip() or None,
@@ -332,6 +330,18 @@ class GitTaskStore:
 
     def get(self, task_id: TaskId) -> Task:
         return self._observe([self._record(task_id)])[0]
+
+    def resolve(self, reference: str) -> TaskId:
+        """Resolve a human reference; never choose between colliding short IDs."""
+        if not reference.startswith("#"):
+            return TaskId(reference)
+        matches = [TaskId(ref.removeprefix(PREFIX)) for ref in self.refs()
+                   if TaskId(ref.removeprefix(PREFIX)).short == reference.lower()]
+        if not matches:
+            raise LookupError(f"unknown task {reference}")
+        if len(matches) > 1:
+            raise ValueError(f"ambiguous task {reference}; use the full task ID")
+        return matches[0]
 
     def all(self) -> list[Task]:
         tasks = self._observe([self._record(TaskId(ref.removeprefix(PREFIX)), sha)
@@ -366,7 +376,7 @@ class GitTaskStore:
 
         Its own native session record does not count: every run writes one.
         That record and its findings stay on its task ref, as a review's do,
-        and a `NOTIFY:` line still reaches its owner; landing them would put a
+        and notification calls still reach its owner; landing them would put a
         transcript-only commit on the input branch every interval. A run that
         changed a real file publishes its session record with it. Any other
         task that changed no file still publishes its findings.
@@ -450,7 +460,7 @@ class GitTaskStore:
             definition = Definition(repository=spec.repository, title=spec.title,
                                     origin=kind, source=source, owner=owner,
                                     priority=spec.priority, hold=hold, reason=reason, procedure=procedure)
-            self._commit(task_id, None, definition, spec.brief, "steward: accept task",
+            self._commit(task_id, None, definition, spec.brief, "steward: accept task" + (f"\n\nSteward-Source: {source}" if source else ""),
                          (procedure.candidate,) if procedure else ())
         return task_id, True
 
@@ -564,13 +574,13 @@ class GitTaskStore:
             self.input(task_id, "retry", self._text(note, "task retry note"), decide=retry, source=source)
         return self.get(task_id)
 
-    def cancel(self, task_id, reason=None) -> Task:
+    def cancel(self, task_id, reason=None, *, source=None) -> Task:
         reason = "operator requested cancellation" if reason is None else reason.strip()
         if not reason:
             raise ValueError("task cancellation reason must be nonblank")
         if self.get(task_id).status is TaskStatus.DONE:
             raise RuntimeError("completed task cannot be cancelled")
-        self.hold(task_id, "cancelled", reason)
+        self.hold(task_id, "cancelled", reason, source=source)
         return self.get(task_id)
 
     def cancelled(self, task_id) -> bool:
@@ -605,7 +615,7 @@ class GitTaskStore:
             lock.release()
         return self.get(task_id)
 
-    def hold(self, task_id, hold, reason) -> bool:
+    def hold(self, task_id, hold, reason, *, source=None) -> bool:
         """Hold the task with a reason; blocking never overrides an operator's hold."""
         if not reason.strip():
             raise ValueError("a held task requires a reason")
@@ -616,7 +626,7 @@ class GitTaskStore:
                 return d
             changed = True
             return d.model_copy(update={"hold": hold, "reason": reason.strip()})
-        self.change(task_id, decide, message=f"{'block' if hold == 'blocked' else 'cancel'} task\n\n{reason.strip()}")
+        self.change(task_id, decide, message=f"{'block' if hold == 'blocked' else 'cancel'} task\n\n{reason.strip()}\n", source=source)
         return changed
 
     def finish_slice(self, task_id, *, disposition, opened_at, detail=None,

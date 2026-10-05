@@ -51,7 +51,7 @@ stored in SQL. The frontmatter fields are `repository`, `title`, `origin`,
 **The work branch** lives in the product repository's agent-side clone, named
 `tasks/<task-id>`. The native session commits there as it likes, and its commits
 stay on the branch. Each slice ends with one checkpoint commit the harness
-makes: its subject is the session's `COMMIT:` line, its message body is the
+makes: its subject is supplied by the controller or an optional explicit decision, its message body is the
 session's findings, and its `Disposition:` and `Reason:` trailers record the
 disposition. A slice that changed nothing still gets that commit, empty, so its
 findings land in history. There is no task-prose file in the product checkout;
@@ -68,22 +68,16 @@ board, so it is spelled out rather than opaque. You will be typing it into
 
 ### From a conversation
 
-This is the ordinary route. Talk to the steward in a Telegram topic or at the
-desk, agree on what the work is, and let its reply end with a single final line:
+Talk to the steward in a Telegram topic or at the operator desk. During its
+native execution it calls the `steward_tasks` MCP `task` tool with a `submit`
+operation, a distinct operation key, and the repository, title and complete
+brief. The tool returns the durable task ID and accepted Git revision immediately.
+It can submit several independent tasks without ending the conversation or
+waiting for an earlier task. See the [call contract](git-native-tasks.md#live-conversation-task-calls).
 
-```text
-TASK_PROPOSAL: {"repository":"app","title":"Retire the CSV importer","brief":"Remove the CSV importer and move its two callers to the streaming reader. Keep the existing fixtures passing. If a caller needs behaviour the streaming reader does not have, stop and ask rather than widening the reader's contract."}
-```
-
-Three constraints decide whether that becomes a task:
-
-- The marker must be the **last** line of the reply, and there must be exactly
-  one marker in it. A turn proposes at most one task.
-- `repository` must name a configured repository. Configuring a repository is
-  the authority to work in it; anything else is refused with a visible
-  rejection. A conversation cannot grant itself a repository it was not given.
-- `repository`, `title` and `brief` are all required and all strings. The title
-  is capped at 256 characters, the brief at 8000.
+The repository must be configured; configuring it is the authority to work in
+it. Title and brief are required strings, capped at 256 and 8000 characters.
+Rhythms receive no task tool.
 
 An admitted conversation task is **queued immediately**. There is no
 confirmation step for it — `/task confirm` exists for tasks that arrive held as
@@ -129,25 +123,21 @@ Work happens in **slices**. One slice is one provider execution holding the
 task's lock, in a retained checkout of `tasks/<task-id>`, ending in one commit
 the harness makes.
 
-The session ends its final response with three lines:
+Successful native completion records `idle` after writer teardown. Workspace-write
+work then owes publication through the normal gates. No final suffix, close call,
+nonempty reply or diff is needed.
 
-```text
-COMMIT: refactor: route reporting through the streaming reader
-DISPOSITION: continue
-QUESTION: NONE
-```
+Use the existing `steward_tasks` `close` operation only for an explicit state the
+native adapters cannot yet convey: `continue` for more work on the same task,
+or `ask` with a blocking `question`. These calls take a stable `key` and commit
+`subject`. An optional `idle` call remains compatible with older sessions.
+See the [native completion contract](execution-lifecycle.md#execution-closure-and-continuation)
+for the question-mapping gap and receipt semantics.
 
-- `continue` — more work remains on this exact task. It will be picked up again
-  on a later pass, with the same branch and, when it survives, the same provider
-  session.
-- `ask` — it cannot proceed without an answer, which goes in `QUESTION:`. The
-  task waits.
-- `idle` — finished. Workspace-write work now owes a publication.
-
-If the closure is malformed, the harness keeps the work, commits it, and blocks
-the task rather than guessing what the session meant. A slice that crashes or is
-killed leaves no half-state: the lock is a `flock`, so it dies with the process,
-and the task simply never left the queue.
+Invalid or conflicting explicit decisions retain blocked work. Crashes, timeout,
+cancellation and failed writer containment cannot establish successful completion.
+The task lock is a `flock`; its release proves only that the lock is free.
+Settled checkpoints and accepted input determine recovery, not lock-file existence.
 
 **What carries.** Everything durable is in Git before the slice is over:
 
@@ -276,17 +266,12 @@ different candidate.
 `owner:` is required on every rhythm — you must write it, even to write `null`.
 
 A configured `telegram:<topic-id>` or `desk:<conversation>` becomes the
-protected result owner of every task that rhythm creates. A run that asks or
-fails, or finishes with findings carrying a `NOTIFY:` line, goes through the
-ordinary task-result assessment path in that conversation: the owner's session
-sees the brief and the findings as *evidence*, can record what matters in the
-world, can propose a follow-up task within the repository authority it already
-has, and sends the run's message or its own replacement. A run that finishes
-without asking to notify never reaches assessment at all. Its findings stay on
-its task ref, and a writing run's work lands, but no turn runs and no message is
-sent. Assessment cannot grant
-itself repository access it did not have, and cannot steer tasks owned by
-another conversation.
+protected result owner of every task that rhythm creates. Questions and failures
+retain their ordinary task-result route. Completed findings are evidence only;
+a deliberate `notify` call queues a message to that owner independently of the
+final reply and without assessment. Its findings stay on its task ref, and a
+writing run's work lands whether it notifies or not.
+Assessment cannot grant itself repository access or steer another owner's tasks.
 
 `owner: null` means the run's evidence is retained in its accepted task record
 and nothing else happens: no assessment turn, no message, no follow-up
@@ -406,7 +391,7 @@ push, and a push already underway may land. Work that reached the remote is
 reported as landed, not relabelled cancelled.
 
 `/pause` is a filter on what the steward takes on — new task slices, probes,
-rhythm admission, desk intake. Repository convergence and result assessment keep
+rhythm admission. Repository convergence and result assessment keep
 running, because a repository that owes a publication does not stop owing it. It
 is not a quiescence barrier; do not use it as one before an upgrade.
 
@@ -449,7 +434,7 @@ Be clear about these before you design a body of work around the harness.
 
 ## Where to go next
 
-- [Execution lifecycle](execution-lifecycle.md) — closure syntax, status
+- [Execution lifecycle](execution-lifecycle.md) — closure operations, status
   precedence, continuation and cancellation in detail.
 - [Rhythms invoke procedures](rhythms.md) — the procedure/rhythm/target
   roles and their evidence boundaries.

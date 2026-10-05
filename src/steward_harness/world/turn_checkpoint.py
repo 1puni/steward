@@ -8,12 +8,14 @@ acceptance, while independent sessions can work concurrently.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from steward_harness.git import (
     git_operation_paths,
@@ -21,13 +23,19 @@ from steward_harness.git import (
     run_agent_git,
     steward_commit_argv,
 )
-from steward_harness.git_reconcile import ResolveTurn, reconcile_git
+from steward_harness.git_reconcile import ResolveTurn, merge_git, reconcile_git
 from steward_harness.state import StateDatabase
+from steward_harness.runtime.native_evidence import CAPTURED_ROOT, EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.world.git_world import BASE_TRAILER, TURN_TRAILER, GitWorld
 from steward_harness.lease import Lease
 
+if TYPE_CHECKING:
+    from steward_harness.git_transport import ControllerGitTransport
+
 _WORKSPACE_PREFIX = "session-"
+
+_NATIVE_EVIDENCE = (Path(__file__).parents[1] / "runtime" / "native_evidence.py").read_text()
 
 
 class WorldUpdatePending(RuntimeError):
@@ -58,9 +66,11 @@ class WorldTurnCheckpoint:
         execution_broker: UntrustedExecutionBroker,
         state: StateDatabase,
         resolve_turn: ResolveTurn | None = None,
+        transport: ControllerGitTransport | None = None,
     ) -> None:
         self.world = world
         self.lease = lease
+        self.transport = transport
         self.worktrees_root = execution_broker.resolve_path(worktrees_root)
         self.broker = execution_broker
         self.state = state
@@ -112,8 +122,33 @@ class WorldTurnCheckpoint:
                 self._refresh_workspace(path, sha)
                 sha = self._git(path, "rev-parse", "HEAD").stdout.strip()
             else:
-                self._git(self.world.root, "worktree", "add", "--detach", str(path), sha)
+                self._add_worktree(path, sha)
         return WorldTurnWorktree(path, sha)
+
+    def _add_worktree(self, path: Path, sha: str) -> None:
+        """Check out `sha` without the provider records Git already holds.
+
+        Owner homes hold live records and capture them into the index, so no
+        checkout needs every session the world ever kept. Skip-worktree, not
+        sparse-checkout: sparse mode lets an incoming path overwrite an
+        untracked local file instead of refusing.
+        """
+        self._git(self.world.root, "worktree", "add", "--no-checkout", "--detach", str(path), sha)
+        self._git(path, "read-tree", sha)
+        records = self._git(path, "ls-files", "-z", "--", CAPTURED_ROOT).stdout
+        if records:
+            self._git(path, "update-index", "-z", "--skip-worktree", "--stdin", input_text=records)
+        self._git(path, "checkout-index", "--all", "--index")
+
+    def _leave_records_to_git(self, path: Path) -> None:
+        """A merge or checkout writes the records it changed; take them back out."""
+        result = self.broker.run(
+            [self.broker.python_executable, "-I", "-c", _NATIVE_EVIDENCE], cwd=path, timeout=300,
+            input_text=json.dumps(["release", None, {}, str(path)]),
+        )
+        if result.returncode:
+            raise RuntimeError(f"could not leave native records to Git in {path}: "
+                               + result.stderr.strip()[-500:])
 
     def _refresh_workspace(self, path: Path, head: str) -> None:
         """Bring accepted knowledge into a clean checkout; never erase local work."""
@@ -124,6 +159,8 @@ class WorldTurnCheckpoint:
             raise WorldUpdatePending(f"retained workspace no longer belongs to its world: {path}")
         # Interrupted tools, ignored environments, and uncommitted edits belong
         # to the session. Resume them as-is; acceptance will reconcile later.
+        if self.broker.path_exists(path / EVIDENCE_PENDING):
+            return
         if self._git(path, "status", "--porcelain").stdout.strip():
             return
         for git_path in git_operation_paths(lambda *args: self._git(path, *args).stdout).values():
@@ -155,6 +192,7 @@ class WorldTurnCheckpoint:
             raise WorldContentConflict(
                 f"accepted world conflicts with retained workspace: {path}: {detail}"
             )
+        self._leave_records_to_git(path)
 
     def _accepted_candidates(self, path: Path, head: str, connection=None) -> set[str]:
         """Local commits of `path` that completed acceptance into this world consumed.
@@ -233,10 +271,7 @@ class WorldTurnCheckpoint:
                     self._apply_revision(row["candidate_sha"])
                     return finalize()
                 integration = self.worktrees_root / f"integration-{uuid.uuid4().hex}"
-                self._git(
-                    self.world.root, "worktree", "add", "--detach",
-                    str(integration), row["candidate_sha"],
-                )
+                self._add_worktree(integration, row["candidate_sha"])
             try:
                 error = reconcile_git(
                     integration, head, event_id, broker=self.broker,
@@ -258,6 +293,63 @@ class WorldTurnCheckpoint:
             finally:
                 self._remove_worktree(integration)
         raise WorldUpdatePending(f"world moved during reconciliation of {event_id}; candidate retained")
+
+    def converge(self) -> str | None:
+        """Take in what other writers pushed to the world's remote, then publish.
+
+        The remote is one more concurrent writer. Its commits join the world
+        under the lease the way a turn does: a fast-forward when the world has
+        nothing unpublished, otherwise a merge, since both sides are already
+        published and a rebase would rewrite them. The push is a
+        compare-and-swap on the tip just observed; a writer that pushed in
+        between is taken in on the next pass. Returns the published commit.
+        """
+        if self.transport is None:
+            return None
+        remote = self.transport.fetch()
+        ref = self.transport.remote_ref
+        for _round in range(2):
+            with self.lease:
+                self.transport.push_to_agent(self.world.root, self.broker, f"+{ref}:{ref}")
+                head = self.world.input_cursor()
+                if self._is_ancestor(remote, head):
+                    break
+                if self._is_ancestor(head, remote):
+                    self._apply_revision(remote)
+                    return None
+                integration = self.worktrees_root / f"integration-{uuid.uuid4().hex}"
+                self._git(self.world.root, "worktree", "add", "--detach", str(integration), head)
+            try:
+                error = merge_git(integration, ref, "world-remote", broker=self.broker,
+                                  resolve_turn=self.resolve_turn)
+                if error is not None:
+                    raise WorldContentConflict(f"world remote conflicts with the world: {error}")
+                merged = self._git(integration, "rev-parse", "HEAD").stdout.strip()
+                with self.lease:
+                    # A turn may have been accepted while the merge ran.
+                    if self.world.input_cursor() != head:
+                        continue
+                    self._apply_revision(merged)
+                    head = merged
+                    break
+            finally:
+                self._remove_worktree(integration)
+        else:
+            raise WorldUpdatePending("world moved while taking in its remote; retried next pass")
+        if head == remote:
+            return None
+        self.transport.fetch_from_agent(self.world.root, self.broker,
+                                        f"+{head}:refs/steward/world/published")
+        if not self.transport.push_candidate(head, remote):
+            raise WorldUpdatePending("world remote moved during publication; retried next pass")
+        return head
+
+    def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        result = self._git(self.world.root, "merge-base", "--is-ancestor",
+                           ancestor, descendant, check=False)
+        if result.returncode not in {0, 1}:
+            raise RuntimeError(f"world ancestry check failed: {result.stderr.strip()}")
+        return result.returncode == 0
 
     def _rebase_trailer(self, integration: Path, event_id: str, head: str) -> None:
         """Keep the closing commit's base truthful once it sits on a new one."""
@@ -313,6 +405,8 @@ class WorldTurnCheckpoint:
     def _remove_worktree(self, path: Path) -> None:
         if not self.broker.path_exists(path):
             return
+        if self.broker.path_exists(path / EVIDENCE_PENDING):
+            raise WorldUpdatePending("native evidence preservation is pending; checkout retained")
         self._git(self.world.root, "worktree", "remove", "--force", str(path), check=False)
         self.broker.run([self.broker.python_executable, "-I", "-c",
             "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)", str(path)],

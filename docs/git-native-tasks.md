@@ -174,12 +174,10 @@ moving for the quiet duration. Task-store bookkeeping and procedure evidence,
 the rhythm's own included, are never input. See [schedule semantics](automatic-deployment.md#git-quiet-periods-and-intervals).
 
 Manual runs are explicit new requests. Every rhythm explicitly names a configured
-result owner or `null` for retained evidence only. Owned findings enter ordinary
-world assessment, authorized follow-up admission and durable result delivery;
-there is no separate reflection notification lifecycle. A finished rhythm run
-is selected for assessment only when its findings ask to notify (`NOTIFY:`); its
-evidence, or a writing run's landed work, is kept either way.
-A checkpoint itself does not broadcast to Telegram.
+result owner or `null` for retained evidence only. Completed rhythm findings
+remain evidence. Deliberate notification calls queue delivery receipts directly,
+independently of final narration or assessment. Questions and failures retain
+ordinary result delivery. A checkpoint itself does not broadcast to Telegram.
 
 Read-only access constrains mutations; it does not turn every procedure into a
 full-tree audit. Scheduled and explicit procedure runs follow their accepted
@@ -200,3 +198,110 @@ must pass. Each target has an independent lock and finite invocation. Driver
 errors and descendant cleanup are isolated from other owners. Platform-specific
 release/rollback logic lives in the installed driver, and it still counts as
 production code: moving complexity out of the kernel's config is not deleting it.
+
+
+## Live conversation task calls
+
+Codex App Server and Claude Code (including GLM) receive an execution-scoped
+`steward_tasks` MCP server with one `task` tool. The native CLI launches a small
+stdlib Python stdio client under the existing provider identity. It forwards
+JSON over a temporary controller-owned Unix socket. Kernel peer credentials
+bind each caller to the provider's controller-owned systemd invocation; local
+inert brokers use the process session instead. Another invocation cannot borrow
+that authority by discovering the socket path. The client holds no task state or controller configuration.
+Rhythms receive no capability. There is no additional cognition or confirmation
+step.
+
+| Operation | Required string fields besides `operation` | Receipt |
+| --- | --- | --- |
+| `submit` | `key`, `repository`, `title`, `brief` | Durable `task_id`, accepted Git `revision` |
+| `list` | none | Up to 200 task summaries, with `truncated` |
+| `show` | `task_id` | Current status, revision, brief, findings and reason |
+| `answer`, `retry`, `note`, `cancel` | `key`, `task_id`, `text` | Durable task ID and operation revision |
+
+Mutations return `accepted: true` and `replayed`. A refusal returns
+`accepted: false` and an error. An unavailable connection or `accepted: null`
+means the outcome is unknown: retry the exact request with its original key.
+The model must use receipts to claim admission, not its final narration.
+Independent submissions need no intervening operator message or task completion.
+
+A key is 1–128 ASCII letters, digits, `_`, `.`, `:` or `-`. Choose one distinct,
+descriptive key per intent; reuse it only for an identical retry. Keys are scoped
+to the owning conversation across executions, provider changes and session resets.
+Submission keys name one task in that conversation. Steering keys are scoped
+further to the target task, across all steering operations. Changing any request
+field under an accepted key in its scope is refused. Different keys are
+different intentions even when their briefs match. Observations always return
+current state and require no key.
+
+Accepted task first-parent commits own receipts through `Steward-Source`
+trailers: conversation and key digests, a canonical JSON request digest, and the
+controller-validated source ID (the initial execution or an attached input). The mutation and receipt are the same Git commit/ref
+update. A retry after loss of the tool reply or controller restart recovers that
+revision rather than repeating the mutation. Rejections create no task commit.
+There is no operation table or second task registry. Native work parents cannot
+supply controller receipts.
+
+Each call can include `source_id`, referring to the initial Turn id or the
+controller-provided source id of a live input. The controller resolves its
+speaker from its own retained row; caller-supplied speaker claims are refused.
+New calls require a source in the current execution and accepted native delivery
+for attached inputs. Omitting `source_id` selects the initial input only while
+there are no attached inputs; mixed-input executions require an explicit source.
+An operator input can therefore authorize an operation during a controller-started
+execution, while a desk observation keeps its restrictions during an
+operator-started execution. A source is attribution and existing authority, not
+proof that arbitrary model-selected work was requested. It must actually support
+the requested operation. The model cannot turn a controller finding into an
+operator instruction by naming its own sender.
+
+The source id is covered by the request digest when supplied and retained in the
+accepted Git source trailer. After restart, an exact accepted request may replay
+with its old source; a new operation cannot borrow that source. The controller
+checks the running execution and bound provider generation under the same SQL
+transaction as authorization. Interrupted or cleared executions cannot mutate.
+Calls cannot select a conversation, operator, provider or authorization policy. Submission requires a
+currently configured repository. A conversation may inspect and steer its own
+tasks; an operator turn can also address ownerless work. Automated turns cannot
+steer ownerless work. Existing task status guards still apply.
+Task notes and answers retain controller provenance, never operator provenance.
+
+Admission is independent of conversation/world completion. An accepted task can
+run before the parent finishes; it survives parent failure, cancellation, lost
+final output, and failed world capture or acceptance. Revoking a repository
+prevents further authorized operations but does not undo its accepted task ref.
+The socket closes when native execution returns or fails; a later execution
+gets a new capability and can retry the same keys. `/tasks`, `/task show`,
+`/task cancel`, and the task board retain their existing operator roles. Parent
+`/cancel` only interrupts the conversation; cancel each task to withdraw its work.
+Task results use the task's durable owner and the existing result delivery path.
+
+Final `TASK_PROPOSAL` and `TASK_ACTION` markers do not execute operations. They
+are stripped and explicitly refused, including unaccepted historical outputs
+recovered after an upgrade. Already completed historical turns replay their
+recorded receipts without another admission. Do not resubmit uncertain historical
+work without inspecting existing tasks first.
+
+Validation: `tests/test_task_calls.py` runs real native adapter pipes and MCP
+children against scripted Codex/Claude/GLM reasoning, including two receipts
+before terminal completion. Conversation, task-result, provenance and world
+recovery tests cover independent durability and routing. These local checks do
+not establish a deployed release.
+
+### Ownership reads during task execution
+
+Repository task and procedure executions receive the same invocation-bound tool.
+`query` takes `repository` and `text` and returns a bounded ownership observation:
+at most ten unfinished matches and 7,500 JSON characters, with observation time,
+revision, ownership relation and truncation. It excludes the querying task and
+discloses no peer briefs or owner addresses. `notify` queues text to the task's
+bound owner; optional `close` records a wait or continuation for acceptance after
+successful native completion and writer teardown. Ordinary completion needs no call
+([execution lifecycle](execution-lifecycle.md#execution-closure-and-continuation)).
+Tasks cannot submit or steer peer work. World rhythms receive notification-only
+authority. Public read-only conversations remain excluded.
+
+Ownership reads use this tool only. A question containing `TASK_QUERY:` is an
+ordinary operator question, never a controller command. Observations grant no
+lease or authority to change another task. Missing native tool support fails
+closed; final prose cannot substitute for a call.

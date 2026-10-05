@@ -520,48 +520,31 @@ def test_an_ordinary_turn_error_still_fails_the_turn(tmp_path):
         turn.finish()
 
 
-@pytest.mark.parametrize("resume", [None, SESSION])
-def test_public_scope_is_confirmed_before_first_turn_and_on_resume(tmp_path, resume):
-    from steward_harness.runtime.contracts import ReadScope
-    from steward_harness.runtime.providers.codex_read_scope import PROFILE, scope_config
-
-    request = RuntimeRequest(execution_id="public", resolved=resolve_model("codex", "fast"),
-                             provider_session_id=resume, prompt="public question", cwd=tmp_path,
-                             timeout_seconds=10, read_scope=ReadScope("desk:visitor", (tmp_path / "public",)))
-    turn = _AppServerTurn(request)
-    wire = Wire()
-    turn.connect(wire)
-    response(turn, wire, {})
-    assert wire.messages[-1]["method"] == "config/read"
-    response(turn, wire, {"config": scope_config(request.read_scope.roots, tmp_path)})
-    started = wire.messages[-1]
-    assert started["method"] == ("thread/resume" if resume else "thread/start")
-    assert started["params"]["permissions"] == PROFILE
-    assert "sandbox" not in started["params"]
-    assert started["params"]["approvalPolicy"] == "never"
-    assert started["params"]["approvalsReviewer"] == "user"
-    response(turn, wire, {"thread": {"id": SESSION}, "activePermissionProfile": {"id": PROFILE},
-                          "approvalPolicy": "never", "approvalsReviewer": "user"})
-    assert wire.messages[-1]["method"] == "turn/start"
-    assert wire.messages[-1]["params"]["permissions"] == PROFILE
-    assert "sandboxPolicy" not in wire.messages[-1]["params"]
-    # Even a provider-requested privilege expansion cannot be approved here.
-    turn.consume(json.dumps({"id": "privileged-tool", "method": "item/commandExecution/requestApproval", "params": {}}))
-    assert wire.messages[-1]["error"]["code"] == -32601
+def usage(turn, total, last, thread_id=SESSION):
+    event(turn, "thread/tokenUsage/updated", thread_id=thread_id,
+          tokenUsage={"total": {"outputTokens": total}, "last": {"outputTokens": last}})
 
 
-def test_public_scope_unsupported_provider_protocol_stops_before_model_turn(tmp_path):
-    from steward_harness.runtime.contracts import ReadScope
-    from steward_harness.runtime.providers.codex_read_scope import scope_config
+def test_token_usage_counts_this_turn_of_a_resumed_thread_and_its_children(tmp_path):
+    turn, *_ = start(tmp_path, token_budget=1000)
+    # The thread already spent 5000 output tokens in earlier turns.
+    usage(turn, 5200, 200)
+    usage(turn, 5600, 400)
+    event(turn, "item/started", item={"type": "subAgentActivity", "kind": "started", "agentThreadId": "child"})
+    usage(turn, 300, 300, thread_id="child")
+    usage(turn, 900, 900, thread_id="unrelated")
+    assert turn.meter.used == 900 and turn.meter.exhausted() is None
+    usage(turn, 5700, 100)
+    assert "1000 output tokens of its 1000 budget" in turn.meter.exhausted()
 
-    request = RuntimeRequest(execution_id="public", resolved=resolve_model("codex", "fast"),
-                             provider_session_id=None, prompt="public", cwd=tmp_path,
-                             timeout_seconds=10, read_scope=ReadScope("desk:visitor"))
-    turn = _AppServerTurn(request)
-    wire = Wire()
-    turn.connect(wire)
-    response(turn, wire, {})
-    response(turn, wire, {"config": scope_config((), tmp_path)})
-    with pytest.raises(RuntimeExecutionError, match="confirm"):
-        response(turn, wire, {"thread": {"id": SESSION}})
-    assert not any(m.get("method") == "turn/start" for m in wire.messages)
+
+def test_malformed_token_usage_fails_closed(tmp_path):
+    turn, *_ = start(tmp_path, token_budget=1000)
+    with pytest.raises(RuntimeExecutionError, match="malformed token usage"):
+        event(turn, "thread/tokenUsage/updated", tokenUsage={"total": {}})
+
+
+def test_unbudgeted_turn_ignores_token_usage_entirely(tmp_path):
+    turn, *_ = start(tmp_path)
+    event(turn, "thread/tokenUsage/updated", tokenUsage={"total": {}})
+    assert turn.meter.used == 0

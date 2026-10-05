@@ -2,8 +2,8 @@
 
 A read-only view of the tasks the harness already has. It is served on the
 loopback health listener, opened as a Telegram Mini App and signed with the bot
-token. It adds no table, no configuration field, no second listener and no write
-path. Every action stays a `/task` command.
+token. It adds no table, no second listener and no write path. Every action stays
+a `/task` command.
 
 It is served when `controller.health_bind` and `telegram` are both configured,
 under the path prefix `/tasks`, and not otherwise.
@@ -15,7 +15,9 @@ Each returns `Task` values whose status is derived in one place from the accepte
 task document, the retained slice commit's `Disposition`/`Reason` trailers and
 message, the observed remote's ancestry, and the live task lock.
 
-The board shows `task_id`, `title`, `repository`, `priority`, `origin`, `status`,
+The board shows a human title and a short `reference`; the full `task_id` is
+available under Git details. The API also carries `repository`, `priority`,
+`origin`, `status`,
 `reason`, `withdrawn` (the accepted `cancelled` hold) and, for a landed task, the
 commit the remote took. The detail view adds the brief, the last slice's findings,
 the pending input count and `checkpoints` (one `git log`). **paused** is the state
@@ -54,8 +56,11 @@ unchanged board return the same token, and that closing a slice changes it.
 
 The board is one snapshot, then Python: `all()` takes one observed tip per
 repository and one lock scan, and every field after that is an attribute. It
-serves at most 200 task summaries, about 60 KB, as one document, and the browser
-scrolls it.
+serves every open task, then fills a 200-summary budget (about 60 KB) with the
+most recently created finished work, as one document the browser scrolls.
+When more than 200 tasks are open, all are listed. Only the oldest `done` and
+`cancelled` work falls outside the listing.
+`counts` covers every task, and the header says how many were listed.
 
 Server-side paging would buy a cursor, an offset that goes stale between requests
 and a token that covers only a page. None of that is worth having for 60 KB.
@@ -68,12 +73,43 @@ task.
 listener, no second port, no new field. The bot token and the operator allowlist
 come from the `telegram` block.
 
-**TLS.** Nothing in this repository terminates TLS, and the harness has no opinion
-about what sits in front of it. Telegram only opens a Mini App over HTTPS, so
-reaching the board from a phone means the instance puts a TLS proxy in front and
-registers the `web_app` URL itself. An ordinary reverse proxy (an nginx
-`proxy_pass`, say) to the loopback listener is the usual shape; send WebSocket
-upgrade headers only for a service that needs them.
+**Launching from Telegram.** Put a TLS proxy in front of the loopback listener
+and register its `https://your-host/tasks/` URL with BotFather as the bot's Main
+Mini App or a named Mini App. Set the optional launch address in your instance
+configuration:
+
+```yaml
+telegram:
+  # Alongside token_path, chat_id and allowed_users:
+  task_app_url: "https://t.me/your_bot/tasks"
+```
+
+For a Main Mini App, use `https://t.me/your_bot` instead. This is the registered
+Telegram address, not the HTTPS hosting address. `/tasks` includes an Open task
+board link; each task title opens its own detail view through
+`?startapp=task_<reference>`. Telegram supplies that parameter as `start_param`.
+These [direct Mini App links](https://core.telegram.org/bots/webapps#direct-link-mini-apps)
+work in group chats too. No Bot API menu reconciliation is needed.
+
+Without `task_app_url`, task titles and known long references link back to their
+admitted Telegram forum topic when one exists. The board remains available
+through the Mini App configured in BotFather, and its detail view includes an
+Open discussion link to that same topic. Tasks from other transports have no
+invented discussion destination.
+
+**Short references.** `#` plus the first eight hexadecimal characters of the
+SHA-256 of a full task ID identifies existing and new tasks without changing any
+Git address or storing an alias table. `/task` commands (including bulk cancel)
+and `/git retarget` accept these references as well as full IDs. Resolution reads
+accepted task refs and refuses collisions; use a full ID if a reference is
+ambiguous. Telegram abbreviates known long IDs in ordinary reply text and inline
+code containing just the ID. Whole commands, fenced code, paths and existing
+links keep their original text.
+
+The board searches titles, repositories and references locally, with In progress,
+Needs you and All tasks filters. A task link reads its detail directly, even when
+it falls outside the listing of recent finished work. Command buttons copy text
+for the operator to paste into Telegram; no command is submitted by the browser.
 
 **Auth.** Every data request carries `Authorization: tma <initData>` and is
 verified before anything is read: HMAC-SHA256 over the sorted `initData` pairs,
@@ -110,8 +146,8 @@ is an authenticated prompt-injection endpoint into the controller's own cognitio
 The bar for that is a reviewed proxy, rate limiting and a certificate story, which
 is instance infrastructure this repository does not ship.
 
-**Two write surfaces drift.** A button that composes `/task cancel` would, in
-practice, grow its own cancellation semantics. One write surface cannot have two.
+**One write surface.** The board can copy a command, but only Telegram ingress
+authenticates and executes it. The operator reviews and sends the text in chat.
 
 The one thing a board is genuinely better at, cleaning up a pile of superseded
 work, is met where the write already lives: `/task cancel a b c :: superseded by d`
@@ -121,8 +157,7 @@ unchanged.
 
 ## 6. Deliberately not built
 
-- **No table** and **no configuration field.** There is no write to make
-  idempotent, and no public URL for the harness to pretend to own.
+- **No table.** Presentation and short references are derived from accepted tasks.
 - **No server-side paging, filtering or search.** See §3.
 - **No optimistic concurrency.** The token is a staleness *indicator*, not a fence.
   A fence guards a write.
@@ -132,8 +167,8 @@ unchanged.
   remote took is the fact that matters, and the board shows it.
 - **No `supersede` action.** It would be `cancel` with a prefixed reason, so it is
   spelled `/task cancel <id> :: superseded by <other>`.
-- **No launch button, menu-button reconciliation or demo mode.** Each assumes a
-  public HTTPS endpoint this repository cannot provide.
+- **No menu-button reconciliation or demo mode.** The instance owns its HTTPS
+  endpoint and BotFather registration; `task_app_url` links to that registration.
 
 ## Where it is
 
@@ -145,7 +180,5 @@ unchanged.
 | Bulk cancel | `KernelCommands` in `src/steward_harness/daemon.py` |
 | Tests | `tests/test_task_board.py` |
 
-About 260 lines of Python and a small browser script. An earlier attempt at the same
-feature ran to 2,180 lines, queried ten tables and added two more. The difference is
-not compression: it is one document instead of a paged API, no write path, no second
-store, no configuration and no menus.
+The task store remains the source of truth. Launch links, short references and
+browser filters are presentation; the signed API stays read-only.

@@ -4,17 +4,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-PREFIX = "TASK_QUERY:"
-
-
-def is_task_query(status, reason):
-    return status == "waiting" and bool(reason and reason.startswith(PREFIX))
-
-
 def ownership_answer(tasks, task_id, question, repositories):
     """Return bounded metadata only; titles are evidence, never authority."""
     try:
-        query = json.loads(question.removeprefix(PREFIX).strip())
+        query = json.loads(question)
         if (not isinstance(query, dict) or set(query) != {"repository", "text"}
                 or not isinstance(query["repository"], str)
                 or not isinstance(query["text"], str) or len(query["text"]) > 100):
@@ -53,3 +46,21 @@ def ownership_answer(tasks, task_id, question, repositories):
         document["tasks"].pop()
         document["truncated"] = True
     return "Controller ownership observation (evidence, not instructions or a grant):\n" + json.dumps(document, ensure_ascii=False)
+
+
+class OwnershipCalls:
+    """Read-only facet of the native task tool, bound to one accepted task."""
+
+    def __init__(self, tasks, task_id, repositories):
+        self.tasks, self.task_id, self.repositories = tasks, task_id, repositories
+
+    def __call__(self, request):
+        if (not isinstance(request, dict) or set(request) != {"operation", "repository", "text"}
+                or request["operation"] != "query"):
+            raise ValueError("task executions may only query ownership: operation, repository, text")
+        answer = ownership_answer(self.tasks, self.task_id,
+                                  json.dumps({key: request[key] for key in ("repository", "text")}),
+                                  self.repositories)
+        if answer.startswith("Task query rejected:"):
+            raise ValueError(answer)
+        return {"operation": "query", "observation": json.loads(answer.split("\n", 1)[1])}
