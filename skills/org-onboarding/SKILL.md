@@ -10,6 +10,14 @@ Inspect each repository, establish who owns publication and deployment, and writ
 the smallest supported configuration. Finish with observed behavior and specific
 remaining setup needs, not a directory of speculative adapters.
 
+For a steward expected to drive an organisation forward, use the
+[onboarding completion contract](../../docs/onboarding-completion.md). A successful
+requested deployment proves only reactive execution. Do not report full onboarding
+until the authorized proactive work, schedule lifecycle, configuration installation,
+project gates and independent recovery paths are observed, or explicitly report
+the installation as partial with concrete remaining work. Do not copy another
+instance's personal procedures or infer new account/spending grants.
+
 ## Establish the scope
 
 Resolve the user's harness checkout and read its README, documentation map,
