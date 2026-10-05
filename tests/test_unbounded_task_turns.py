@@ -71,6 +71,8 @@ def _native(tmp_path, *, finish_after=None, final="Worked past the provider dead
     native_home.mkdir()
 
     class Native(EditingAdapter):
+        capabilities = ClaudeRuntime.capabilities
+
         def execute(self, request):
             self.requests.append(request)
             return runtime.execute(request)

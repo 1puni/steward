@@ -704,3 +704,28 @@ def test_a_models_list_validates_at_load():
     with pytest.raises(ValidationError, match="provider and model, or a models list"):
         StewardConfig.model_validate(dict(identity=dict(name="t", slug="t"),
             procedures={"p": dict(instructions="/etc/p.md")}))
+
+
+@pytest.mark.parametrize("field", ["native_homes", "native_credential_homes"])
+def test_both_native_home_paths_are_validated_when_provider_has_separate_credentials(field):
+    homes = dict(native_homes={"codex": "/var/lib/native"},
+                 native_credential_homes={"codex": "/var/lib/native-auth"})
+    homes[field]["codex"] = "relative"
+    with pytest.raises(ValidationError, match="bounded absolute path"):
+        StewardConfig.model_validate(dict(identity=dict(name="t", slug="t"), provider=homes))
+
+
+def test_native_credentials_cannot_be_stored_in_an_accepted_git_world():
+    with pytest.raises(ValidationError, match="outside Git worlds"):
+        StewardConfig.model_validate(dict(identity=dict(name="t", slug="t"),
+            provider=dict(native_credential_homes={"codex": "/srv/world/auth"}),
+            world=dict(root="/srv/world")))
+
+
+def test_target_authority_cannot_be_inside_native_credential_home():
+    with pytest.raises(ValidationError, match="authority must be outside model-writable roots"):
+        StewardConfig.model_validate(dict(identity=dict(name="t", slug="t"),
+            execution=dict(user="steward", home="/home/steward"),
+            provider=dict(native_credential_homes={"codex": "/var/lib/native-auth"}),
+            repositories={"app": dict(path="/srv/app", remote_url=_REMOTE)},
+            targets={"production": dict(ref="repositories/app/main", driver="/var/lib/native-auth/driver")}))

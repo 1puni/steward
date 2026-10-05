@@ -484,3 +484,22 @@ def test_publication_reports_once_when_two_targets_observe_the_landed_task(tmp_p
     assert restarted.deliver_task_result(owner, send=lambda *args: sent.append(args)) is None
     assert not restarted._state.pending_task_result_conversations()
     assert len(sent) == 1 and len(cognition.requests) == 1
+
+
+def test_rejected_task_outcome_is_not_rediscovered_ahead_of_later_notifications(tmp_path):
+    service, facts, cognition, owner, task_id = admitted(tmp_path)
+    state = service._state
+    close_task_slice(state, task_id, 'ask', detail='Which source?')
+    receipt = state.retain_pending_result(owner)
+    receipt.update(undeliverable=True, delivery_error='Rejected message')
+    state.save_result_receipt(receipt)
+    state.save_result_receipt(dict(owner=str(owner), task_id=None, source_key='notify:later',
+                                  result_text='New update', reply='New update'))
+    restarted = _service(tmp_path, cognition)
+    restarted._state.tasks.transports = {'app': facts}
+    sent = []
+    assert restarted.deliver_task_result(owner, send=lambda *args: sent.append(args)) == 'New update'
+    assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail('rejected outcome replayed')) is None
+    assert not restarted._state.pending_task_result_conversations()
+    assert len(sent) == 1 and len(cognition.requests) == 1
+    assert state.result_receipt(receipt['source_key']) == receipt

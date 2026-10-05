@@ -187,8 +187,12 @@ See the [world-rhythm contract](rhythms.md#world-rhythms).
 ## One inbox for Telegram and the desk
 
 Telegram updates and desk messages now share one inbox format and one drain.
-The desk inbox, its event log and the `desk` configuration keys are unchanged,
-so desk clients need nothing. Telegram's retained updates move from
+The desk inbox and its event-log protocol are unchanged. Desk ingress is an
+operator-authorized transport. The separate read-only desk mode and its
+`desk.access` and `desk.readable_roots` keys are removed; configurations that
+contain them are refused. Do not expose operator ingress to formerly read-only
+clients. Keep that deployment disabled until its access policy is reviewed.
+Telegram's retained updates move from
 `<state_db>.telegram-receipts/<chat>/<update>.json` to
 `<state_db>.telegram-inbox/<chat>/`, and the poll offset, which used to live
 only in memory, is persisted there as `offset`.

@@ -446,6 +446,8 @@ def test_kernel_continues_interrupted_native_session_after_restart_before_gating
     native_home.mkdir()
 
     class FinishNextSlice(InvestigationAdapter):
+        capabilities = ClaudeRuntime.capabilities
+
         def execute(self, request):
             if not self.requests:
                 self.requests.append(request)
