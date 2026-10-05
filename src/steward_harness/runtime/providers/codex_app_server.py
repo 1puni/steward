@@ -8,6 +8,8 @@ import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from dataclasses import replace
+from steward_harness.runtime.text_only import verify_text_request
 from threading import RLock
 
 from steward_harness.runtime.contracts import (
@@ -80,17 +82,18 @@ class CodexAppServerRuntime:
     """Map native lifecycle and steering; the provider owns tools and children."""
 
     family: ProviderFamily = "codex"
-    capabilities = ProviderCapabilities(images=True, ongoing_input=True)
+    capabilities = ProviderCapabilities(images=True, ongoing_input=True, text_only=True)
 
     def __init__(
         self, executable: Path = Path("/usr/bin/codex"), *,
-        controller: ProcessController, native_home: Path,
+        controller: ProcessController, native_home: Path, credential_home: Path | None = None,
     ):
         self.executable = executable
         self._controller = controller
         if not native_home.is_absolute():
             raise ValueError("Codex native home must be absolute")
         self.native_home = native_home
+        self.credential_home = credential_home or native_home
 
     def available(self) -> Availability:
         if not self._controller.broker.can_execute(self.executable):
@@ -114,6 +117,8 @@ class CodexAppServerRuntime:
             )
 
     def execute(self, request: RuntimeRequest) -> RuntimeResult:
+        if request.text_only:
+            request = verify_text_request(self._controller.broker, self.executable, self.family, request)
         if (
             request.provider_session_id is not None
             and validated_uuid(request.provider_session_id) is None
@@ -126,21 +131,24 @@ class CodexAppServerRuntime:
         with native_workspace(
             self._controller.broker, request, self.native_home,
             mappings=record_mappings("codex"),
+            credential_home=self.credential_home,
             resume_pattern="artefacts/codex/sessions/**/rollout-*{session}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)
             if request.provider_session_id and workspace.resume and workspace.home != self.native_home:
                 self._relocate_thread(workspace.home, request.provider_session_id, workspace.resume)
+            if request.text_only:
+                request = replace(request, cwd=workspace.home / "work")
             turn = _AppServerTurn(request, resume_path=workspace.resume,
                 unrestricted=self._controller.broker.enabled
                 and request.sandbox_mode == "workspace-write")
-            environment = self.environment()
+            environment = self.environment({} if request.text_only else None)
             environment["CODEX_HOME"] = str(workspace.home)
             try:
                 output = self._controller.run(
                     [str(self.executable), "app-server", "--stdio", "-c",
                      "sqlite_home=" + json.dumps(str(workspace.home)),
-                     *codex_arguments(request.task_call_socket)],
+                     *(["--strict-config"] if request.text_only else codex_arguments(request.task_call_socket))],
                     cwd=request.cwd,
                     storage_paths=(workspace.home, request.cwd),
                     env=environment,
@@ -275,6 +283,8 @@ class _AppServerTurn:
                     self.response(event)
                 return
             if "id" in event and "method" in event:
+                if self.request.text_only:
+                    raise RuntimeExecutionError("Server tool request in text-only inference")
                 # Approval grants stay outside cognition. Never approve a
                 # provider request just to keep its transport moving.
                 self.writer.write(
@@ -297,10 +307,13 @@ class _AppServerTurn:
             if event.get("method") == "thread/tokenUsage/updated":
                 self._meter(params)
                 return
-            if params.get("threadId") != self.thread_id:
-                return
             method = event.get("method")
             item = params.get("item", {})
+            if (self.request.text_only and method in {"item/started", "item/completed"}
+                    and item.get("type") not in {"userMessage", "agentMessage", "reasoning"}):
+                raise RuntimeExecutionError("Tool activity in text-only inference")
+            if params.get("threadId") != self.thread_id:
+                return
             if item.get("type") == "subAgentActivity":
                 child = item["agentThreadId"]
                 if item["kind"] == "started":
@@ -347,6 +360,8 @@ class _AppServerTurn:
                     raise RuntimeExecutionError(
                         "Codex emitted invalid agent message text", session_id=self.thread_id,
                     )
+                if self.request.text_only and len(item["text"]) > 64_000:
+                    raise RuntimeExecutionError("Text-only output exceeded limit")
                 self.output = item["text"].strip()[-64_000:]
             elif method == "item/completed" and item.get("type") not in (
                 None, "agentMessage", "subAgentActivity",
@@ -447,6 +462,8 @@ class _AppServerTurn:
                 params["config"] = {
                     "model_reasoning_effort": self.request.resolved.reasoning_effort
                 }
+            if self.request.text_only:
+                params.update(ephemeral=True, approvalPolicy="never", approvalsReviewer="user")
             if self.request.provider_session_id is not None:
                 params["threadId"] = self.request.provider_session_id
                 if self.resume_path and self.resume_path != self.request.provider_session_id:

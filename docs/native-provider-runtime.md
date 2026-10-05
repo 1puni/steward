@@ -481,3 +481,27 @@ For example, a desk can select `desk.provider: codex` and `desk.profile: fast`,
 with `provider.models.codex.fast: gpt-5.6-luna`, once you have checked the
 installed model catalogue and upgraded safely. That is a per-installation
 override, not a generic model default, and no `gpt-6-luna` alias is supplied.
+
+## Tool-free application calls
+
+`CognitionRequest.text_only` and `RuntimeRequest.text_only` opt into fresh,
+text-only native inference. Adapters advertise this capability; unsupported
+adapters cannot receive such calls. The request rejects session reuse, native
+owners, record checkouts, images, tool sockets, writable sandbox modes and live
+input. Ordinary stewardship defaults and its retained-record behavior remain
+unchanged.
+
+The native workspace creates a private per-call home and working directory,
+imports only native credential linkage, skips bundled skills and evidence
+capture, and removes the home after process teardown even when the call fails.
+`provider.native_credential_homes` optionally separates each provider's common
+auth/refresh authority from its configured runtime seed. Claude uses that path
+for secure storage and its refresh lock; Codex links its common auth file.
+Credentials are never copied into per-call snapshots.
+
+Audited native option/version guards remove tools before inference. Tool events
+fail the call; a prompt asking the model not to use tools is not the boundary.
+Installed-binary dummy acceptance verifies the model-facing tool inventory
+against localhost endpoints. The [LLMPsych bridge contract](../instances/llmpsych/native-inference/README.md)
+owns its HTTP admission, identity checks, configured models, output validation,
+installation and acceptance procedure.

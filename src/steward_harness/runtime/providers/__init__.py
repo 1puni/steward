@@ -33,6 +33,7 @@ def build_runtimes(
             Path(provider.claude_executable),
             controller=controller,
             native_home=homes["claude"],
+            credential_home=Path(provider.native_credential_homes.get("claude", homes["claude"])),
             base_url=provider.claude_anthropic_base_url,
             credential_path=(
                 Path(provider.claude_credential_path)
@@ -44,6 +45,7 @@ def build_runtimes(
             Path(provider.claude_executable),
             controller=controller,
             native_home=homes["glm"],
+            credential_home=Path(provider.native_credential_homes.get("glm", homes["glm"])),
             base_url=provider.glm_anthropic_base_url,
             credential_path=Path(provider.glm_credential_path),
             family="glm",
@@ -53,5 +55,6 @@ def build_runtimes(
             Path(provider.codex_executable),
             controller=controller,
             native_home=homes["codex"],
+            credential_home=Path(provider.native_credential_homes.get("codex", homes["codex"])),
         )
     return runtimes

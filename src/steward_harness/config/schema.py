@@ -379,16 +379,18 @@ class ProviderConfig(BaseModel):
     # Explicit stewardship-owned native configuration, separate from personal
     # provider homes. Adapters interpret their own path; lifecycle stays neutral.
     native_homes: dict[str, str] = Field(default_factory=dict)
+    # Shared native refresh authority, separate from isolated application state.
+    native_credential_homes: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validates_provider_order(self) -> "ProviderConfig":
         order = (self.default_family, *self.fallback_families)
         if len(set(order)) != len(order):
             raise ValueError("provider order must contain unique families")
-        for provider_id in (*order, *self.models, *self.native_homes):
+        for provider_id in (*order, *self.models, *self.native_homes, *self.native_credential_homes):
             if re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", provider_id) is None:
                 raise ValueError(f"invalid provider ID: {provider_id!r}")
-        for provider_id, path in self.native_homes.items():
+        for provider_id, path in {**self.native_homes, **self.native_credential_homes}.items():
             _require_bounded_absolute(f"provider native home {provider_id!r}", path)
         paths = [Path(path).resolve() for path in self.native_homes.values()]
         for i, path in enumerate(paths):
