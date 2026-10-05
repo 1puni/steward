@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from task_tool_fixtures import NATIVE_CALL
 from state_fixtures import admit_task
 from steward_harness.cognition import Cognition
 from steward_harness.config.schema import RepositoryConfig, UntrustedExecutionConfig
@@ -39,7 +40,7 @@ ACCOUNT = "## Understanding\n\nThe consumer is src/feed.py; a child is still dra
 
 # The native parent: protocol-neutral work shared by both fakes. A reader
 # thread owns stdin and answers the wire protocol; the main thread works.
-_PARENT = r'''
+_PARENT = NATIVE_CALL + r'''
 import json, os, pathlib, re, subprocess, sys, threading, time
 SIGNALS = pathlib.Path(SIGNALS_DIR)
 out_lock = threading.Lock()
@@ -102,8 +103,7 @@ def work():
     pathlib.Path("draft.py").unlink()  # half-written drafts never reach closure
     pathlib.Path("result.txt").write_text("consumer: src/feed.py\n")
     signal("child-stopped")
-    return ("Traced the consumer to src/feed.py.\n"
-            "COMMIT: docs: record the feed consumer\nDISPOSITION: idle\nQUESTION: NONE")
+    return "Traced the consumer to src/feed.py."
 '''
 
 _CLAUDE = r'''

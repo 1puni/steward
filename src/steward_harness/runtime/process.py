@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from steward_harness.runtime.contracts import RuntimeExecutionError
 from steward_harness.runtime.execution import UntrustedExecutionBroker
+from steward_harness.runtime.native_evidence import check_headroom
 
 _STREAM_LIMIT_BYTES = 64 * 1024 * 1024
 _DIAGNOSTIC_LIMIT_BYTES = 1024 * 1024
@@ -25,6 +26,14 @@ _INPUT_LIMIT_BYTES = 1024 * 1024
 
 class ProcessTimeout(RuntimeExecutionError):
     """The process exceeded its declared execution deadline."""
+
+
+class TokenBudgetExhausted(RuntimeExecutionError):
+    """The provider reported more output than its run was allowed.
+
+    Not a deadline: the work did not stall, it was bounded. A provider
+    fallback must not start it again elsewhere.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +114,11 @@ class ProcessController:
         on_input_ready: Callable[[ProcessInput], None] | None = None,
         on_started: Callable[[Callable[[], None]], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None,
         command_only: bool = False,
+        over_budget: Callable[[], str | None] | None = None,
+        retain_stdout: bool = True,
+        storage_paths: Sequence[Path] = (),
     ) -> ProcessOutput:
         """Run a bounded child; command-only calls use the broker's credentialless policy.
 
@@ -117,7 +130,11 @@ class ProcessController:
         continue draining. A bounded grace then falls back to broker containment.
         Callers must remove their cancellation route when this call returns.
         ``timeout_seconds=None`` means no routine deadline; cancellation still
-        takes the same cooperative-then-containment path.
+        takes the same cooperative-then-containment path. ``over_budget``
+        names an exhausted budget, and is stopped exactly like a deadline.
+        ``retain_stdout=False`` is for callers that consume every line: only
+        the current line is held, so a long metered stream cannot exhaust the
+        retention limit.
         """
         if timeout_seconds is not None and timeout_seconds < 1:
             raise ValueError("timeout_seconds must be at least 1")
@@ -168,6 +185,7 @@ class ProcessController:
         stop_error: RuntimeExecutionError | None = None
         stop_deadline: float | None = None
         cleaned = False
+        next_storage_check = 0.0
 
         def stop() -> None:
             # Only the execution thread touches the protocol or process. Stale
@@ -176,6 +194,7 @@ class ProcessController:
             cancelled.set()
 
         try:
+            on_process_started(process.pid, getattr(process, "unit", None))
             if input_buffer is not None:
                 assert process.stdin is not None
                 os.set_blocking(process.stdin.fileno(), False)
@@ -185,12 +204,27 @@ class ProcessController:
                 on_started(stop)
             while selector.get_map() or process.poll() is None:
                 now = time.monotonic()
+                storage_error = None
+                if storage_paths and stop_error is None and now >= next_storage_check:
+                    next_storage_check = now + 1.0
+                    try:
+                        check_headroom(list(storage_paths))
+                    except (OSError, RuntimeError) as error:
+                        storage_error = str(error)
+                exhausted = (
+                    over_budget() if over_budget is not None and stop_error is None
+                    else None
+                )
                 if stop_error is None and (
-                    cancelled.is_set() or (deadline is not None and now >= deadline)
+                    cancelled.is_set() or exhausted is not None or storage_error is not None
+                    or (deadline is not None and now >= deadline)
                 ):
                     stop_error = (
                         RuntimeExecutionError("provider process was cancelled")
-                        if cancelled.is_set() else ProcessTimeout(
+                        if cancelled.is_set()
+                        else RuntimeExecutionError(storage_error) if storage_error is not None
+                        else TokenBudgetExhausted(exhausted) if exhausted is not None
+                        else ProcessTimeout(
                             f"provider process timed out after {timeout_seconds}s"
                         )
                     )
@@ -253,16 +287,20 @@ class ProcessController:
                         if overflow > 0:
                             del output["stderr"][:overflow]
                         continue
-                    remaining = _STREAM_LIMIT_BYTES - len(output["stdout"])
-                    safe_chunk = chunk[: max(0, remaining)]
-                    output["stdout"].extend(safe_chunk)
+                    if retain_stdout:
+                        remaining = _STREAM_LIMIT_BYTES - len(output["stdout"])
+                        safe_chunk = chunk[: max(0, remaining)]
+                        output["stdout"].extend(safe_chunk)
+                    else:
+                        safe_chunk = chunk
                     pending_stdout.extend(safe_chunk)
                     while b"\n" in pending_stdout:
                         raw_line, _, remainder = pending_stdout.partition(b"\n")
                         pending_stdout = bytearray(remainder)
                         if raw_line.strip() and on_stdout_line:
                             on_stdout_line(raw_line.decode("utf-8", errors="replace"))
-                    if len(safe_chunk) != len(chunk):
+                    # Unretained, only an unfinished line is held.
+                    if len(safe_chunk) != len(chunk) or len(pending_stdout) > _STREAM_LIMIT_BYTES:
                         raise RuntimeExecutionError(
                             "provider process stream exceeded safe limit"
                         )

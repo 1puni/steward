@@ -458,3 +458,19 @@ def controller_transport(
         allow_local=config.execution.user is None,
         create=create,
     )
+
+
+def world_transport(config: StewardConfig) -> ControllerGitTransport | None:
+    """The world's remote transport, under the same rules as a repository's."""
+    from steward_harness.config.schema import WORLD_TRANSPORT
+
+    world = config.world
+    if world is None or world.remote_url is None:
+        return None
+    return ControllerGitTransport(
+        Path(config.provider.state_db).resolve(),
+        WORLD_TRANSPORT,
+        world.remote_url,
+        world.branch,
+        allow_local=config.execution.user is None,
+    )

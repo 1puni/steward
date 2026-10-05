@@ -19,7 +19,7 @@ from steward_harness.provider_types import (
     ProviderProfile,
 )
 
-TelegramAgentAction = Literal["pin_reply", "pin_message"]
+TelegramAgentAction = Literal["pin_reply", "pin_message", "set_photo", "set_description"]
 
 _DEFAULT_UNTRUSTED_ENVIRONMENT = (
     "COLORTERM",
@@ -287,6 +287,8 @@ class TelegramConfig(BaseModel):
     media_max_mb: int = Field(default=50, ge=1, le=2000)
     inbound_media_dir: str | None = None
     botapi_base: str | None = None
+    # A BotFather-registered Mini App link; the HTTPS hosting stays external.
+    task_app_url: str | None = None
     delivery_outbox_dir: str | None = None
     delivery_quarantine_dir: str | None = None
     delivery_roots: tuple[str, ...] = ()
@@ -296,6 +298,10 @@ class TelegramConfig(BaseModel):
     @model_validator(mode="after")
     def validates_adapter_commands(self) -> "TelegramConfig":
         _require_bounded_absolute("Telegram token_path", self.token_path)
+        if self.task_app_url is not None and not re.fullmatch(
+            r"https://t\.me/[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?", self.task_app_url
+        ):
+            raise ValueError("task_app_url must be https://t.me/bot or https://t.me/bot/app")
         if len(set(self.topics.values())) != len(self.topics):
             raise ValueError("Telegram topic IDs must be unique")
         unknown_passive = set(self.passive_topics) - set(self.topics)
@@ -373,16 +379,18 @@ class ProviderConfig(BaseModel):
     # Explicit stewardship-owned native configuration, separate from personal
     # provider homes. Adapters interpret their own path; lifecycle stays neutral.
     native_homes: dict[str, str] = Field(default_factory=dict)
+    # Shared native refresh authority, separate from isolated application state.
+    native_credential_homes: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validates_provider_order(self) -> "ProviderConfig":
         order = (self.default_family, *self.fallback_families)
         if len(set(order)) != len(order):
             raise ValueError("provider order must contain unique families")
-        for provider_id in (*order, *self.models, *self.native_homes):
+        for provider_id in (*order, *self.models, *self.native_homes, *self.native_credential_homes):
             if re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", provider_id) is None:
                 raise ValueError(f"invalid provider ID: {provider_id!r}")
-        for provider_id, path in self.native_homes.items():
+        for provider_id, path in {**self.native_homes, **self.native_credential_homes}.items():
             _require_bounded_absolute(f"provider native home {provider_id!r}", path)
         paths = [Path(path).resolve() for path in self.native_homes.values()]
         for i, path in enumerate(paths):
@@ -424,6 +432,10 @@ class ProviderConfig(BaseModel):
         return (self.default_family, *self.fallback_families)
 
 
+#: The controller store name of the world's remote transport.
+WORLD_TRANSPORT = "world"
+
+
 class WorldConfig(BaseModel):
     """Configured Git-world cognitive storage."""
 
@@ -434,12 +446,19 @@ class WorldConfig(BaseModel):
     # Optional shared controller-owned lock directory. Set this only when an
     # external process already serializes writes to the same Git world.
     lock_dir: str | None = None
+    # Optional remote the world exchanges with every pass: other writers push
+    # there, and every accepted turn is published there.
+    remote_url: str | None = None
+    branch: str = "main"
 
     @model_validator(mode="after")
     def validates_paths(self) -> "WorldConfig":
         _require_bounded_absolute("world root", self.root)
         if self.lock_dir is not None:
             _require_bounded_absolute("world lock_dir", self.lock_dir)
+        if self.remote_url is not None:
+            validate_git_remote_url(self.remote_url, allow_local=True)
+        validate_git_branch(self.branch)
         return self
 
     def lock_path(self, state_db: str | Path) -> Path:
@@ -483,23 +502,21 @@ class ControllerConfig(BaseModel):
 
 
 class DeskConfig(BaseModel):
-    """Configured web desk bridge (filesystem inbox shared with the sidecar)."""
+    """The filesystem desk transport: clients write `inbox_dir`, read replies from `events_file`.
+
+    Its messages share the inbox drain with Telegram; the directory's
+    permissions are the boundary of who may speak as the desk.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: ProviderFamily | None = None
     profile: ProviderProfile | None = None
-    access: Literal["operator", "read-only"] = "operator"
-    readable_roots: tuple[str, ...] = ()
     inbox_dir: str = "/var/lib/steward/desk-inbox"
     events_file: str = "/var/lib/steward/desk/events.jsonl"
 
     @model_validator(mode="after")
     def validates_paths(self) -> "DeskConfig":
-        for path in self.readable_roots:
-            _require_bounded_absolute("desk readable root", path)
-        if self.readable_roots and self.access != "read-only":
-            raise ValueError("desk readable_roots require read-only access")
         _require_bounded_absolute("desk inbox_dir", self.inbox_dir)
         _require_bounded_absolute("desk events_file", self.events_file)
         return self
@@ -531,6 +548,11 @@ class ProcedureConfig(BaseModel):
     models: tuple[ModelEntry, ...] | None = None
     access: Literal["read-only", "workspace-write"] = "read-only"
     fallback: bool = True
+    # A procedure is bounded by its work: output tokens, reasoning included.
+    # Its own deadline then only has to catch a stalled provider, so it may
+    # be longer than the conversational `provider.timeout_seconds`.
+    token_budget: int | None = Field(default=None, ge=1000)
+    timeout_seconds: int | None = Field(default=None, ge=10, le=7200)
 
     @model_validator(mode="after")
     def validates_preference(self) -> "ProcedureConfig":
@@ -566,6 +588,13 @@ class ProcedureConfig(BaseModel):
         return (self.provider, *(family for family in family_order
                                  if self.fallback and family != self.provider))
 
+    def limits(self, timeout_seconds: int | None) -> dict:
+        """The cognition request bounds: its own, else the caller's deadline."""
+        return dict(
+            timeout_seconds=self.timeout_seconds or timeout_seconds,
+            token_budget=self.token_budget,
+        )
+
     def routing(self, family_order: tuple[ProviderFamily, ...]) -> dict:
         """The cognition request fields that carry this procedure's preference."""
         return dict(
@@ -592,23 +621,23 @@ class ProcedureRhythmConfig(BaseModel):
     input: str
     owner: str | None  # Explicit null retains findings without assessment/delivery.
     workdir: str | None = None
+    drive_tasks: bool = False
     # What counts as input. For a world rhythm, world paths whose change since
     # its last accepted run is its input; for an organisation (`workdir`)
     # rhythm, the prefixes of its activity keys, such as `repositories/app/main`.
     paths: tuple[str, ...] = ()
-    # A world file that is the message: when a run changes it, its content is
-    # sent to the owner in place of the reply.
-    deliver: str | None = None
 
     @model_validator(mode="after")
     def validates_workdir(self):
+        if self.drive_tasks and (self.input != "world" or self.workdir is not None or not self.owner):
+            raise ValueError("drive_tasks requires a world rhythm with a result owner")
         if self.workdir is not None:
             _require_bounded_absolute("rhythm workdir", self.workdir)
         if (self.schedule is None) == (self.after is None):
             raise ValueError("rhythm requires exactly one of schedule or after")
         if self.offset and not (isinstance(self.schedule, int) and self.offset < self.schedule):
             raise ValueError("rhythm offset requires an interval schedule longer than it")
-        for path in (*self.paths, *((self.deliver,) if self.deliver is not None else ())):
+        for path in self.paths:
             parts = PurePosixPath(path).parts
             if not path.strip() or path.startswith("/") or ".." in parts or ".git" in parts:
                 raise ValueError(f"rhythm path must stay inside the world: {path!r}")
@@ -645,6 +674,12 @@ class StewardConfig(BaseModel):
 
     @model_validator(mode="after")
     def validates_cross_references(self) -> "StewardConfig":
+        if self.world and self.world.remote_url is not None:
+            if WORLD_TRANSPORT in self.repositories:
+                raise ValueError(f"repository name {WORLD_TRANSPORT!r} is reserved for the world remote")
+            if any(Path(repository.path) == Path(self.world.root)
+                   for repository in self.repositories.values()):
+                raise ValueError("a world with a remote cannot also be a managed repository")
         if (self.desk and self.desk.provider is not None
                 and self.desk.provider not in self.provider.family_order):
             raise ValueError("desk provider must be in provider.family_order")
@@ -682,8 +717,8 @@ class StewardConfig(BaseModel):
                     raise ValueError("world rhythm requires a workspace-write procedure")
                 if rhythm.after is None and not isinstance(rhythm.schedule, int):
                     raise ValueError("world rhythm requires an interval schedule")
-            elif rhythm.after is not None or rhythm.deliver is not None or (rhythm.paths and rhythm.workdir is None):
-                raise ValueError("rhythm after and deliver apply only to world rhythms, "
+            elif rhythm.after is not None or (rhythm.paths and rhythm.workdir is None):
+                raise ValueError("rhythm after applies only to world rhythms, "
                                  "and paths only to world or organisation rhythms")
             else:
                 if rhythm.workdir is not None and self.procedures[rhythm.procedure].access == "workspace-write":

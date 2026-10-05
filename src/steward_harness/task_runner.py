@@ -7,7 +7,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from steward_harness.cognition import Cognition, CognitionRequest
@@ -18,8 +18,6 @@ from steward_harness.landing.checkpoint import (
     TickClosure,
     WorktreeCheckpointer,
     WorktreeCheckpointError,
-    commit_subject,
-    parse_tick_closure,
 )
 from steward_harness.landing.worktree import WorktreeError, WorktreeManager
 from steward_harness.prompts import RHYTHM_FINDINGS, build_task_prompt, build_procedure_scope
@@ -35,7 +33,7 @@ from steward_harness.state import (
     StateDatabase,
     TaskId,
 )
-from steward_harness.task_query import is_task_query, ownership_answer
+from steward_harness.task_calls import TaskCallServer, TaskExecutionCalls
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
 from steward_harness.task_store import Task
@@ -122,10 +120,11 @@ def _task_input(commit: str, kind: str, text: str, source: str) -> RuntimeInput:
 def session_state_prefixes(family: ProviderFamily) -> tuple[str, ...]:
     """Worktree paths the running provider writes its own session state into.
 
-    Each adapter maps its native session directory *inside* the worktree — see
-    the `mappings=` argument where the providers open a `native_workspace` — and
-    that is deliberate: it is what makes a session durable, resumable and
-    reviewable across invocation loss and later recovery.
+    Each adapter's native session records are captured into the worktree's
+    index after every invocation — see the `mappings=` argument where the
+    providers open a `native_workspace` — and that is deliberate: it is what
+    makes a session durable, resumable and reviewable across invocation loss
+    and later recovery.
 
     The consequence is that these paths change on every turn, a read-only one
     included. A reviewer reading a repository necessarily appends its own
@@ -167,7 +166,9 @@ class TaskRunner:
         actor_name: str = "Steward",
         actor_email: str = "steward@localhost",
         poll_seconds: float = 5,
+        telegram_admin=None,
     ) -> None:
+        self.telegram_admin = telegram_admin
         self.state = state
         self.repositories = dict(repositories)
         self.transports = dict(transports)
@@ -378,29 +379,12 @@ class TaskRunner:
         except Busy:
             return task_id
         try:
-            self._answer_query(task_id)
             task = self.state.tasks.get(task_id)
             if not task.dispatchable:
                 return task_id
             return self._run_owned(task_id, task.revision)
         finally:
             lock.release()
-
-    def _answer_query(self, task_id):
-        # The caller holds the task lock, so the task reads as running here.
-        task = self.state.tasks._record(task_id)
-        if (task.disposition != "ask" or task.definition.hold or task.dispatchable
-                or not is_task_query("waiting", task.reason)):
-            return
-        answer = ownership_answer(self.state.tasks, task_id, task.reason, self.repositories)
-        try:
-            self.state.tasks.answer(task_id, answer, source=f"controller:task-query:{task.revision}")
-        except RuntimeError:
-            # An operator answer or cancellation may win while the read runs.
-            # It owns the task; a stale query must not reopen it.
-            current = self.state.tasks.get(task_id)
-            if is_task_query(current.status.value, current.reason):
-                raise
 
     def reconcile_worktrees(self) -> None:
         """Retain task environments; prune only missing Git registrations."""
@@ -469,7 +453,6 @@ class TaskRunner:
                 ),
                 consumed_input_ids=frozenset(live.consumed),
             )
-            self._answer_query(task_id)
 
         except (RuntimeExecutionError, RuntimeUnavailable, ExecutionBoundaryUnavailable) as error:
             if _boundary_failed(error):
@@ -663,6 +646,9 @@ class TaskRunner:
             execution_id=execution_id,
             native_owner=str(task.session_id),
             native_generation=lambda provider: execution_generation + (provider != execution_provider),
+            # A read-only review, or one reading the organisation root, still
+            # commits its own record: on the task branch, with its evidence.
+            record_checkout=worktree,
             profile=lineage.profile,  # type: ignore[arg-type]
             prompt=build_task_prompt(
                 task.title,
@@ -677,8 +663,9 @@ class TaskRunner:
             ),
             cwd=execution_cwd,
             # Task cognition may work for days. A procedure run is a
-            # finite review and keeps the provider deadline.
-            timeout_seconds=self.timeout_seconds if procedure else None,
+            # finite review: its own bounds, else the provider deadline.
+            **(procedure.limits(self.timeout_seconds) if procedure
+               else dict(timeout_seconds=None)),
             **(procedure.routing(self.provider_fallbacks) if procedure
                else dict(provider_order=order)),
             provider_session_id=lineage.provider_session_id,
@@ -686,6 +673,7 @@ class TaskRunner:
                 lineage.provider if lineage.provider_session_id is not None else None
             ),
             sandbox_mode=procedure.access if procedure else "workspace-write",
+            allow_empty_output=True,  # Native completion owns success, not narration.
             on_session_started=session_started,
             on_session_invalidated=session_invalidated,
             on_input_ready=input_ready,
@@ -699,6 +687,8 @@ class TaskRunner:
                 raise RuntimeExecutionError("controller is stopping")
             return request
 
+        task_calls = None
+        calls = TaskExecutionCalls(self.state, task.task_id, self.repositories, telegram_admin=None if procedure else self.telegram_admin)
         watcher = None if procedure else threading.Thread(
             target=self._watch_offers, args=(task.task_id, live),
             name=f"offers-{task.task_id}", daemon=True)
@@ -707,8 +697,16 @@ class TaskRunner:
         try:
             if watcher:
                 watcher.start()
+            task_calls = TaskCallServer(calls)
+            def writer_started(pid, unit):
+                calls.start_writer()
+                task_calls.bind(pid, unit)
+            request = replace(request, task_call_socket=task_calls.path,
+                              on_process_started=writer_started)
             result = self.cognition.run(prepared, execution_id=execution_id)
         finally:
+            if task_calls is not None:
+                task_calls.close()
             with self._input_lock:
                 self._executions.discard(execution_id)
                 self._native_inputs.pop(task.task_id, None)
@@ -730,10 +728,10 @@ class TaskRunner:
 
         closure_error = None
         try:
-            closure = parse_tick_closure(result.output, task.title)
+            closure = calls.closure(result.output)
         except ValueError as error:
             closure_error = str(error)
-            closure = TickClosure(commit_subject(None, task.title), "continue")
+            closure = TickClosure("steward: retain work without accepted closure", "continue", findings=result.output)
 
         # Staging rejects an unfinished Git operation or a switched branch.
         checkpointer.stage(expected_branch=task.branch)
@@ -745,6 +743,8 @@ class TaskRunner:
             disposition=closure.disposition,
             reason=closure.blocking_question,
             findings=closure.findings,
+            execution=calls.execution,
+            task_revision=live.baseline,
         )
         log.info("Task %s checkpoint: %s", task.task_id, closure.subject)
 
@@ -765,10 +765,14 @@ class TaskRunner:
             self.worktrees_root,
             execution_broker=self.broker,
         )
+        # Refresh source evidence even for retained branches. The working HEAD
+        # and local edits remain the task's; cognition can compare them with
+        # the latest controller observation without an automatic rebase.
+        transport = self.transports[task.repository]
+        observed = transport.sync_remote_to_agent(repository.path, self.broker)
         base = None
         if not manager.has_branch(task.branch):
-            transport = self.transports[task.repository]
-            base = transport.sync_remote_to_agent(repository.path, self.broker)
+            base = observed
             procedure = task.procedure
             if procedure:
                 base = procedure.candidate

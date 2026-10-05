@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -49,13 +50,16 @@ class HealthServer:
     a `GET` like the other one.
     """
 
-    def __init__(self, bind: str, board: object | None = None) -> None:
+    def __init__(self, bind: str, board: object | None = None, *,
+                 rhythms=None, observation_max_age=60) -> None:
         host, _, port = bind.rpartition(":")
         if not host or not port.isdigit():
             raise ValueError(f"health bind must be host:port, got {bind!r}")
         self._port = int(port)
         self._release_sha = release_sha()
         self._board = board
+        self._rhythms = rhythms
+        self._observation_max_age = observation_max_age
 
         server = self
 
@@ -75,7 +79,16 @@ class HealthServer:
                     sha = server._release_sha
                     # A missing identity fails the gate: never report healthy
                     # for a release we cannot name.
-                    self._send(200 if sha else 503, {"ok": bool(sha), "sha": sha})
+                    body = {"ok": bool(sha), "sha": sha}
+                    if server._rhythms is not None:
+                        sample = dict(server._rhythms())
+                        stamp = sample.get("observed_at")
+                        age = max(0, time.time() - stamp) if stamp is not None else None
+                        body["world_rhythms"] = sample | {
+                            "age_seconds": age,
+                            "fresh": age is not None and age <= server._observation_max_age,
+                        }
+                    self._send(200 if sha else 503, body)
 
             def _send(self, code: int, obj: dict) -> None:
                 body = json.dumps(obj).encode("utf-8")

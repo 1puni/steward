@@ -1,4 +1,4 @@
-"""Telegram transport service with background polling and durable outbox delivery."""
+"""Telegram transport: polling into the shared inbox, replies with per-piece receipts, outbox delivery."""
 
 from __future__ import annotations
 
@@ -10,17 +10,19 @@ import shutil
 import threading
 import time
 import uuid
-from collections import deque
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from steward_harness.config.schema import TelegramConfig
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-from steward_harness.state import ConversationBusy, StateDatabase
+from steward_harness.inbox import DEFERRALS, Inbox, InboundMessage, Source, settle
+from steward_harness.state import StateDatabase
+from steward_harness.telegram.admin import ChatAdministration
+from steward_harness.telegram.tasks import reference_entities
 from steward_harness.telegram.api import TelegramAPI, TelegramAPIError
 from steward_harness.telegram.commands import (
     BUILTIN_COMMAND_DESCRIPTIONS,
@@ -37,32 +39,26 @@ from steward_harness.telegram.format import (
     extract_telegram_action_markers,
     format_markdown_chunks,
 )
-from steward_harness.lease import Busy
 from steward_harness.receipts import write_receipt
-from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
 
 log = logging.getLogger(__name__)
 
 _SEND_ATTEMPTS = 3
 _SEND_RETRY_BACKOFF_SECONDS = 1.0
-# Executor threads may wait out Telegram's rate limit. The poller must stay free.
+# Drain workers may wait out Telegram's rate limit. The poller must stay free.
 _MAX_RETRY_AFTER_WAIT = 300.0
 _POLL_THREAD_MAX_WAIT = 5.0
-_EXECUTOR_WORKERS = 10
 # How stale an admission may be after the operator promotes or demotes someone
 # in the group. A minute keeps a grant usable almost immediately while costing
 # at most one call per minute per conversation.
 _ADMINISTRATOR_TTL_SECONDS = 60.0
-
-# topic_key = (chat_id, message_thread_id)
-_TopicKey = tuple[int, int]
 
 
 class InboundMediaRejected(TelegramAPIError):
     """This message's media will never be acceptable, so do not retry it.
 
     Subclasses `TelegramAPIError` because that is what it is, and is answered
-    at the message rather than reaching the executor, which classifies that
+    at the message rather than reaching the drain, which classifies that
     class as transient and requeues it. Requeueing is right for everything
     else that class covers — the network being the network. It is wrong here:
     a cap violation is a property of the message, so retrying it every second
@@ -75,6 +71,28 @@ class TelegramDeliveryError(TelegramAPIError):
 
     Never swallow this into a log line: a caller that only logs it recreates the
     exact "silent failure, fabricated success" bug this class exists to prevent.
+    """
+
+
+class TelegramContentRejected(TelegramDeliveryError):
+    """A reply was rejected on its content, not on the network or the server.
+
+    Raised instead of the plain `TelegramDeliveryError` when every failed
+    piece came back with a definite client error (Telegram's `is_permanent_rejection`):
+    a malformed entity, a chat or reply-to that no longer exists, and the
+    like. The drain's transient-error path is right for everything else
+    that class covers — retrying while the network or Telegram recovers —
+    but wrong here: the same content gets the same rejection every time, so
+    retrying it every second only floods the log and starves this topic's
+    queue behind a reply that will never go through.
+    """
+
+
+class TelegramReceiptsUnadopted(RuntimeError):
+    """The previous release's retained updates could not be carried into the inbox.
+
+    The ingress must not start: from offset zero it would answer updates that
+    were answered but not yet acknowledged a second time.
     """
 
 
@@ -114,6 +132,7 @@ def probe_chat_access(api: TelegramAPI, config: TelegramConfig) -> None:
                 or member.get("status") not in {"administrator", "creator"}
                 or (
                     member.get("status") != "creator"
+                    and bool(set(config.agent_actions) & {"pin_reply", "pin_message"})
                     and member.get("can_pin_messages") is not True
                 )
             ):
@@ -124,6 +143,29 @@ def probe_chat_access(api: TelegramAPI, config: TelegramConfig) -> None:
         raise
     except Exception as exc:
         raise TelegramAPIError(f"chat access probe failed: {exc}") from exc
+
+
+def inbound_record(update: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The inbox record for an update that carries text or images, else None.
+
+    The text is never empty: an image without a caption asks to be inspected.
+    """
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return None
+    raw_text = message.get("text") or message.get("caption") or ""
+    text = raw_text if isinstance(raw_text, str) else ""
+    images = TelegramService._remote_image_metadata(message)
+    if not text.strip() and not images:
+        return None
+    return {
+        "kind": "message", "id": f"tg_{update['update_id']}",
+        "text": text if text.strip() else "Please inspect the attached image.",
+        "topic": message.get("message_thread_id", 0),
+        "chat": message.get("chat", {}).get("id"), "sender": message.get("from", {}).get("id"),
+        "update": update["update_id"], "message": message.get("message_id", 0),
+        "images": list(images),
+    }
 
 
 class TelegramService:
@@ -143,6 +185,7 @@ class TelegramService:
         self.config = config
         token = self._read_token(config.token_path)
         self.api = TelegramAPI(token, base_url=config.botapi_base or "https://api.telegram.org")
+        self.admin = ChatAdministration(config, self.api, state_db.path.parent / "telegram-admin")
         self.allowed_users = frozenset(config.allowed_users)
         self.allow_group_administrators = config.allow_group_administrators
         # Administrators change rarely and are re-read per admitted sender, so
@@ -175,26 +218,21 @@ class TelegramService:
             self._inbound_media_dir = Path(config.inbound_media_dir).resolve()
         else:
             self._inbound_media_dir = state_db.path.parent / "telegram-input"
-        # Per-topic queues of updates that owe execution. Each is also written
-        # into its receipt file before the poll offset moves past it, so the
-        # offset is the acknowledgement and the receipt files are the spool.
-        self._queue_lock = threading.Lock()
-        self._pending: dict[_TopicKey, deque[dict[str, Any]]] = {}
-        self._in_flight: set[_TopicKey] = set()
-        # Retained updates whose sender's admission could not be read yet.
-        self._unadmitted: dict[int, dict[str, Any]] = {}
+        # Admitted updates wait in a private inbox for the shared drain. Only
+        # this ingress can write it, so a record there speaks for an admitted
+        # Telegram sender. `offset` beside the records is how far it retained.
+        self.inbox = Inbox(
+            state_db.path.parent / f"{state_db.path.name}.telegram-inbox" / str(config.chat_id)
+        )
+        self._offset_path = self.inbox.dir / "offset"
+        self._offset = self._read_receipt(self._offset_path).get("offset", 0)
         self._delivery_context = threading.local()
-        # Transport receipts belong beside controller state, not in agent worktrees.
+        # Result receipts belong beside controller state, not in agent worktrees.
         self._receipt_dir = (
             state_db.path.parent / f"{state_db.path.name}.telegram-receipts"
             / str(config.chat_id)
         )
-        self._receipt_floor = 0
-        self._offset = 0
         self._threads: tuple[threading.Thread, ...] = ()
-        self._executor = ThreadPoolExecutor(
-            max_workers=_EXECUTOR_WORKERS, thread_name_prefix="telegram-executor"
-        )
 
     @staticmethod
     def _read_token(token_path: str) -> str:
@@ -203,11 +241,18 @@ class TelegramService:
         except OSError as exc:
             raise RuntimeError(f"Could not read Telegram token from {token_path}: {exc}")
 
+    @property
+    def source(self) -> Source:
+        """This transport's inbox, as the shared drain answers it."""
+        return Source(self.inbox, self.answer, self.defers)
+
     def start(self) -> None:
         """Validate transport before admitting any polling or delivery work."""
+        self._adopt_receipts()
         probe_chat_access(self.api, self.config)
         self._register_commands()
-        self.requeue()
+        # A claim left by a dead ingress is owed to the drain, not to Telegram.
+        self.inbox.recover()
         # A long poll held open against a remote API is a real I/O boundary,
         # so these are threads. Nothing supervises them: an exception leaves
         # the thread, `threading.excepthook` logs it, and the process exits
@@ -220,66 +265,63 @@ class TelegramService:
         )
         for thread in self._threads:
             thread.start()
-        # Executor threads run until _stop is set and nothing is pending.
-        for _ in range(_EXECUTOR_WORKERS):
-            self._executor.submit(self._executor_loop)
 
-    def requeue(self) -> None:
-        """Queue every update acknowledged before a restart and still owed work.
+    def _adopt_receipts(self) -> None:
+        """Carry updates retained by the previous release into the inbox, once.
 
-        Admission is asked again: configuration may have changed since the
-        update was retained, and a retained update is not a grant.
+        Before the shared inbox, an admitted update waited in its receipt,
+        `<state_db>.telegram-receipts/<chat>/<update>.json`, and the offset
+        lived only in memory. A receipt was removed only once a poll had
+        acknowledged its update, so every update answered but not yet
+        acknowledged still has one. Each unfinished receipt becomes a queued
+        message with its saved reply and confirmed pieces, and the offset moves
+        past every receipt, so nothing already answered is answered again.
+
+        The persisted offset is the completion marker: once it exists this is
+        a no-op. Receipts are only read, and `task-results/` is not touched.
+        A failure here must keep the ingress off, because polling from offset
+        zero would answer acknowledged-but-unconfirmed updates a second time.
         """
-        for path in sorted(self._receipt_dir.glob("*.json"), key=lambda p: int(p.stem)):
-            receipt = self._read_receipt(path)
-            if "update" not in receipt or receipt.get("done"):
-                continue
-            self._readmit(receipt["update"])
-
-    def _readmit(self, update: dict[str, Any]) -> None:
-        """Queue a retained update once admitted, finish it once refused."""
-        admitted = self._admits(update["message"])
-        uid = self._update_key(update)
-        if admitted is None:
-            if uid is not None:
-                self._unadmitted[uid] = update
+        if self._offset_path.exists():
             return
-        if uid is not None:
-            self._unadmitted.pop(uid, None)
-        if admitted:
-            self._enqueue(update)
-        elif (path := self._receipt_path(update)) is not None:
-            write_receipt(path, {**self._read_receipt(path), "done": True})
+        try:
+            offset = 0
+            for path in self._receipt_dir.glob("*.json"):
+                if not path.stem.isdigit():
+                    continue
+                update_id = int(path.stem)
+                offset = max(offset, update_id + 1)
+                receipt = self._read_receipt(path)
+                name = f"{update_id:012d}"
+                if receipt.get("done") or "update" not in receipt or self.inbox.holds(name):
+                    continue
+                record = inbound_record(receipt["update"])
+                if record is None:
+                    continue  # no text or image: the previous release had nothing to run
+                record.update({key: receipt[key] for key in ("reply", "formatted_chunks", "pieces")
+                               if key in receipt})
+                write_receipt(self.inbox.dir / f"{name}.json", record)
+                log.info("Telegram update %s carried into the inbox from its receipt", update_id)
+            if offset:
+                write_receipt(self._offset_path, {"offset": offset})
+                self._offset = offset
+                log.info("Telegram receipts adopted; polling resumes from offset %s", offset)
+        except Exception as exc:
+            raise TelegramReceiptsUnadopted(
+                f"could not carry {self._receipt_dir} into {self.inbox.dir}: {exc}"
+            ) from exc
 
     def _poll_updates(self) -> list[dict[str, Any]] | None:
-        offset = self._offset
         try:
-            updates = self.api.get_updates(offset, timeout_seconds=15)
+            updates = self.api.get_updates(self._offset, timeout_seconds=15)
         except TelegramAPIError as exc:
             log.warning("Telegram polling error: %s (backing off 3s)", exc)
             return None
-        # A successful poll acknowledges everything below its offset. Keep a
-        # finished receipt until then, so a redelivered update is recognized.
-        if offset > self._receipt_floor:
-            for path in self._receipt_dir.glob("*.json"):
-                if int(path.stem) < offset and self._read_receipt(path).get("done"):
-                    path.unlink()
-            self._receipt_floor = offset
-        # Telegram answered, so ask again about senders it could not vouch for.
-        for update in list(self._unadmitted.values()):
-            self._readmit(update)
         for update in updates:
             if self._stop.is_set():
                 break
             self._ingest_update(update)
-            update_id = update.get("update_id")
-            if isinstance(update_id, int) and update_id >= 0:
-                self._offset = max(self._offset, update_id + 1)
         return updates
-
-    def _receipt_path(self, update: dict[str, Any]) -> Path | None:
-        uid = self._update_key(update)
-        return self._receipt_dir / f"{uid}.json" if uid is not None else None
 
     @staticmethod
     def _read_receipt(path: Path | None) -> dict[str, Any]:
@@ -292,125 +334,74 @@ class TelegramService:
         write_receipt(path, self._delivery_context.receipt)
 
     def _ingest_update(self, update: dict[str, Any]) -> None:
-        known = self._read_receipt(self._receipt_path(update))
-        if known.get("done") or "update" in known:
-            return
-        self._delivery_context.path = self._receipt_path(update)
-        self._delivery_context.receipt = self._read_receipt(self._delivery_context.path)
-        try:
-            self._route_update(update)
-        except TelegramAPIError:
-            self._enqueue(update)
-        finally:
-            self._delivery_context.path = None
+        """Retain an admitted update, acknowledge it, then route it.
 
-    def _enqueue(self, update: dict[str, Any]) -> None:
-        """Retain the update in its receipt, then queue it behind its topic."""
-        path = self._receipt_path(update)
-        if path is not None:
-            receipt = self._read_receipt(path)
-            if "update" not in receipt:
-                write_receipt(path, {**receipt, "update": update})
-        message = update["message"]
-        key = (message["chat"]["id"], message.get("message_thread_id", 0))
-        with self._queue_lock:
-            self._pending.setdefault(key, deque()).append(update)
-
-    def _route_update(self, update: dict[str, Any]) -> None:
-        """Route one inbound update: control commands inline, else enqueue.
-
-        Every update enters here; nothing downstream re-authenticates.
+        The record is written claimed, so nothing can finish and remove it
+        before the persisted offset moves past it. Telegram redelivers only
+        what the offset has not passed, and a redelivered update that is still
+        retained is recognized by name. Inputs are identified by update, never
+        by content: the same words under a new update are a new message.
         """
-        message = update.get("message")
-        if not isinstance(message, dict):
+        update_id = update.get("update_id")
+        if not isinstance(update_id, int) or update_id < 0:
             return
+        if update_id < self._offset:
+            return  # acknowledged: retained already, or finished
+        name = f"{update_id:012d}"
+        message = None if self.inbox.holds(name) else self._retain(name, update)
+        self._offset = update_id + 1
+        write_receipt(self._offset_path, {"offset": self._offset})
+        if message is not None:
+            self._route(message)
 
-        admitted = self._admits(message)
-        if admitted is None:
-            # Unknown is not a refusal: retain it and ask again after the
-            # next successful poll, or at the next start.
-            path = self._receipt_path(update)
-            if path is not None:
-                write_receipt(path, {**self._read_receipt(path), "update": update})
-            if (uid := self._update_key(update)) is not None:
-                self._unadmitted[uid] = update
-            return
-        if not admitted:
-            return
-        chat_id = message["chat"]["id"]
-        user_id = message["from"]["id"]
-        topic_id = message.get("message_thread_id", 0)
+    def _retain(self, name: str, update: dict[str, Any]) -> InboundMessage | None:
+        """Write an admitted message into the inbox; refuse everything else here.
 
-        if self._delivery_context.receipt.get("reply") is not None:
-            self._handle_update(update, max_wait_seconds=_POLL_THREAD_MAX_WAIT)
-            return
-
+        Every update enters here; a sender refused at this boundary is never
+        written down. An unreadable administrator list is not a refusal: the
+        update is retained and the drain asks again before running it.
+        """
+        record = inbound_record(update)
+        if record is None:
+            return None
+        if self._admits(record["chat"], record["sender"], record["topic"]) is False:
+            return None
+        message = update["message"]
         log.info(
             "Telegram ingress update=%s chat=%s message=%s sender=%s sender_is_bot=%s "
             "thread_present=%s wire_thread=%s routed_topic=%s",
-            update.get("update_id"), chat_id, message.get("message_id"), user_id,
+            record["update"], record["chat"], record["message"], record["sender"],
             message.get("from", {}).get("is_bot"), "message_thread_id" in message,
-            message.get("message_thread_id"), message.get("message_thread_id", 0),
+            message.get("message_thread_id"), record["topic"],
         )
+        return self.inbox.put(name, record)
 
-        # Control commands are handled inline so they can overtake a busy topic.
-        if self._is_control_command(update):
-            try:
-                self._handle_update(update, max_wait_seconds=_POLL_THREAD_MAX_WAIT)
-            except TelegramAPIError:
-                raise
-            except Exception as exc:
-                log.warning("Control command handling error: %s", exc)
+    def _route(self, message: InboundMessage) -> None:
+        """Answer a control command or live input on this thread; hand the rest on.
+
+        Control commands overtake a busy topic. Text for a topic whose native
+        execution is running becomes live input to it, unless retained
+        messages in that topic are still owed: delivering it would overtake
+        them. Everything else waits in the inbox for the drain.
+        """
+        if self._is_control_command(message.text):
+            live = False
+        elif (
+            self._native_turn_handler is not None
+            and not message.record.get("images")
+            and not message.text.startswith("/")
+            and message.topic_id in self._ongoing_topics()
+            and not any(m.topic_id == message.topic_id for m in self.inbox.pending())
+        ):
+            live = True
+        else:
+            self.inbox.requeue(message)
             return
+        settle(Source(self.inbox, partial(
+            self.answer, max_wait_seconds=_POLL_THREAD_MAX_WAIT, live=live,
+        ), self.defers), message)
 
-        # Text-only updates for a topic with an active native execution are
-        # routed directly to _native_turn_handler — a routing decision, not a
-        # separate thread.
-        if self._native_turn_handler is not None:
-            raw_text = message.get("text") or message.get("caption") or ""
-            has_attachments = bool(
-                message.get("photo") or (
-                    isinstance(message.get("document"), dict)
-                    and isinstance(message["document"].get("mime_type"), str)
-                    and message["document"]["mime_type"].startswith("image/")
-                )
-            )
-            if not has_attachments and isinstance(raw_text, str) and raw_text.strip():
-                with self._queue_lock:
-                    queued = bool(self._pending.get((chat_id, topic_id)))
-                # Retained updates in this topic come first; delivering this
-                # one into the live execution would overtake them.
-                if topic_id in self._ongoing_topics() and not queued:
-                    event_id = f"tg_{update.get('update_id')}"
-                    text = raw_text
-                    self.api.send_chat_action(chat_id, "typing", topic_id=topic_id)
-                    try:
-                        raw_reply = self._native_turn_handler(
-                            event_id, chat_id, topic_id, user_id, text, ()
-                        )
-                    except (TelegramAPIError, Busy, ConversationBusy,
-                            WorldUpdatePending, WorldContentConflict) as exc:
-                        log.debug("Native routing transient error, enqueueing: %s", exc)
-                        # Falls through to enqueue below.
-                    except (RuntimeExecutionError, RuntimeUnavailable) as exc:
-                        log.warning("Turn execution interrupted: %s", exc)
-                        self.send_reply(chat_id, topic_id, f"Turn execution interrupted: {exc}",
-                                        max_wait_seconds=_POLL_THREAD_MAX_WAIT)
-                        return
-                    except Exception as exc:
-                        log.warning("Native routing error: %s", exc)
-                        return
-                    else:
-                        if raw_reply:
-                            self.send_reply(chat_id, topic_id, raw_reply,
-                                            max_wait_seconds=_POLL_THREAD_MAX_WAIT)
-                        self._delivery_context.receipt["done"] = True
-                        self._save_receipt()
-                        return
-
-        self._enqueue(update)
-
-    def _admits(self, message: dict[str, Any]) -> bool | None:
+    def _admits(self, chat_id: object, user_id: object, topic_id: object) -> bool | None:
         """This chat, an admitted sender, and not a passive topic.
 
         A passive topic is a one-way feed, so nothing posted there may act —
@@ -419,12 +410,10 @@ class TelegramService:
         logged at info so log quiet can still confirm the feeds are inert.
         None means "not now": the administrator list could not be read.
         """
-        if message.get("chat", {}).get("id") != self.config.chat_id:
+        if chat_id != self.config.chat_id:
             return False
-        user_id = message.get("from", {}).get("id")
         if not isinstance(user_id, int) or user_id <= 0:
             return False
-        topic_id = message.get("message_thread_id", 0)
         if topic_id in self.passive_topics:
             log.info("Ignoring update in passive Telegram topic %s", topic_id)
             return False
@@ -474,69 +463,32 @@ class TelegramService:
             self._administrators_read_at = time.monotonic()
         return user_id in administrators
 
-    def _executor_loop(self) -> None:
-        """Claim and process one update at a time until stopped and empty."""
-        while not self._stop.is_set() or self._has_pending():
-            update, topic_key = self._claim_next()
-            if update is None:
-                time.sleep(0.05)
-                continue
-            try:
-                self._handle_update(update)
-            except (TelegramAPIError, Busy, ConversationBusy,
-                    WorldUpdatePending, WorldContentConflict) as exc:
-                log.debug("Transient error processing update, requeueing: %s", exc)
-                # Return to the front so per-topic ordering is preserved.
-                with self._queue_lock:
-                    if topic_key not in self._pending:
-                        self._pending[topic_key] = deque()
-                    self._pending[topic_key].appendleft(update)
-                if self._stop.is_set():
-                    # Shutting down: retrying a busy owner cannot succeed, and
-                    # draining-while-pending would spin here forever, hanging
-                    # stop()'s executor join. Its receipt requeues it on the
-                    # next start.
-                    return
-                self._stop.wait(1.0)
-            except Exception as exc:
-                log.error("Unrecoverable error processing Telegram update: %s", exc)
-                path = self._receipt_path(update)
-                if path is not None:
-                    write_receipt(path, {**self._read_receipt(path), "done": True})
-                # Finished is not silent: the sender learns it was dropped.
-                # Plain text, so nothing in the error can act as a marker.
-                message = update["message"]
-                try:
-                    self.api.send_message(message["chat"]["id"],
-                                          f"Could not process this message: {exc}",
-                                          topic_id=message.get("message_thread_id") or None)
-                except Exception as error:
-                    log.warning("Could not report the dropped update: %s", error)
-            finally:
-                with self._queue_lock:
-                    self._in_flight.discard(topic_key)
+    def defers(self, error: BaseException) -> bool:
+        """Not now: the owner is busy, or Telegram may answer differently later.
 
-    @staticmethod
-    def _update_key(update: dict[str, Any]) -> int | None:
-        update_id = update.get("update_id")
-        return update_id if isinstance(update_id, int) else None
+        A content rejection is final: Telegram answers the same content the
+        same way every time, so retrying it would flood the log and starve
+        every message behind it in its topic.
+        """
+        return isinstance(error, DEFERRALS) or (
+            isinstance(error, TelegramAPIError)
+            and not isinstance(error, TelegramContentRejected)
+        )
 
-    def _has_pending(self) -> bool:
-        with self._queue_lock:
-            return any(bool(q) for q in self._pending.values())
+    def _report_dropped(self, message: InboundMessage, exc: Exception) -> None:
+        """Tell the sender a message was dropped; the drain parks it.
 
-    def _claim_next(self) -> tuple[dict[str, Any] | None, _TopicKey | None]:
-        """Pop the oldest update from a topic not currently in flight."""
-        with self._queue_lock:
-            for topic_key, q in self._pending.items():
-                if topic_key in self._in_flight or not q:
-                    continue
-                update = q.popleft()
-                if not q:
-                    del self._pending[topic_key]
-                self._in_flight.add(topic_key)
-                return update, topic_key
-        return None, None
+        Used for errors a retry can never fix, so one bad update cannot
+        flood the log or block everything behind it in its topic forever.
+        Plain text, so nothing in the error can act as a marker.
+        """
+        log.error("Unrecoverable error processing Telegram update: %s", exc)
+        try:
+            self.api.send_message(message.record.get("chat"),
+                                  f"Could not process this message: {exc}",
+                                  topic_id=message.topic_id or None)
+        except Exception as error:
+            log.warning("Could not report the dropped update: %s", error)
 
     def _loop(
         self, name: str, step: Callable[[], object], poll_seconds: float
@@ -556,24 +508,23 @@ class TelegramService:
         return threading.Thread(target=run, name=f"steward-{name}", daemon=True)
 
     def request_stop(self) -> None:
-        """Stop new polling/claims without cancelling the current obligation."""
+        """Stop polling without cancelling the current obligation."""
         self._stop.set()
 
     def stop(self) -> None:
-        """Drain owned writers before the controller can release its lease."""
+        """Join the ingress threads and close the transport.
+
+        The drain that sends replies through this transport must have
+        finished first.
+        """
         self.request_stop()
         for thread in self._threads:
             if thread.ident is not None and thread is not threading.current_thread():
                 thread.join()
-        self._executor.shutdown(wait=True)
         self.api.close()
 
     @staticmethod
-    def _is_control_command(update: dict[str, Any]) -> bool:
-        message = update.get("message")
-        text = message.get("text") if isinstance(message, dict) else None
-        if not isinstance(text, str):
-            return False
+    def _is_control_command(text: str) -> bool:
         parsed = parse_inbound_text(text)
         return bool(
             parsed.command is not None
@@ -591,45 +542,44 @@ class TelegramService:
         except TelegramAPIError as exc:
             log.warning("Failed to register Telegram bot commands: %s", exc)
 
-    def _handle_update(
-        self, update: dict[str, Any], *,
+    def answer(
+        self, message: InboundMessage, *,
         max_wait_seconds: float = _MAX_RETRY_AFTER_WAIT,
+        live: bool = False,
     ) -> None:
-        self._delivery_context.path = self._receipt_path(update)
-        self._delivery_context.receipt = self._read_receipt(self._delivery_context.path)
+        """Run one retained update and deliver its reply; the caller disposes of it.
+
+        Admission is asked again: configuration may have changed since the
+        update was retained, and a retained update is not a grant. A saved
+        reply is resent, never recomputed.
+        """
+        record = message.record
+        admitted = self._admits(record.get("chat"), record.get("sender"), message.topic_id)
+        if admitted is None:
+            raise TelegramAPIError("Telegram administrators could not be read; admission will be asked again")
+        if not admitted:
+            return
+        self._delivery_context.path = message.path
+        self._delivery_context.receipt = dict(record)
         try:
-            receipt = self._delivery_context.receipt
-            if receipt.get("done"):
-                return
-            if "reply" in receipt:
-                chat, topic, text = receipt["reply"]
+            if "reply" in record:
+                chat, topic, text = record["reply"]
                 self.send_reply(chat, topic, text, max_wait_seconds=max_wait_seconds)
             else:
-                self._execute_update(update, max_wait_seconds=max_wait_seconds)
-            receipt["done"] = True
-            self._save_receipt()
+                self._execute(message, max_wait_seconds=max_wait_seconds, live=live)
+        except Exception as exc:
+            if not self.defers(exc):
+                self._report_dropped(message, exc)
+            raise
         finally:
             self._delivery_context.path = None
 
-    def _execute_update(
-        self, update: dict[str, Any], *,
-        max_wait_seconds: float = _MAX_RETRY_AFTER_WAIT,
+    def _execute(
+        self, message: InboundMessage, *, max_wait_seconds: float, live: bool,
     ) -> None:
-        message = update.get("message")
-        if not isinstance(message, dict):
-            return
-
-        chat_id = message.get("chat", {}).get("id")
-        user_id = message.get("from", {}).get("id")
-        raw_text = message.get("text") or message.get("caption") or ""
-        text = raw_text if isinstance(raw_text, str) else ""
-        remote_attachments = self._remote_image_metadata(message)
-        if not text.strip() and not remote_attachments:
-            return
-
-        topic_id = message.get("message_thread_id", 0)
-        event_id = f"tg_{update.get('update_id')}"
-
+        record = message.record
+        chat_id, user_id, topic_id = record["chat"], record["sender"], message.topic_id
+        text = message.text
         parsed = parse_inbound_text(text, self._command_modes)
 
         if parsed.error:
@@ -644,26 +594,28 @@ class TelegramService:
             self.send_reply(chat_id, topic_id, cmd_reply, max_wait_seconds=max_wait_seconds)
             return
 
-        try:
-            images = self._materialize_attachments(
-                update_id=int(update.get("update_id", 0)),
-                message_id=int(message.get("message_id", 0)),
-                metadata=remote_attachments,
-            )
-        except InboundMediaRejected as exc:
-            # Tell the sender rather than dropping it into a log: they are
-            # holding the phone that sent it, and nothing will ever make this
-            # message acceptable.
-            self.send_reply(chat_id, topic_id, str(exc), max_wait_seconds=max_wait_seconds)
-            return
-        if not text.strip():
-            text = "Please inspect the attached image."
+        if live:
+            assert self._native_turn_handler is not None
+            handler, images = self._native_turn_handler, ()
+        else:
+            handler = self.turn_handler
+            try:
+                images = self._materialize_attachments(
+                    update_id=int(record.get("update", 0)),
+                    message_id=int(record.get("message") or 0),
+                    metadata=tuple(record.get("images") or ()),
+                )
+            except InboundMediaRejected as exc:
+                # Tell the sender rather than dropping it into a log: they are
+                # holding the phone that sent it, and nothing will ever make
+                # this message acceptable.
+                self.send_reply(chat_id, topic_id, str(exc), max_wait_seconds=max_wait_seconds)
+                return
 
-        # Regular turn execution: trigger typing action
         self.api.send_chat_action(chat_id, "typing", topic_id=topic_id)
 
         try:
-            raw_reply = self.turn_handler(event_id, chat_id, topic_id, user_id, text, images)
+            raw_reply = handler(message.msg_id, chat_id, topic_id, user_id, text, images)
         except (RuntimeExecutionError, RuntimeUnavailable) as exc:
             log.warning("Turn execution interrupted: %s", exc)
             raw_reply = f"Turn execution interrupted: {exc}"
@@ -810,7 +762,7 @@ class TelegramService:
         self._delivery_context.receipt = self._read_receipt(path)
         try:
             if not self._delivery_context.receipt.get("done"):
-                self.send_reply(chat_id, topic_id, text)
+                self.send_reply(chat_id, topic_id, text, max_wait_seconds=0, retained_result=True)
                 self._delivery_context.receipt["done"] = True
                 self._save_receipt()
         finally:
@@ -819,26 +771,51 @@ class TelegramService:
     def send_reply(
         self, chat_id: int, topic_id: int, text: str, *,
         max_wait_seconds: float = _MAX_RETRY_AFTER_WAIT,
+        retained_result: bool = False,
     ) -> None:
         """Send formatted text and extracted images to Telegram.
 
         Update replies retain each confirmed piece across retries and restart.
         Failed pieces raise so callers cannot mistake partial delivery for success.
-        The poller uses a short rate-limit wait; an unfinished reply is queued
-        for an executor to resume with its longer wait budget.
+        The poller uses a short rate-limit wait; an unfinished reply is left in
+        the inbox for the drain to resume with its longer wait budget.
         """
         if getattr(self._delivery_context, "path", None) is not None:
             receipt = self._delivery_context.receipt
             receipt.setdefault("reply", [chat_id, topic_id, text])
             chat_id, topic_id, text = receipt["reply"]
             self._save_receipt()
-        clean_text, actions = extract_telegram_action_markers(text)
-        clean_text, artifacts = extract_artifact_markers(clean_text)
-        chunks = format_markdown_chunks(clean_text)
+        if retained_result:
+            # Evidence and notification text do not authorize attachments/actions.
+            # Bound each transport job; full evidence remains in its source.
+            clean_text = (text if len(text) <= 12_000 else
+                          text[:11_940] + "\n[truncated; full result retained in its receipt]")
+            actions, artifacts = [], []
+        else:
+            clean_text, actions = extract_telegram_action_markers(text)
+            clean_text, artifacts = extract_artifact_markers(clean_text)
+        retained = getattr(self._delivery_context, "path", None) is not None
+        chunks = self._delivery_context.receipt.get("formatted_chunks") if retained else None
+        if chunks is None:
+            chunks = format_markdown_chunks(
+                clean_text, references=reference_entities(
+                    self._state.tasks, clean_text, self.config.task_app_url, self.config.chat_id,
+                )
+                if chat_id == self.config.chat_id else None,
+            )
+            if retained:
+                # Piece indexes must keep referring to the same text if a task
+                # is pruned or the configured app link changes before retry.
+                self._delivery_context.receipt["formatted_chunks"] = chunks
+                self._save_receipt()
         failures: list[str] = []
         artifact_failures: list[tuple[OutboundArtifact, str, Path | None]] = []
         sent_message_ids: list[int] = []
         allowed_actions = set(self.config.agent_actions)
+        # Every failed piece has to come back permanent for the whole reply
+        # to be unrecoverable: one transient piece alongside it still means
+        # retrying the reply is worth doing.
+        all_permanent = True
 
         for action in actions:
             if chat_id != self.config.chat_id:
@@ -854,7 +831,8 @@ class TelegramService:
             ):
                 failures.append("pin_message message id exceeds Telegram's numeric range")
         if failures:
-            raise TelegramDeliveryError("; ".join(failures))
+            # Properties of the message/config, never the network: always permanent.
+            raise TelegramContentRejected("; ".join(failures))
 
         for index, chunk in enumerate(chunks):
             try:
@@ -873,6 +851,7 @@ class TelegramService:
             except TelegramAPIError as exc:
                 log.error("Failed to send Telegram reply chunk after retries: %s", exc)
                 failures.append(f"message chunk: {exc}")
+                all_permanent = all_permanent and exc.is_permanent_rejection
 
         for index, artifact in enumerate(artifacts):
             if (getattr(self._delivery_context, "path", None) is not None
@@ -901,6 +880,10 @@ class TelegramService:
                 log.error("Failed to send %s %s after retries: %s", label, artifact.path, exc)
                 detail = f"{label} {artifact.path}: {exc}"
                 failures.append(detail)
+                # Already quarantined below, so this path is not the one
+                # that floods the log on a permanent rejection; leave its
+                # delivery classified as retryable, as before.
+                all_permanent = False
                 record = self._quarantine(str(exc), chat_id=chat_id, topic_id=topic_id,
                                          kind=artifact.kind.value, path=artifact.path)
                 artifact_failures.append((artifact, str(exc), record))
@@ -926,6 +909,7 @@ class TelegramService:
             except TelegramAPIError as exc:
                 log.error("Failed to execute Telegram %s after retries: %s", action.kind, exc)
                 failures.append(f"{action.kind.value}: {exc}")
+                all_permanent = False
 
         if artifact_failures:
             records = [record.name for _artifact, _error, record in artifact_failures if record]
@@ -943,7 +927,8 @@ class TelegramService:
                 log.error("Failed to send thread-independent delivery alert: %s", exc)
 
         if failures:
-            raise TelegramDeliveryError(
+            error_class = TelegramContentRejected if all_permanent else TelegramDeliveryError
+            raise error_class(
                 f"{len(failures)} of {len(chunks) + len(artifacts)} reply piece(s) failed to "
                 f"deliver: {'; '.join(failures)}"
             )

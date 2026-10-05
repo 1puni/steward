@@ -65,13 +65,52 @@ def test_initial_command_without_live_input_waits_for_native_completion(tmp_path
     assert wire.messages[0]["message"]["content"] == "work"
     assert stream.commands == {root: None}
     result(stream, root)
-    assert not wire.closed
+    assert wire.closed, "a single request closes input without claiming completion"
     with pytest.raises(RuntimeExecutionError, match="before correlated"):
         stream.finish()
     command(stream, root, "completed")
     stream.finish()
     assert wire.closed
     assert not receipts, "the initial prompt is not a separately delivered input source"
+
+
+def one_shot(tmp_path):
+    request = RuntimeRequest(execution_id="one", resolved=resolve_model("glm", "balanced"),
+                             provider_session_id=None, prompt="work", cwd=tmp_path,
+                             timeout_seconds=5)
+    stream = ClaudeInputStream(request, _ClaudeLifecycle(None, "glm"))
+    wire = Wire()
+    stream.connect(wire)
+    emit(stream, type="system", subtype="init", model="glm-5.3")
+    return stream, wire, wire.messages[0]["uuid"]
+
+
+def test_stock_claude_single_request_uses_echo_eof_and_terminal_result(tmp_path):
+    stream, wire, root = one_shot(tmp_path)
+    assert wire.closed
+    emit(stream, type="user", uuid=root, message={"role": "user", "content": "work"})
+    emit(stream, type="assistant", message={"content": [{"type": "text", "text": "GLM_OK"}]})
+    emit(stream, type="result", subtype="success", result="GLM_OK", usage={})
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == "GLM_OK"
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        emit(stream, type="result", subtype="success", result="duplicate", usage={})
+
+
+@pytest.mark.parametrize("echo", [None, "22222222-2222-4222-8222-222222222222"])
+def test_stock_claude_single_request_needs_its_own_echo(tmp_path, echo):
+    stream, _, _ = one_shot(tmp_path)
+    if echo:
+        emit(stream, type="user", uuid=echo, message={"role": "user", "content": "other"})
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        emit(stream, type="result", subtype="success", result="unowned", usage={})
+
+
+def test_stock_claude_single_request_requires_a_terminal_result(tmp_path):
+    stream, _, root = one_shot(tmp_path)
+    emit(stream, type="user", uuid=root, message={"role": "user", "content": "work"})
+    with pytest.raises(RuntimeExecutionError, match="before correlated"):
+        stream.finish()
 
 
 def test_folded_source_waits_for_consuming_result_and_root_completion(tmp_path):
@@ -278,6 +317,76 @@ def test_repeated_command_transitions_fail_closed(tmp_path, state):
         command(stream, root, state)
 
 
+def progress_stream(tmp_path, sink):
+    """A started stream whose lifecycle narrates activity into `sink`."""
+    request = RuntimeRequest(
+        execution_id="native", resolved=resolve_model("glm", "fast"),
+        provider_session_id=None, prompt="work", cwd=tmp_path, timeout_seconds=5,
+        on_progress=sink,
+    )
+    lifecycle = _ClaudeLifecycle(None, "glm", on_progress=request.on_progress)
+    stream = ClaudeInputStream(request, lifecycle)
+    wire = Wire()
+    stream.connect(wire)
+    root = wire.messages[-1]["uuid"]
+    command(stream, root, "queued")
+    command(stream, root, "started")
+    emit(stream, type="system", subtype="init", model="glm")
+    return stream, root
+
+
+def assistant(stream, *content):
+    emit(stream, type="assistant", parent_tool_use_id=None,
+         message={"role": "assistant", "content": list(content)})
+
+
+def test_tool_use_is_narrated_with_its_most_telling_argument(tmp_path):
+    seen = []
+    stream, _root = progress_stream(tmp_path, seen.append)
+
+    assistant(
+        stream,
+        {"type": "text", "text": "let me look"},
+        {"type": "tool_use", "name": "WebSearch", "input": {"query": "bitcoin price"}},
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/notes.md"}},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}},
+    )
+
+    assert seen == [
+        "WebSearch bitcoin price",
+        "Read /tmp/notes.md",
+        "Bash ls -la",
+    ]
+
+
+def test_a_nameless_or_argumentless_tool_still_narrates_safely(tmp_path):
+    seen = []
+    stream, _root = progress_stream(tmp_path, seen.append)
+
+    assistant(
+        stream,
+        {"type": "tool_use", "input": {"query": "no name"}},
+        {"type": "tool_use", "name": "Glob", "input": {}},
+        {"type": "tool_use", "name": "Task", "input": "not-a-mapping"},
+    )
+
+    assert seen == ["Glob", "Task"]
+
+
+def test_a_raising_consumer_cannot_break_the_stream(tmp_path):
+    """Narration is advisory: a broken consumer must not fail a healthy turn."""
+    def explode(_activity):
+        raise RuntimeError("consumer is broken")
+
+    stream, root = progress_stream(tmp_path, explode)
+
+    assistant(stream, {"type": "tool_use", "name": "Read", "input": {"file_path": "x"}})
+    result(stream, root, text="done")
+    command(stream, root, "completed")
+
+    assert stream.lifecycle.finish()[0] == "done"
+
+
 @pytest.mark.parametrize("allow_empty", [False, True])
 @pytest.mark.parametrize("text", ["", "   "])
 def test_empty_assessment_requires_successful_result_and_command_completion(tmp_path, allow_empty, text):
@@ -424,3 +533,44 @@ def test_an_ordinary_late_input_still_owns_the_final_word(tmp_path):
 def test_only_a_controller_notice_can_be_a_receipt():
     with pytest.raises(ValueError, match="receipt"):
         RuntimeInput("x", "y", receipt=True)
+
+
+def partial(stream, native, agent=None):
+    emit(stream, type="stream_event", parent_tool_use_id=agent, event=native)
+
+
+def test_partial_messages_meter_final_output_per_message_and_agent(tmp_path):
+    stream, _wire, root, _ = start(tmp_path)
+    stream.meter.budget = 1000
+    for identity, agent, used in (("msg_a", None, 400), ("msg_b", "toolu_1", 300), ("msg_c", None, 299)):
+        partial(stream, {"type": "message_start", "message": {"id": identity, "usage": {"output_tokens": 4}}}, agent)
+        partial(stream, {"type": "message_delta", "usage": {"output_tokens": used}}, agent)
+    # The complete event repeats starting usage and must not be counted.
+    emit(stream, type="assistant", parent_tool_use_id=None,
+         message={"content": [{"type": "text", "text": "x"}], "usage": {"output_tokens": 4}})
+    assert stream.meter.used == 999 and stream.meter.exhausted() is None
+    partial(stream, {"type": "message_delta", "usage": {"output_tokens": 300}})
+    assert "1000 output tokens of its 1000 budget" in stream.meter.exhausted()
+    result(stream, root)
+    command(stream, root, "completed")
+    stream.finish()
+
+
+def test_partial_message_from_another_session_is_refused(tmp_path):
+    stream, *_ = start(tmp_path)
+    with pytest.raises(RuntimeExecutionError, match="changed session identity"):
+        stream.consume(json.dumps({"type": "stream_event", "session_id": "22222222-2222-4222-8222-222222222222",
+                                   "event": {"type": "message_start", "message": {"id": "m"}}}))
+
+
+def test_only_a_budgeted_request_asks_for_partial_messages(tmp_path):
+    from steward_harness.runtime.providers.claude import ClaudeRuntime
+    adapter = ClaudeRuntime.__new__(ClaudeRuntime)
+    adapter._controller = SimpleNamespace(broker=SimpleNamespace(enabled=False))
+    adapter.executable, adapter.family = "claude", "claude"
+    def request(budget):
+        return RuntimeRequest(execution_id="x", resolved=resolve_model("claude", "fast"),
+                              provider_session_id=None, prompt="p", cwd=tmp_path,
+                              timeout_seconds=5, token_budget=budget)
+    assert "--include-partial-messages" not in adapter._command(request(None), None)
+    assert "--include-partial-messages" in adapter._command(request(5000), None)

@@ -26,8 +26,8 @@ def test_repair_and_query_answers_reach_the_resumed_prompt():
     assert "## Incoming task context\n- repair:" in repair
     assert "work, base and candidate" in repair
     assert "gate or conflict diagnostics" in repair
-    assert "## Incoming task context\n- answer:" in answer
-    assert "TASK_QUERY answer" in answer and "completeness limits" in answer
+    assert 'operation="query"' in answer
+    assert "QUESTION: TASK_QUERY" not in answer
 
 
 def test_transport_examples_respect_enabled_capabilities():
@@ -39,7 +39,7 @@ def test_transport_examples_respect_enabled_capabilities():
     assert "[[telegram_pin_message:123]]" in enabled
     assert "Photo roots: <configured absolute photo delivery root>" in enabled
     assert "[[send_image:" not in desk and "telegram_pin" not in desk
-    assert "TASK_ACTION:" in desk and "TASK_PROPOSAL:" in desk
+    assert "TASK_ACTION:" not in desk and "TASK_PROPOSAL:" not in desk
 
 
 def test_configured_reconciliation_adds_policy_to_the_entry_prompt():

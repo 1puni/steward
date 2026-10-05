@@ -1,4 +1,5 @@
 """Git/operator journeys for collapsed integration and executable targets."""
+from task_tool_fixtures import TaskOutput
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,7 +77,7 @@ def test_target_requires_exact_input_and_procedure_evidence_and_external_observa
     adapter = InvestigationAdapter()
     state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter)
     execute = adapter.execute
-    adapter.execute = lambda request: replace(execute(request), output="VERDICT: PASS\nCOMMIT: review\nDISPOSITION: idle\nQUESTION: NONE")
+    adapter.execute = lambda request: replace(execute(request), output=TaskOutput('VERDICT: PASS', subject='review', disposition='idle'))
     config, procedures = setup_procedures(tmp_path, state, runner)
     driver = tmp_path / "driver"
     observed = tmp_path / "observed.json"
@@ -221,7 +222,7 @@ def _transcribing(adapter, *, also_write=None):
         (projects / "session.jsonl").write_text('{"turn": 1}\n')
         if also_write is not None:
             (Path(request.cwd) / also_write).write_text("review must not change product")
-        return replace(result, output="VERDICT: PASS\nCOMMIT: review\nDISPOSITION: idle\nQUESTION: NONE")
+        return replace(result, output=TaskOutput('VERDICT: PASS', subject='review', disposition='idle'))
 
     adapter.execute = run
 
@@ -273,8 +274,7 @@ def test_failed_requirement_returns_the_reviewers_findings(tmp_path):
     task = procedures.request("security-one", "app", candidate, candidate)
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        "The consumer handoff is unverified.\nVERDICT: FAIL\n"
-        "COMMIT: review\nDISPOSITION: idle\nQUESTION: NONE"))
+        TaskOutput('The consumer handoff is unverified.\nVERDICT: FAIL', subject='review', disposition='idle')))
     runner.prepare(task)
     failure = procedures.require(("security-one",), "app", candidate, candidate)
     assert "The consumer handoff is unverified." in failure
@@ -290,7 +290,7 @@ def test_read_only_procedure_rejects_product_mutation_and_corrupt_resume(tmp_pat
     execute = adapter.execute
     def corrupt(request):
         (Path(request.cwd) / "injected.txt").write_text("review must not change product")
-        return replace(execute(request), output="VERDICT: PASS\nCOMMIT: review\nDISPOSITION: idle\nQUESTION: NONE")
+        return replace(execute(request), output=TaskOutput('VERDICT: PASS', subject='review', disposition='idle'))
     adapter.execute = corrupt
     runner.prepare(task)
     assert "changed its input" in state.tasks.get(task).reason
@@ -350,7 +350,7 @@ else:
     assert not targets.call("artifact", "observe", "app", revision).ready
 
 
-def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(tmp_path):
+def test_owned_rhythm_notification_delivers_without_assessment(tmp_path):
     from test_world_durability import runtime, EditingCognition
     from steward_harness.state import ConversationId
     import pytest
@@ -363,8 +363,7 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
         procedure="security-one", input="repositories/app/main")
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        "VERDICT: FAIL\nNOTIFY: The private consumer handoff is still outstanding.\n"
-        "COMMIT: reflection findings\nDISPOSITION: idle\nQUESTION: NONE"))
+        TaskOutput('The private consumer handoff is still outstanding.', subject='reflection findings', notify='The private consumer handoff is still outstanding.')))
     procedures.advance_rhythms(now=100)
     reflection = state.tasks.queued()[0]
     runner.prepare(reflection)
@@ -374,23 +373,22 @@ def test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup(
     service._state.tasks.transports = runner.transports
     assert world_state.pending_task_result_conversations() == (owner,)
     def unavailable(text, key):
-        # The run's own message, and the follow-up the assessment admitted.
+        # The retained run's message is sent before any assessment.
         assert text.startswith("The private consumer handoff is still outstanding.")
-        assert "Investigation saved." not in text and "Task admitted:" in text
+        assert "Investigation saved." not in text
         assert "Task done:" not in text
         receipt = world_state.result_receipt(key)
-        assert "Evidence SHA:" in receipt["result_text"] and "Landed SHA:" not in receipt["result_text"]
+        assert receipt["notification_source"] == str(reflection)
         raise OSError("transport temporarily unavailable")
     with pytest.raises(OSError, match="temporarily unavailable"):
         service.deliver_task_result(owner, send=unavailable)
-    assert (checkpoint.world.root / "decision.md").read_text() == "The private consumer handoff is still outstanding.\n"
+    assert not (checkpoint.world.root / "decision.md").exists()
     followups = [task for task in state.tasks.all() if task.task_id != reflection]
-    assert len(followups) == 1 and followups[0].repository == "app"
-    assert state.tasks.read(followups[0].task_id)[1].owner == str(owner)
+    assert not followups
     sent=[]
     service.deliver_task_result(owner, send=lambda text, key: sent.append((text, key)))
-    assert len(sent) == 1 and cognition.calls == 1
-    assert len(state.tasks.all()) == 2  # transport retry cannot repeat admission
+    assert len(sent) == 1 and cognition.calls == 0
+    assert len(state.tasks.all()) == 1  # transport retry cannot repeat admission
     assert not world_state.pending_task_result_conversations()
 
 
@@ -406,12 +404,11 @@ def test_quiet_rhythm_result_is_retained_evidence_and_sends_nothing(tmp_path):
         procedure="security-one", input="repositories/app/main")
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        "COMMIT: no material change since the previous reflection\n"
-        "DISPOSITION: idle\nQUESTION: NONE"))
+        TaskOutput('', subject='no material change since the previous reflection', disposition='idle')))
     procedures.advance_rhythms(now=100)
     quiet = state.tasks.queued()[0]
     runner.prepare(quiet)
-    assert "write no findings" in adapter.requests[-1].prompt
+    assert "recorded only" in adapter.requests[-1].prompt
     assert state.tasks.get(quiet).status is TaskStatus.DONE
     assert "no material change" in state.tasks.git(
         "show", "-s", "--format=%s", state.tasks.read(quiet)[1].work)
@@ -423,8 +420,7 @@ def test_quiet_rhythm_result_is_retained_evidence_and_sends_nothing(tmp_path):
     assert sent == [] and cognition.calls == 0
     # Findings that do not ask to notify are evidence too, not a message.
     adapter.execute = lambda request: replace(execute(request), output=(
-        "Nothing material has changed, so I'm reporting no findings.\n"
-        "COMMIT: reflection with no material change\nDISPOSITION: idle\nQUESTION: NONE"))
+        TaskOutput("Nothing material has changed, so I'm reporting no findings.", subject='reflection with no material change', disposition='idle')))
     for number, name in ((1, "handoff.txt"), (2, "handoff.txt")):
         (clone / name).write_text(f"changed {number}\n")
         _git("add", ".", cwd=clone)
@@ -438,15 +434,14 @@ def test_quiet_rhythm_result_is_retained_evidence_and_sends_nothing(tmp_path):
             assert sent == [] and cognition.calls == 0
             # The same owner still hears a finding it is asked to hear.
             adapter.execute = lambda request: replace(execute(request), output=(
-                "NOTIFY: A new consumer depends on the unpublished handoff.\n"
-                "COMMIT: reflection findings\nDISPOSITION: idle\nQUESTION: NONE"))
+                TaskOutput('A new consumer depends on the unpublished handoff.', subject='reflection findings', notify='A new consumer depends on the unpublished handoff.')))
     assert world_state.pending_task_result_conversations() == (owner,)
     service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
-    assert cognition.calls == 1 and len(sent) == 1
+    assert cognition.calls == 0 and len(sent) == 1
     assert sent[0].startswith("A new consumer depends on the unpublished handoff.")
 
 
-def test_rhythm_result_assessment_cannot_expand_repository_authority(tmp_path):
+def test_rhythm_notification_cannot_trigger_assessment_side_effects(tmp_path):
     from test_world_durability import runtime, EditingCognition
     from steward_harness.state import ConversationId
     bare, clone = _repository(tmp_path)
@@ -458,8 +453,7 @@ def test_rhythm_result_assessment_cannot_expand_repository_authority(tmp_path):
         procedure="security-one", input="repositories/app/main")
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        "NOTIFY: The public consumer still reads the old feed.\n"
-        "COMMIT: steward: inspect consumer\nDISPOSITION: idle\nQUESTION: NONE"))
+        TaskOutput('The public consumer still reads the old feed.', subject='steward: inspect consumer', notify='The public consumer still reads the old feed.')))
     procedures.advance_rhythms(now=100)
     runner.prepare(state.tasks.queued()[0])
     world_state, checkpoint, service, _ = runtime(
@@ -467,14 +461,12 @@ def test_rhythm_result_assessment_cannot_expand_repository_authority(tmp_path):
     service._state.tasks.transports = runner.transports
     sent=[]
     service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
-    assert (checkpoint.world.root / "decision.md").is_file()
+    assert not (checkpoint.world.root / "decision.md").exists()
     assert len(state.tasks.all()) == 1
-    # The refusal stays with the automatic turn; the owner gets the finding.
     assert sent == ["The public consumer still reads the old feed."]
     with world_state.connect() as connection:
-        rejection, reply = connection.execute(
-            "SELECT rejection, reply_text FROM turns WHERE operator_id='harness:task-result'").fetchone()
-    assert "not authorized" in rejection and "not authorized" not in reply
+        assert connection.execute(
+            "SELECT 1 FROM turns WHERE operator_id='harness:task-result'").fetchone() is None
 
 
 
@@ -489,7 +481,7 @@ def test_scheduled_review_scope_does_not_become_full_tree_release_evidence(tmp_p
         procedure="security-one", input="repositories/app/main")
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        "No changed obligations.\nVERDICT: PASS\nCOMMIT: progress checked\nDISPOSITION: idle\nQUESTION: NONE"))
+        TaskOutput('No changed obligations.\nVERDICT: PASS', subject='progress checked', disposition='idle')))
     procedures.advance_rhythms(now=100)
     scheduled = state.tasks.queued()[0]
     runner.prepare(scheduled)

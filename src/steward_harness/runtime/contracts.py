@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID
 
+from steward_harness.lease import Busy
 from steward_harness.provider_types import (
     ModelChoice,
     ProviderFamily,
@@ -37,8 +38,8 @@ class ProviderCapabilities:
     """
 
     images: bool = False
+    text_only: bool = False
     ongoing_input: bool = False
-    scoped_reads: bool = False
 
 
 SESSION_WORKSPACE_CAPABILITIES = ProviderCapabilities()
@@ -48,12 +49,46 @@ class RuntimeUnavailable(RuntimeError):
     """Raised when the specifically requested provider cannot run."""
 
 
+class NativeStorageDeferred(Busy):
+    """Storage refused admission before any provider started.
+
+    Nothing ran, so nothing happened: the caller withdraws the turn and the
+    source stays queued, as for any other contention.
+    """
+
+
 class RuntimeExecutionError(RuntimeError):
     """Raised when a persistent runtime turn cannot safely complete."""
 
     def __init__(self, message: str, *, session_id: str | None = None) -> None:
         self.session_id = session_id
         super().__init__(message)
+
+
+class TokenMeter:
+    """Output tokens a provider reported for one execution, against its budget.
+
+    Providers report running totals per stream (a message, a thread), so each
+    report replaces that stream's count rather than adding to it. Reasoning is
+    output: both providers count it there.
+    """
+
+    def __init__(self, budget: int | None) -> None:
+        self.budget = budget
+        self._counts: dict[object, int] = {}
+
+    def report(self, stream: object, output_tokens: object) -> None:
+        if type(output_tokens) is int and output_tokens >= 0:
+            self._counts[stream] = max(output_tokens, self._counts.get(stream, 0))
+
+    @property
+    def used(self) -> int:
+        return sum(self._counts.values())
+
+    def exhausted(self) -> str | None:
+        if self.budget is None or self.used < self.budget:
+            return None
+        return f"provider used {self.used} output tokens of its {self.budget} budget"
 
 
 class MissingProviderSession(RuntimeExecutionError):
@@ -137,7 +172,7 @@ class RuntimeInput:
     #: A controller notice that asks nothing of the session, such as an
     #: understanding offer's acceptance. The session may answer it, but that
     #: answer is not the execution's word: its final response stays the one
-    #: that ended the work, closure lines and all.
+    #: that ended the work. Disposition is a separate native operation.
     receipt: bool = False
 
     def __post_init__(self) -> None:
@@ -175,20 +210,6 @@ class RuntimeInputResult:
 
 
 @dataclass(frozen=True, slots=True)
-class ReadScope:
-    """Trusted public knowledge grant and private native conversation namespace."""
-
-    identity: str
-    roots: tuple[Path, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.identity.strip():
-            raise ValueError("read scope requires a conversation identity")
-        if any(not root.is_absolute() or root == Path(root.anchor) for root in self.roots):
-            raise ValueError("read scope roots must be bounded absolute paths")
-
-
-@dataclass(frozen=True, slots=True)
 class RuntimeRequest:
     execution_id: str
     resolved: ResolvedModel
@@ -199,33 +220,57 @@ class RuntimeRequest:
     timeout_seconds: int | None
     native_owner: str | None = None
     native_generation: int = 1
+    # The Git checkout whose index receives this run's native records, whatever
+    # the run may write itself. None means `cwd` when writable, else nowhere.
+    record_checkout: Path | None = None
+    # Output tokens, reasoning included, after which the run is stopped the
+    # way a deadline stops it. None means unmetered.
+    token_budget: int | None = None
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
     writable_roots: tuple[Path, ...] = ()
-    read_scope: ReadScope | None = None
+    task_call_socket: str | None = None
+    on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None
     on_session_started: Callable[[str], None] = lambda _session_id: None
     on_started: Callable[[Callable[[], None]], None] | None = None
     on_input_ready: Callable[[Callable[[RuntimeInput], None]], None] | None = None
     on_input_result: Callable[[RuntimeInputResult], None] = lambda _result: None
+    # Best-effort narration of in-turn tool activity, for consumers that show
+    # progress while a turn runs. Adapters normalize their native event shape
+    # into one short human-readable line. It carries no lifecycle authority:
+    # a turn's outcome is decided by its terminal result alone, and adapters
+    # must not let a raising consumer disturb stream validation.
+    on_progress: Callable[[str], None] = lambda _activity: None
     # Automatic observations can complete without an outward message. Native
     # terminal completion remains mandatory; this never permits a broken stream.
     allow_empty_output: bool = False
+    # Fresh text-only application call: no tools, owner, records or live input.
+    text_only: bool = False
 
     def __post_init__(self) -> None:
+        if self.text_only and (
+            self.provider_session_id is not None or self.native_owner is not None
+            or self.record_checkout is not None or self.task_call_socket is not None
+            or self.images or self.sandbox_mode != "read-only"
+            or self.on_input_ready is not None or self.allow_empty_output
+        ):
+            raise ValueError("text-only requests require fresh, tool-free, unrecorded state")
         if self.native_owner is not None and (not self.native_owner.strip() or len(self.native_owner) > 512):
             raise ValueError("Native owner must be nonblank and bounded")
         if type(self.native_generation) is not int or self.native_generation < 1:
             raise ValueError("Native generation must be a positive integer")
-        if not self.prompt.strip() or len(self.prompt) > 128_000:
+        if not self.prompt.strip() or len(self.prompt) > (2_097_152 if self.text_only else 128_000):
             raise ValueError("Prompt must be non-empty and bounded")
         if not self.cwd.is_absolute():
             raise ValueError("Working directory must be absolute")
+        if self.record_checkout is not None and not self.record_checkout.is_absolute():
+            raise ValueError("Record checkout must be absolute")
         if self.timeout_seconds is not None and self.timeout_seconds < 1:
             raise ValueError("Timeout must be at least 1 second")
+        if self.token_budget is not None and self.token_budget < 1:
+            raise ValueError("Token budget must be at least 1 token")
         if any(not image.is_absolute() for image in self.images):
             raise ValueError("Images must be absolute files")
-        if self.read_scope is not None and (self.sandbox_mode != "read-only" or self.images):
-            raise ValueError("scoped reads require read-only execution without image paths")
         if self.sandbox_mode == "read-only" and self.writable_roots:
             raise ValueError("read-only turns cannot declare writable roots")
         if any(not root.is_absolute() for root in self.writable_roots):

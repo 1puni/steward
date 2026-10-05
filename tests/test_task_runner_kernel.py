@@ -6,6 +6,7 @@ import subprocess
 import sys
 from steward_harness.deploy.config import SystemdReleaseConfig
 
+from task_tool_fixtures import TaskOutput
 from dataclasses import replace
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ from typing import Any, NoReturn
 import pytest
 
 from state_fixtures import admit_task
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import (
     CommandSpec,
     RepositoryConfig,
@@ -121,8 +122,7 @@ class EditingAdapter:
             _git("add", "result.txt", cwd=request.cwd)
             _git("commit", "-qm", "native: complete result", cwd=request.cwd)
         output = (
-            "Implemented the requested result.\n"
-            "COMMIT: feat: add task result\nDISPOSITION: idle\nQUESTION: NONE"
+            TaskOutput('Implemented the requested result.', subject='feat: add task result', disposition='idle')
         )
         return RuntimeResult(
             output=output,
@@ -183,8 +183,7 @@ class AskingOnceAdapter(EditingAdapter):
         first = not self.requests
         result = super().execute(request)
         return replace(result, output=(
-            "More context is needed.\nCOMMIT: feat: add task result\n"
-            "DISPOSITION: ask\nQUESTION: Which option should I use?"
+            TaskOutput('More context is needed.', subject='feat: add task result', disposition='ask', question='Which option should I use?')
         )) if first else result
 
 
@@ -221,8 +220,7 @@ class SwitchingContinueAdapter(EditingAdapter):
         if not self._before_start:
             self._switch()
         output = (
-            "First phase complete; continue in the retained worktree.\n"
-            "COMMIT: feat: complete first phase\nDISPOSITION: continue\nQUESTION: NONE"
+            TaskOutput('First phase complete; continue in the retained worktree.', subject='feat: complete first phase', disposition='continue')
         )
         return RuntimeResult(
             output=output,
@@ -245,8 +243,7 @@ class CodexCompletionAdapter(EditingAdapter):
         self.saw_retained_work = (request.cwd / "phase-one.txt").read_text() == "from claude\n"
         (request.cwd / "phase-two.txt").write_text("from codex\n")
         output = (
-            "Finished from the existing task state.\n"
-            "COMMIT: feat: complete second phase\nDISPOSITION: idle\nQUESTION: NONE"
+            TaskOutput('Finished from the existing task state.', subject='feat: complete second phase', disposition='idle')
         )
         return RuntimeResult(
             output=output,
@@ -264,8 +261,7 @@ class RecoveringSessionAdapter(EditingAdapter):
         request.on_session_started("replacement-session")
         (request.cwd / "recovered.txt").write_text("fresh session\n")
         output = (
-            "Recovered with the full task and worktree.\n"
-            "COMMIT: feat: recover task session\nDISPOSITION: idle\nQUESTION: NONE"
+            TaskOutput('Recovered with the full task and worktree.', subject='feat: recover task session', disposition='idle')
         )
         return RuntimeResult(
             output=output,
@@ -792,7 +788,7 @@ def test_running_task_receives_notes_and_only_consumes_acknowledged_input(
             runner.flush_inputs()
             # This arrives too late to be offered; closing must retain it.
             state.tasks.note(task.task_id, "arrived at completion")
-            return super().execute(request)
+            return replace(super().execute(request), output="Native work completed.")
 
     runner = TaskRunner(
         state=state,

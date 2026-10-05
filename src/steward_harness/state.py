@@ -8,6 +8,8 @@ import hashlib
 import os
 import re
 import sqlite3
+import sys
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -169,6 +171,11 @@ class TaskId:
     def __str__(self) -> str:
         return self.value
 
+    @property
+    def short(self) -> str:
+        """A stable display reference, derived from the full Git address."""
+        return "#" + hashlib.sha256(self.value.encode()).hexdigest()[:8]
+
 
 
 
@@ -295,6 +302,12 @@ class Turn:
     started_at: str = ""
     completed_at: str | None = None
 
+    @property
+    def rhythm_continuation(self) -> bool:
+        """A controller-reserved source, runnable only before checkout custody."""
+        return (self.conversation_id.kind == "rhythm"
+                and ":continue:turn_" in self.source_event_key)
+
 
 
 class CheckpointDisposition(StrEnum):
@@ -309,12 +322,12 @@ class TaskAction:
     """One bounded steering request against an already-owned task."""
 
     task_id: TaskId
-    kind: Literal["answer", "retry", "note"]
+    kind: Literal["answer", "retry", "note", "cancel"]
     text: str
 
     def __post_init__(self) -> None:
-        if self.kind not in {"answer", "retry", "note"}:
-            raise ValueError("task action must be answer, retry, or note")
+        if self.kind not in {"answer", "retry", "note", "cancel"}:
+            raise ValueError("task action must be answer, retry, note, or cancel")
         if not self.text.strip() or len(self.text) > 8000:
             raise ValueError("task action text must contain 1 through 8000 characters")
 
@@ -472,11 +485,19 @@ class StateDatabase:
         from steward_harness.task_store import GitTaskStore
         self.tasks = GitTaskStore(self.path.with_name(self.path.name + ".tasks.git"))
 
+    #: How long a writer waits for another's transaction. Some transactions
+    #: hold the lock across task Git (a 5 s lease, then fsynced commits); a
+    #: 5 s wait turned those into controller crashes twice on October 3, 2026.
+    WRITE_WAIT_SECONDS: ClassVar[float] = 60.0
+    #: A write transaction held longer than this is logged with its caller.
+    SLOW_WRITE_SECONDS: ClassVar[float] = 2.0
+
     def _raw_connection(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.path), timeout=10.0, isolation_level=None)
+        connection = sqlite3.connect(str(self.path), timeout=self.WRITE_WAIT_SECONDS,
+                                     isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA synchronous=FULL")
-        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute(f"PRAGMA busy_timeout={int(self.WRITE_WAIT_SECONDS * 1000)}")
         return connection
 
     def _initialize(self) -> None:
@@ -527,10 +548,12 @@ class StateDatabase:
     @contextmanager
     def connect(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         connection = self._raw_connection()
+        held = None
         try:
             connection.execute("PRAGMA foreign_keys=ON")
             if write:
                 connection.execute("BEGIN IMMEDIATE")
+                held = time.monotonic()
             else:
                 connection.execute("PRAGMA query_only=ON")
                 connection.execute("BEGIN")
@@ -543,6 +566,11 @@ class StateDatabase:
             raise
         finally:
             connection.close()
+            if held is not None and time.monotonic() - held > self.SLOW_WRITE_SECONDS:
+                # Every other writer waited this long; name who held them up.
+                # Frames: this generator, contextlib's __exit__, the caller.
+                log.warning("state write held %.1fs by %s", time.monotonic() - held,
+                            sys._getframe(2).f_code.co_name)
 
     #: Prepared: accepting it needs nothing run again. A world turn also needs
     #: its captured candidate; a worldless one only its retained output.
@@ -723,8 +751,6 @@ class StateDatabase:
                 return None, "Task action rejected: repository work is not authorized."
             except LookupError:
                 task = None
-            if operator_id == "harness:desk-watch" and action.kind != "note":
-                return None, "Task action rejected: a desk observation cannot answer or retry held work."
             if task is None or task.owner not in {None, str(owner)}:
                 # A conversation is told the same thing whether the task is
                 # absent or someone else's, so the reply cannot be used to
@@ -734,6 +760,7 @@ class StateDatabase:
                 return None, (f"Task action rejected: only an operator turn may steer "
                               f"{task.origin_kind.value} work.")
             allowed = {
+                "cancel": set(TaskStatus) - {TaskStatus.DONE},
                 "answer": {TaskStatus.WAITING},
                 "retry": {TaskStatus.BLOCKED, TaskStatus.CANCELLED},
                 "note": {TaskStatus.PROPOSED, TaskStatus.QUEUED, TaskStatus.RUNNING,
@@ -742,6 +769,9 @@ class StateDatabase:
             if task.status not in allowed[action.kind]:
                 return None, (f"Task action rejected: {action.task_id} is {task.status.value}; "
                               f"cannot {action.kind}.")
+            if action.kind == "cancel":
+                self.tasks.cancel(action.task_id, action.text, source=source)
+                return f"Task cancelled: {action.task_id}.", None
             if action.kind == "answer":
                 self.tasks.answer(action.task_id, action.text, source=source)
                 return f"Task answered: {action.task_id}; queued on its retained branch.", None
@@ -963,6 +993,25 @@ class StateDatabase:
             row = connection.execute(
                 "SELECT * FROM turns WHERE conversation_id=? AND source_event_key=?",
                 (str(owner), source),
+            ).fetchone()
+        return self._turn(row) if row is not None else None
+
+    def rhythm_turns(self, owner: ConversationId) -> list[Turn]:
+        """Retained attempts in source-admission order, including interrupted work."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT turn_id, conversation_id, source_event_key, input_text, execution_turn_id, "
+                "input_disposition, state, status_reason, started_at, completed_at FROM turns "
+                "WHERE conversation_id=? AND execution_turn_id IS NULL ORDER BY rowid", (str(owner),),
+            ).fetchall()
+        return [self._turn(row) for row in rows]
+
+    def latest_rhythm_turn(self, owner: ConversationId) -> Turn | None:
+        """Latest execution evidence, excluding native input children."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM turns WHERE conversation_id=? AND execution_turn_id IS NULL "
+                "ORDER BY started_at DESC, rowid DESC LIMIT 1", (str(owner),),
             ).fetchone()
         return self._turn(row) if row is not None else None
 
@@ -1200,21 +1249,29 @@ class StateDatabase:
     def interrupt_abandoned_turns(
         self, reason: str = "daemon restarted before the turn completed"
     ) -> int:
-        """Interrupt crash-left turns and discard sessions without accepted turns."""
+        """Interrupt crash-left turns, preserving unclaimed rhythm reservations.
+
+        A reserved source has not received provider tools until it claims the
+        checkout. Its explicit authorization survives restart in that row.
+        """
         if not reason.strip():
             raise ValueError("abandoned turns require a reason")
         with self.connect(write=True) as connection:
             now = _now()
             abandoned = connection.execute(
                 "SELECT DISTINCT conversation_id FROM turns WHERE state = 'running' "
-                "AND execution_turn_id IS NULL AND episode_input IS NULL"
+                "AND execution_turn_id IS NULL AND episode_input IS NULL "
+                "AND NOT (conversation_id GLOB 'rhythm:*' "
+                "AND source_event_key GLOB 'rhythm:*:*:continue:turn_*')"
             ).fetchall()
             for owner in abandoned:
                 self._discard_unproven_lineage_in(connection, owner["conversation_id"])
             changed = connection.execute(
                 "UPDATE turns SET state = 'interrupted', status_reason = ?, "
                 "completed_at = ? WHERE state = 'running' "
-                "AND execution_turn_id IS NULL AND episode_input IS NULL",
+                "AND execution_turn_id IS NULL AND episode_input IS NULL "
+                "AND NOT (conversation_id GLOB 'rhythm:*' "
+                "AND source_event_key GLOB 'rhythm:*:*:continue:turn_*')",
                 (reason, now),
             )
             return changed.rowcount
@@ -1267,20 +1324,14 @@ class StateDatabase:
 
     def _undelivered_task_results(self):
         """Each owned task that stopped at an outcome its owner has not been given."""
-        from steward_harness.task_query import is_task_query
         for task in self.tasks.all():
             status = task.status
             if (not task.owner or task.dispatchable or task.quiet or status not in {
-                    TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}
-                    or (status is TaskStatus.WAITING and is_task_query(status.value, task.reason))):
+                    TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}):
                 continue
             key = f"task_result:{task.task_id}:{task.outcome}:{status.value}"
             if self.result_receipt(key).get("done"):
                 continue
-            with self.connect() as connection:
-                if connection.execute("SELECT 1 FROM turns WHERE conversation_id=? AND source_event_key=?",
-                                      (task.owner, key)).fetchone():
-                    continue
             yield task, key
 
     def pending_task_result_conversations(self):
@@ -1303,7 +1354,6 @@ class StateDatabase:
         route for everything else. The day is the idempotency key, so a
         restart or a second pass sends nothing new. Returns digests recorded.
         """
-        from steward_harness.task_query import is_task_query
         now = datetime.now(UTC).timestamp() if now is None else now
         day = int(now // self.OPEN_TASK_REMINDER_SECONDS)
         verbs = {
@@ -1314,8 +1364,7 @@ class StateDatabase:
         routes: dict[str | None, list[str]] = {}
         for task in self.tasks.all():
             status = task.status
-            if status not in verbs or (status is TaskStatus.WAITING
-                                       and is_task_query(status.value, task.reason)):
+            if status not in verbs:
                 continue
             age = now - datetime.fromisoformat(task.updated_at).timestamp()
             if age < self.OPEN_TASK_REMINDER_SECONDS:
@@ -1364,6 +1413,11 @@ class StateDatabase:
                                  receipt.get("sequence", 0), receipt["source_key"]),
         )
 
+    def pending_result_assessments(self) -> list[dict]:
+        return [receipt for path in self.result_receipt_path("").parent.glob("*.json")
+                if (receipt := json.loads(path.read_text())).get("done")
+                and receipt.get("assess") and not receipt.get("assessment_done")]
+
     def pending_task_result_for(self, conversation_id):
         for receipt in self.pending_result_receipts():
             if receipt["owner"] == str(conversation_id):
@@ -1373,18 +1427,24 @@ class StateDatabase:
                 return task.task_id, self._task_result_text(task), key
         return None
 
+    def notification_sources(self) -> set[str]:
+        return {receipt["notification_source"] for receipt in (
+            json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
+            if receipt.get("notification_source")}
+
     def recorded_not_sent(self, since: float) -> list[str]:
         """What automatic runs recorded since `since` without notifying anyone.
 
         Silence is the default for rhythms, so it has to be countable: a world
-        rhythm's reply that asked for no delivery, and a rhythm run whose
-        findings asked for none. A run that wrote nothing at all is not here.
+        rhythm's recorded reply and a procedure run's findings, excluding
+        sources with an accepted notification call. A run that wrote nothing at all is not here.
         """
+        notified = self.notification_sources()
         world = [receipt["source_key"] for receipt in (
             json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
             if receipt.get("recorded_only") and receipt.get("recorded_at", 0) >= since]
         tasks = [task.procedure.event for task in self.tasks.all()
-                 if task.quiet and task.findings
+                 if task.quiet and task.findings and str(task.task_id) not in notified
                  and datetime.fromisoformat(task.updated_at).timestamp() >= since]
         return sorted(world) + sorted(tasks)
 

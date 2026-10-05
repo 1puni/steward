@@ -74,6 +74,8 @@ provider:
 telegram:
   token_path: "/etc/steward/telegram-token"
   chat_id: -1001234567890
+  # Register the HTTPS /tasks/ URL in BotFather, then enable chat launch links:
+  # task_app_url: "https://t.me/your_bot/tasks"
   allowed_users:
     - 12345678
     - 87654321
@@ -123,6 +125,10 @@ telegram:
 # documentation map repository-owned until it needs a world.
 world:
   root: "/var/lib/steward/world"
+  # Optional. Other clones (a laptop, a phone host) push here, and every
+  # accepted turn is published here; the controller holds the credentials.
+  # remote_url: "git@github.com:owner/world.git"
+  # branch: main
   # Canonical durable knowledge belongs in docs/ at its lowest owning Git world.
 
 # Install instruction files and drivers as controller-owned files.

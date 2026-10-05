@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from state_fixtures import admit_task
-from steward_harness.cognition import Cognition
+from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import RepositoryConfig, StewardConfig, UntrustedExecutionConfig
 from steward_harness.conversations import ConversationService
 from steward_harness.daemon import KernelCommands
@@ -230,7 +230,7 @@ def test_running_parent_offers_understanding_while_child_works(tmp_path):
             # The operator inspects the accepted account while work runs.
             assert "src/feed.py" in StateDatabase(state.path).tasks.get(task_id).brief
             shown = operator_show(tmp_path, runner, task_id)
-            assert f"{task_id} — running" in shown and "The consumer is src/feed.py." in shown
+            assert task_id.short in shown and "Running" in shown and "The consumer is src/feed.py." in shown
             detail = TaskBoard(state).detail(task_id)
             assert detail["status"] == "running" and "src/feed.py" in detail["brief"]
             assert child.poll() is None

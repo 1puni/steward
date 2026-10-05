@@ -239,19 +239,23 @@ including what happens when a process dies at each boundary.
 
 ## One budget, no scheduler
 
-`controller.workers` (default **8**, range 1–32) is the entire scheduling policy.
-Task slices, publication, deployment, rhythms, desk messages, probes and result
+`controller.workers` (default **8**, range 1–32) bounds background cognition and work.
+Task slices, publication, deployment, rhythms, probes and result
 assessment all compete for the same slots, first asked, first served. No
 per-lane reservation, no fairness ordering, because both of those are a
 scheduler, and a scheduler wants a starvation story and a tuning knob that
 nothing here has needed yet.
 
-A live conversation never waits in that queue. The operator talking to their
-steward is answered on the thread that received the message, so the budget can be
-full and they still get a reply.
+Retained results have one separate transport worker. They reach their owner without
+waiting for assessment or a free cognition slot; assessment may follow and add
+judgment. See the [delivery latency contract](docs/kernel-contract.md#task-results).
 
-`/pause` is a filter, not a barrier. It stops new task slices, probes, rhythms and
-desk intake; repositories that owe a publication keep publishing. Do not use it
+A live conversation never waits in that queue. Telegram and desk messages share one
+inbox and one drain of their own, so the budget can be full and the operator still
+gets a reply.
+
+`/pause` is a filter, not a barrier. It stops new task slices, probes and
+rhythms; repositories that owe a publication keep publishing. Do not use it
 as a quiescence point before an upgrade.
 
 A days-long task holds its slot for days. Eight of them hold all eight. That is
@@ -274,7 +278,7 @@ protecting them.
 | `pipelines`, `incident_policy` | Probes, failure confirmation and repair allowance |
 | `world` | The Git world for durable knowledge; optional named reconciliation procedure |
 | `procedures` | Accepted instructions, access, and a preferred provider, model and effort that falls back through the provider order unless `fallback: false` |
-| `rhythms` | Non-overlapping interval (with optional `offset`) or quiet triggers for procedures, admitted only on new input; `input: world` runs one world turn per interval, optionally only on change under `paths`, or `after` another world rhythm |
+| `rhythms` | Non-overlapping interval (with optional `offset`) or quiet triggers for procedures, admitted only on new input; `input: world` keeps one obligation per captured interval, optionally only on change under `paths`, or `after` another world rhythm |
 | `targets` | Desired refs, installed drivers and required evidence |
 | `telegram`, `desk` | Optional conversation and result transports |
 
@@ -288,7 +292,7 @@ Start from [the minimal config](config/steward.minimal.yaml); the
 | --- | --- |
 | `steward task add --config C --repository R --title T --owner telegram:N --brief-file F [--priority P]` | File a task from the host CLI ([details](docs/git-native-tasks.md#operator-cli-admission)) |
 | `/status`, `/tasks` | Daemon and backlog state |
-| `/pause`, `/resume` | Stop or resume new slices, probes, rhythms and desk intake |
+| `/pause`, `/resume` | Stop or resume new slices, probes and rhythms |
 | `/model [fast\|balanced\|deep]` | Inspect or change this conversation's profile |
 | `/model_family [provider]` | Inspect or switch this conversation's provider |
 | `/clear` | Start a fresh conversation generation |
@@ -308,7 +312,10 @@ Start from [the minimal config](config/steward.minimal.yaml); the
 
 With `controller.health_bind` and `telegram` configured, the same loopback
 listener serves the [task board](docs/task-mini-app.md): read-only, signed by
-Telegram `initData`, and in need of your own TLS proxy to reach a phone.
+Telegram `initData`, and in need of your own TLS proxy to reach a phone. Register
+it in BotFather and set `telegram.task_app_url` to enable task links in chat.
+Task cards show titles and short references such as `#a1b2c3d4`; `/task` commands
+accept those references alongside full IDs.
 Organisation-specific commands go in `telegram.adapter_commands` as a declared argv;
 they run without a shell, through the same broker as everything else a model can
 reach.
@@ -334,11 +341,11 @@ What that does **not** mean:
   nothing about the UID boundary. Only
   [`scripts/linux-boundary-acceptance.sh`](docs/execution-boundary.md#enforcement-and-verification)
   does.
-- **Native session persistence is unfinished.** Native processes restart between
-  turns. Writable turns keep their original transcripts in Git and resume the same
-  session, but launch homes are disposable and the provider's own runtime databases
-  are not carried over. Native queues, goals and background jobs do not survive a
-  turn yet. See the
+- **Native processes restart between turns.** Retained owners keep private native
+  homes, including provider runtime databases, across invocations. Writable turns
+  keep their original transcripts in Git and resume the same session. No provider
+  process runs queues, goals or background jobs between invocations; retained state
+  alone does not establish that a native job will resume. See the
   [storage boundary](docs/native-provider-runtime.md#native-workflows-and-storage-boundary).
 - **Not a hosted service.** You provision the host, the execution account, the
   provider logins and the Telegram bot. The guide walks it; none of it is one

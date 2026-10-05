@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from steward_harness.runtime.task_call_mcp import codex_arguments
+
 import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from dataclasses import replace
+from steward_harness.runtime.text_only import verify_text_request
 from threading import RLock
 
 from steward_harness.runtime.contracts import (
@@ -20,13 +24,12 @@ from steward_harness.runtime.contracts import (
     RuntimeRequest,
     RuntimeResult,
     RuntimeUnavailable,
+    TokenMeter,
     validated_uuid,
 )
 from steward_harness.runtime.process import ProcessController, ProcessInput
+from steward_harness.runtime.native_evidence import record_mappings
 from steward_harness.runtime.native_workspace import native_workspace
-from steward_harness.runtime.providers.codex_read_scope import (
-    PROFILE, prepare_scope, scope_config, verify_scope_config,
-)
 
 
 def _declines_turn(message: str) -> bool:
@@ -64,28 +67,58 @@ def _declines_turn(message: str) -> bool:
     )
 
 
+_RELOCATE_THREAD = r'''
+import glob, sqlite3, sys
+home, thread, path = sys.argv[1:]
+for database in glob.glob(home + "/state_*.sqlite"):
+    with sqlite3.connect(database, timeout=30) as connection:
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='threads'").fetchone():
+            connection.execute("UPDATE threads SET rollout_path=? WHERE id=? AND rollout_path!=?",
+                               (path, thread, path))
+'''
+
+
 class CodexAppServerRuntime:
     """Map native lifecycle and steering; the provider owns tools and children."""
 
     family: ProviderFamily = "codex"
-    capabilities = ProviderCapabilities(images=True, ongoing_input=True, scoped_reads=True)
+    capabilities = ProviderCapabilities(images=True, ongoing_input=True, text_only=True)
 
     def __init__(
         self, executable: Path = Path("/usr/bin/codex"), *,
-        controller: ProcessController, native_home: Path,
+        controller: ProcessController, native_home: Path, credential_home: Path | None = None,
     ):
         self.executable = executable
         self._controller = controller
         if not native_home.is_absolute():
             raise ValueError("Codex native home must be absolute")
         self.native_home = native_home
+        self.credential_home = credential_home or native_home
 
     def available(self) -> Availability:
         if not self._controller.broker.can_execute(self.executable):
             return Availability(False, f"Codex CLI is not executable at {self.executable}")
         return Availability(True)
 
+    def _relocate_thread(self, home, thread_id: str, rollout: str) -> None:
+        """Point Codex's record of a thread at the rollout this home now holds.
+
+        A home whose sessions once linked into a world checkout recorded the
+        linked path; that copy is gone, and Codex refuses a resume whose path
+        disagrees with its record. The home's file is the same rollout.
+        """
+        result = self._controller.broker.run(
+            [self._controller.broker.python_executable, "-I", "-c", _RELOCATE_THREAD,
+             str(home), thread_id, rollout], cwd="/", timeout=60)
+        if result.returncode:
+            raise RuntimeExecutionError(
+                "Codex thread record could not be relocated: " + result.stderr.strip()[-300:],
+                session_id=thread_id,
+            )
+
     def execute(self, request: RuntimeRequest) -> RuntimeResult:
+        if request.text_only:
+            request = verify_text_request(self._controller.broker, self.executable, self.family, request)
         if (
             request.provider_session_id is not None
             and validated_uuid(request.provider_session_id) is None
@@ -95,35 +128,37 @@ class CodexAppServerRuntime:
             raise RuntimeExecutionError(
                 "Provision the steward's Codex native home before execution"
             )
-        home = self.native_home
-        if request.read_scope is not None:
-            request, home = prepare_scope(self._controller.broker, request, home)
         with native_workspace(
-            self._controller.broker, request, home,
-            mappings={
-                "sessions": "artefacts/codex/sessions",
-                "archived_sessions": "artefacts/codex/archived_sessions",
-                "memories": "memories/codex",
-            },
+            self._controller.broker, request, self.native_home,
+            mappings=record_mappings("codex"),
+            credential_home=self.credential_home,
             resume_pattern="artefacts/codex/sessions/**/rollout-*{session}.jsonl",
         ) as workspace:
             request = workspace.remaining_request(request)
+            if request.provider_session_id and workspace.resume and workspace.home != self.native_home:
+                self._relocate_thread(workspace.home, request.provider_session_id, workspace.resume)
+            if request.text_only:
+                request = replace(request, cwd=workspace.home / "work")
             turn = _AppServerTurn(request, resume_path=workspace.resume,
                 unrestricted=self._controller.broker.enabled
                 and request.sandbox_mode == "workspace-write")
-            environment = self.environment()
+            environment = self.environment({} if request.text_only else None)
             environment["CODEX_HOME"] = str(workspace.home)
             try:
                 output = self._controller.run(
                     [str(self.executable), "app-server", "--stdio", "-c",
-                     "sqlite_home=" + json.dumps(str(workspace.home))],
+                     "sqlite_home=" + json.dumps(str(workspace.home)),
+                     *(["--strict-config"] if request.text_only else codex_arguments(request.task_call_socket))],
                     cwd=request.cwd,
+                    storage_paths=(workspace.home, request.cwd),
                     env=environment,
                     timeout_seconds=request.timeout_seconds,
                     on_stdout_line=turn.consume,
                     on_input_ready=turn.connect,
                     on_started=request.on_started,
+                    on_process_started=request.on_process_started,
                     on_stop=turn.stop,
+                    over_budget=turn.meter.exhausted if request.token_budget else None,
                 )
                 if output.returncode != 0:
                     raise turn.failure or RuntimeExecutionError(
@@ -170,6 +205,9 @@ class _AppServerTurn:
         self.stopping = False
         self.failure: RuntimeExecutionError | RuntimeUnavailable | None = None
         self.closed = False
+        self.meter = TokenMeter(request.token_budget)
+        # A resumed thread's totals include earlier turns; count from here.
+        self.usage_base: dict[str, int] = {}
         self.lock = RLock()
 
     def connect(self, writer: ProcessInput) -> None:
@@ -245,6 +283,8 @@ class _AppServerTurn:
                     self.response(event)
                 return
             if "id" in event and "method" in event:
+                if self.request.text_only:
+                    raise RuntimeExecutionError("Server tool request in text-only inference")
                 # Approval grants stay outside cognition. Never approve a
                 # provider request just to keep its transport moving.
                 self.writer.write(
@@ -264,10 +304,16 @@ class _AppServerTurn:
                 self.response(event)
                 return
             params = event.get("params", {})
-            if params.get("threadId") != self.thread_id:
+            if event.get("method") == "thread/tokenUsage/updated":
+                self._meter(params)
                 return
             method = event.get("method")
             item = params.get("item", {})
+            if (self.request.text_only and method in {"item/started", "item/completed"}
+                    and item.get("type") not in {"userMessage", "agentMessage", "reasoning"}):
+                raise RuntimeExecutionError("Tool activity in text-only inference")
+            if params.get("threadId") != self.thread_id:
+                return
             if item.get("type") == "subAgentActivity":
                 child = item["agentThreadId"]
                 if item["kind"] == "started":
@@ -314,7 +360,50 @@ class _AppServerTurn:
                     raise RuntimeExecutionError(
                         "Codex emitted invalid agent message text", session_id=self.thread_id,
                     )
+                if self.request.text_only and len(item["text"]) > 64_000:
+                    raise RuntimeExecutionError("Text-only output exceeded limit")
                 self.output = item["text"].strip()[-64_000:]
+            elif method == "item/completed" and item.get("type") not in (
+                None, "agentMessage", "subAgentActivity",
+            ):
+                self._report_activity(item)
+
+    def _report_activity(self, item: Mapping[str, object]) -> None:
+        """Narrate one completed native item; advisory only, never fatal.
+
+        Only completions are reported. This transport's start events carry no
+        shape this adapter verifies, and a progress line is not worth guessing
+        at one. A consumer that raises is ignored rather than failing the turn.
+        """
+        kind = item.get("type")
+        if not isinstance(kind, str) or not kind:
+            return
+        detail = ""
+        for key in ("command", "path", "query", "url", "name"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                detail = value.strip()
+                break
+        try:
+            self.request.on_progress(f"{kind} {detail}".strip()[:120])
+        except Exception:
+            return
+
+    def _meter(self, params: dict) -> None:
+        """Count this execution's output across its thread and native children."""
+        thread = params.get("threadId")
+        # Unbudgeted runs never depend on the usage protocol's shape.
+        if self.meter.budget is None or thread is None or (thread != self.thread_id and thread not in self.child_threads):
+            return
+        usage = params.get("tokenUsage")
+        total = usage.get("total") if isinstance(usage, dict) else None
+        last = usage.get("last") if isinstance(usage, dict) else None
+        if not isinstance(total, dict) or type(total.get("outputTokens")) is not int:
+            raise RuntimeExecutionError("Codex reported malformed token usage", session_id=self.thread_id)
+        if thread not in self.usage_base:
+            before = last.get("outputTokens") if isinstance(last, dict) else 0
+            self.usage_base[thread] = total["outputTokens"] - (before if type(before) is int else 0)
+        self.meter.report(thread, total["outputTokens"] - self.usage_base[thread])
 
     def response(self, event: dict) -> None:
         pending = self.pending.get(event["id"])
@@ -357,13 +446,6 @@ class _AppServerTurn:
             self.writer.write(
                 json.dumps({"method": "initialized", "params": {}}) + "\n"
             )
-            if self.request.read_scope is not None:
-                self.send("config/read", {"includeLayers": False, "cwd": str(self.request.cwd)})
-                return
-        if method == "config/read":
-            verify_scope_config(result.get("config", {}),
-                                scope_config(self.request.read_scope.roots, self.request.cwd))
-        if method in {"initialize", "config/read"}:
             params = {
                 "cwd": str(self.request.cwd),
                 "model": self.request.resolved.model,
@@ -374,15 +456,14 @@ class _AppServerTurn:
                 "approvalsReviewer": "auto_review",
                 "sandbox": "danger-full-access" if self.unrestricted else self.request.sandbox_mode,
             }
-            if self.request.read_scope is not None:
-                params.pop("sandbox")
-                params.update(permissions=PROFILE, approvalPolicy="never", approvalsReviewer="user")
             # No effort resolved means Codex keeps whatever its own
             # configuration says, so the override is not sent at all.
             if self.request.resolved.reasoning_effort is not None:
                 params["config"] = {
                     "model_reasoning_effort": self.request.resolved.reasoning_effort
                 }
+            if self.request.text_only:
+                params.update(ephemeral=True, approvalPolicy="never", approvalsReviewer="user")
             if self.request.provider_session_id is not None:
                 params["threadId"] = self.request.provider_session_id
                 if self.resume_path and self.resume_path != self.request.provider_session_id:
@@ -392,11 +473,6 @@ class _AppServerTurn:
                 params,
             )
         elif method in {"thread/start", "thread/resume"}:
-            if self.request.read_scope is not None:
-                if ((result.get("activePermissionProfile") or {}).get("id") != PROFILE
-                        or result.get("approvalPolicy") != "never"
-                        or result.get("approvalsReviewer") != "user"):
-                    raise RuntimeExecutionError("Codex did not confirm the public read boundary")
             thread_id = result["thread"]["id"]
             if validated_uuid(thread_id) is None or (
                 self.request.provider_session_id is not None
@@ -424,8 +500,7 @@ class _AppServerTurn:
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    **({"permissions": PROFILE} if self.request.read_scope is not None
-                       else {"sandboxPolicy": sandbox}),
+                    "sandboxPolicy": sandbox,
                     "input": [
                         {"type": "text", "text": self.request.prompt},
                         *[

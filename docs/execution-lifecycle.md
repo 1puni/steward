@@ -66,30 +66,67 @@ preserves exclusion across retries and publication.
 
 ## Execution closure and continuation
 
-A task's live slice owns a retained checkout under its task lock. Native commits remain
-intact. The working session ends its final response with:
+A task's live slice owns a retained checkout under its task lock. Native commits
+remain intact. Before each slice, the controller refreshes the repository's
+`refs/steward/remote/<default-branch>` observation, including for a retained
+checkout. Its HEAD and local work stay in place. Cognition can compare that work
+with the fresh source and accepted steering; a refresh does not rebase the task
+or change a procedure's pinned candidate.
 
-```text
-COMMIT: <commit subject>
-DISPOSITION: continue | ask | idle
-QUESTION: <blocking question, or NONE>
+Successful native turn completion supplies the default `idle` disposition. No
+close call, nonempty final reply, keyword or working-tree diff is required.
+The built-in adapters validate the owning session/turn's successful terminal
+event and complete writer teardown before returning. Exit zero, silence, loss of
+a process, interruption, timeout and failed cleanup are not completion evidence.
+An unfinished reported native child also prevents successful Codex completion.
+
+The controller revokes the execution's native capability, joins the account
+watcher, stages the settled tree, and commits findings and disposition. The
+checkpoint names the execution and its latest accepted account baseline. An
+understanding acceptance is bookkeeping, not a reason to repeat completed work.
+Only prompt inputs and acknowledged live inputs are consumed. Unresolved, rejected
+or late input stays pending and keeps idle work queued; cancellation and pending
+input are rechecked at publication. A receipt-only response cannot replace the
+working findings. Before a settled checkpoint, restart resumes retained work;
+after that checkpoint, recovery can accept it without rerunning cognition.
+
+### Explicit waiting and ongoing work
+
+Native terminal success does not identify a blocking question or deliberate
+next-slice continuation. The adapters do not yet map Codex
+`item/tool/requestUserInput` or Claude `AskUserQuestion` into durable task waits,
+and do not query provider-owned goals between invocations. Until those surfaces
+are connected, use the existing task tool only when that extra state is needed:
+
+```json
+{"operation":"close","key":"question","subject":"steward: wait for source selection","disposition":"ask","question":"Which source is authoritative?"}
 ```
 
-For `ask`, supply the actual question. For `continue` or `idle`, use `NONE`. These are
-alternatives in the syntax example, not a literal combined value. The controller
-validates them and commits the closure with the findings as its message. `continue`,
-`ask` and `idle` apply to investigations as well as code changes. Findings remain useful
-output when product files do not change.
+`continue` requests another execution; only `ask` takes a question. The optional
+`idle` spelling remains compatible with retained sessions. A subject is one
+nonempty line of at most 120 characters, a question at most 1,000 characters,
+and keys use 1–128 ASCII letters, digits, `_`, `.`, `:` or `-`.
+An identical replay returns the pending receipt. Invalid or conflicting explicit
+requests retain blocked work: a malformed wait cannot become implicit success.
+A replacement writer cannot inherit a previous writer's request. A valid request
+still requires successful native completion and teardown; it grants no publication
+mid-write. Its receipt's revision records when it was requested, not an exact-base
+condition on later understanding acceptance.
 
-Malformed closure retains work and blocks the task; it cannot grant publication. Even a
-findings-only slice commits (an empty commit). An idle closure leaves the branch
-carrying its publication obligation; it can therefore run gates and trigger a release
-without changing product files. It does not enqueue a promotion record. A continued
-slice resumes through ordinary task execution; waiting work requires an answer. Notes
-received before publication remain pending and require another slice. The publisher
-rechecks this at its final decision boundary.
+A question or statement of ongoing work in final prose alone cannot establish
+those states. This is a specific missing native mapping, not a text-classification
+problem. Final narration is retained as findings only. Idle is source completion;
+it leaves the ordinary integration, gate and publication obligation. Operator
+outcome and exact-revision target health remain separate observations.
 
-Ordinary task cognition has no routine invocation deadline; it ends at closure,
+Candidate review procedures still return one `VERDICT: PASS` or `VERDICT: FAIL`
+line as structured gate evidence. This is a separate candidate-bound review
+contract, with missing or duplicate verdicts failing the gate; it cannot select a
+task disposition or send a message. Replacing the review evidence schema is a
+separate gate-interface change. Ordinary procedures and rhythms have no verdict
+requirement.
+
+Ordinary task cognition has no routine invocation deadline; it ends at native completion,
 cancellation, controller shutdown or containment. Procedure runs keep the provider
 deadline. A procedure deadline with the durably bound native session, or a controller
 shutdown, autosaves partial work where possible and permits continuation on a later
@@ -149,10 +186,13 @@ warning in the controller log. A retry can rematerialize accepted work.
 
 ## Recurring work and world recovery
 
-Rhythms create ordinary procedure tasks over captured inputs. They have no
-separate world-turn execution or default policy seeding. One run per interval and
-no overlap with incomplete runs are derived from accepted task records. See the
-[convergence journeys](../tests/test_rewrite_convergence.py).
+Repository rhythms create ordinary procedure tasks over captured inputs. One run
+per interval and no overlap with incomplete runs are derived from accepted task
+records. Rhythms configured with `input: world` instead run through conversation
+world-turn acceptance, keyed by rhythm and interval; an interrupted world turn
+holds that interval for explicit continuation. See [rhythms](rhythms.md), the
+[convergence journeys](../tests/test_rewrite_convergence.py) and
+[world-rhythm tests](../tests/test_world_rhythms.py).
 
 ## Running release identity
 

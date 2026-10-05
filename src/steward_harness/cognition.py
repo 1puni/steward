@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
+import math
+import time
 
 from steward_harness.provider_types import (
     ModelChoice,
@@ -15,9 +17,9 @@ from steward_harness.provider_types import (
 from steward_harness.runtime.contracts import (
     CognitionAdapter,
     MissingProviderSession,
+    NativeStorageDeferred,
     RuntimeExecutionError,
     RuntimeRequest,
-    ReadScope,
     RuntimeResult,
     RuntimeInput,
     RuntimeInputResult,
@@ -42,9 +44,13 @@ class CognitionRequest:
     # None means no routine deadline; cancellation still applies.
     timeout_seconds: int | None
     provider_order: tuple[ProviderFamily, ...]
+    # Output tokens after which the run stops; None means unmetered.
+    token_budget: int | None = None
     # The accepted lineage owns storage, not a turn id or a checkout path.
     native_owner: str | None = None
     native_generation: Callable[[ProviderFamily], int] = lambda _provider: 1
+    # Where this run's native records are committed; see RuntimeRequest.
+    record_checkout: Path | None = None
     # Pins the model of the first provider in `provider_order` only.
     model: ModelChoice | None = None
     # An ordered model list's exact choice per provider. A provider named here
@@ -54,16 +60,29 @@ class CognitionRequest:
     session_provider: ProviderFamily | None = None
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
-    read_scope: ReadScope | None = None
     allow_empty_output: bool = False
+    # Fresh text-only application call: no tools, owner, records or live input.
+    text_only: bool = False
+    task_call_socket: str | None = None
+    on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None
     on_session_started: Callable[[ProviderFamily, str], None] = (
         lambda _provider, _session_id: None
     )
     on_session_invalidated: Callable[[ProviderFamily], None] = lambda _provider: None
     on_input_ready: Callable[[Callable[[RuntimeInput], None]], None] | None = None
     on_input_result: Callable[[RuntimeInputResult], None] = lambda _result: None
+    on_progress: Callable[[ProviderFamily, str], None] = (
+        lambda _provider, _activity: None
+    )
 
     def __post_init__(self) -> None:
+        if self.text_only and (
+            self.provider_session_id is not None or self.native_owner is not None
+            or self.record_checkout is not None or self.task_call_socket is not None
+            or self.images or self.sandbox_mode != "read-only"
+            or self.on_input_ready is not None or self.allow_empty_output
+        ):
+            raise ValueError("text-only requests require fresh, tool-free, unrecorded state")
         if not self.execution_id:
             raise ValueError("Cognition execution ID must be nonblank")
         if not self.prompt.strip():
@@ -72,6 +91,8 @@ class CognitionRequest:
             raise ValueError("Cognition cwd must be absolute")
         if self.timeout_seconds is not None and self.timeout_seconds <= 0:
             raise ValueError("Cognition timeout must be positive")
+        if self.token_budget is not None and self.token_budget <= 0:
+            raise ValueError("Cognition token budget must be positive")
         if not self.provider_order:
             raise ValueError("Cognition request requires a provider")
         if any(not provider.strip() for provider in self.provider_order):
@@ -95,7 +116,11 @@ class Cognition:
         custom_models: Mapping[str, Mapping[str, ModelChoice | str]] | None = None,
         *,
         writable_roots: tuple[Path, ...] = (),
+        on_storage_deferred: Callable[[str], None] = lambda _reason: None,
     ) -> None:
+        # Every run passes here, so this is the one place a storage refusal
+        # is seen whatever started it: a message, a rhythm or a task.
+        self._on_storage_deferred = on_storage_deferred
         self._adapters = dict(adapters)
         for provider, adapter in self._adapters.items():
             if not provider.strip() or not adapter.family.strip():
@@ -161,7 +186,11 @@ class Cognition:
                 request = request()
             if request.execution_id != execution_id:
                 raise ValueError("prepared cognition changed its execution ID")
+            deadline = time.monotonic() + request.timeout_seconds if request.text_only and request.timeout_seconds else None
             for provider in request.provider_order:
+                remaining = math.ceil(deadline - time.monotonic()) if deadline else request.timeout_seconds
+                if remaining is not None and remaining <= 0:
+                    raise RuntimeExecutionError("Text-only inference deadline exceeded")
                 if cancelled():
                     raise RuntimeExecutionError(
                         f"Execution ID {request.execution_id!r} was cancelled"
@@ -170,8 +199,8 @@ class Cognition:
                 if adapter is None:
                     unavailable.append(f"{provider}: not registered")
                     continue
-                if request.read_scope is not None and not adapter.capabilities.scoped_reads:
-                    unavailable.append(f"{provider}: missing scoped read isolation")
+                if request.text_only and not adapter.capabilities.text_only:
+                    unavailable.append(f"{provider}: missing text-only capability")
                     continue
                 if request.images and not adapter.capabilities.images:
                     unavailable.append(f"{provider}: missing images")
@@ -207,16 +236,20 @@ class Cognition:
                         resolved=resolved,
                         native_owner=request.native_owner,
                         native_generation=request.native_generation(provider),
+                        record_checkout=request.record_checkout,
                         provider_session_id=provider_session_id,
                         prompt=request.prompt,
                         cwd=request.cwd,
-                        timeout_seconds=request.timeout_seconds,
+                        timeout_seconds=remaining,
+                        token_budget=request.token_budget,
                         images=request.images,
                         sandbox_mode=request.sandbox_mode,
-                        read_scope=request.read_scope,
                         allow_empty_output=request.allow_empty_output,
+                        text_only=request.text_only,
                         writable_roots=self._writable_roots
                         if request.sandbox_mode == "workspace-write" else (),
+                        task_call_socket=request.task_call_socket,
+                        on_process_started=request.on_process_started,
                         on_session_started=session_started,
                         on_started=lambda stop: self._register(
                             request.execution_id, stop
@@ -224,9 +257,15 @@ class Cognition:
                         on_input_ready=request.on_input_ready
                         if adapter.capabilities.ongoing_input else None,
                         on_input_result=request.on_input_result,
+                        on_progress=lambda activity: request.on_progress(
+                            provider, activity
+                        ),
                     )
                     try:
                         result = adapter.execute(runtime_request)
+                    except NativeStorageDeferred as error:
+                        self._on_storage_deferred(str(error))
+                        raise
                     except RuntimeExecutionError as error:
                         if error.session_id is None:
                             error.session_id = started_session

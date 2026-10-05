@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from steward_harness.git import git_operation_paths, agent_git, run_agent_git, validate_object_id
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 
 
@@ -147,6 +148,8 @@ class WorktreeManager:
         target_path = self.worktrees_root / task_id
         if not self.execution_broker.path_exists(target_path):
             return
+        if self.execution_broker.path_exists(target_path / EVIDENCE_PENDING):
+            raise WorktreeError("native evidence preservation is pending; checkout retained")
         attached_branch = self._registered_worktree_branch(target_path)
         if attached_branch is None:
             raise WorktreeError(

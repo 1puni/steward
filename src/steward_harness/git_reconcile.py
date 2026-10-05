@@ -15,6 +15,7 @@ from steward_harness.git import (
 )
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.runtime.execution import UntrustedExecutionBroker
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,13 @@ def reconcile_git(
             raise RuntimeExecutionError(_git_failure(args[0], result))
         return result.stdout.strip()
 
+    def evidence_pending() -> bool:
+        return broker.path_exists(worktree / EVIDENCE_PENDING)
+
+    pending_error = "native evidence preservation is pending; reconciliation retained"
+    if evidence_pending():
+        return pending_error
+
     # Cancellation used to be re-asked here between every git
     # invocation. It is SIGTERM to the child now; a withdrawn task is
     # read from its marker at the decision points that write it down.
@@ -109,6 +117,8 @@ def reconcile_git(
                 ))
             except (RuntimeExecutionError, RuntimeUnavailable) as exc:
                 return f"Rebase resolver {type(exc).__name__}: {redact_command_output(str(exc))}"
+            if evidence_pending():
+                return pending_error
             # Git validates added conflict markers and supports resolutions
             # that delete files. No parallel filesystem conflict scanner.
             checked = git("diff", "--check")
@@ -126,5 +136,57 @@ def reconcile_git(
             git_checked("commit", "-qm", "steward: preserve reconciliation work")
         return None
     finally:
-        if rebase.returncode != 0:
+        # Abort can overwrite tracked native records written by the resolver.
+        # Preserve the in-progress rebase until its evidence copy is recovered.
+        if rebase.returncode != 0 and not evidence_pending():
             git("rebase", "--abort")
+
+
+def merge_git(
+    worktree: Path, ref: str, branch: str, *,
+    broker: UntrustedExecutionBroker,
+    resolve_turn: ResolveTurn | None,
+) -> str | None:
+    """Merge ``ref`` into HEAD, resolving its conflicts with ``resolve_turn``.
+
+    For history that is already published on both sides, which a rebase would
+    rewrite. A merge stops once, so the resolver gets one turn. Without one,
+    the conflict aborts the merge and names the conflicted files.
+    """
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return _reconcile_git(broker, worktree, *args)
+
+    def git_checked(*args: str) -> str:
+        result = git(*args)
+        if result.returncode:
+            raise RuntimeExecutionError(_git_failure(args[0], result))
+        return result.stdout.strip()
+
+    if broker.path_exists(worktree / EVIDENCE_PENDING):
+        return "native evidence preservation is pending; reconciliation retained"
+    merge = git("merge", "--no-edit", "--no-ff", ref)
+    if merge.returncode == 0:
+        return None
+    try:
+        files = tuple(git_checked("diff", "--name-only", "--diff-filter=U").splitlines())
+        if not files:
+            return _git_failure("merge", merge)
+        if resolve_turn is None:
+            return (f"Merge conflict in {redact_command_output(', '.join(files))}; "
+                    f"reconcile the world with {ref}")
+        try:
+            resolve_turn(ResolverTurn(worktree, files, ref, branch, 1))
+        except (RuntimeExecutionError, RuntimeUnavailable) as exc:
+            return f"Merge resolver {type(exc).__name__}: {redact_command_output(str(exc))}"
+        if broker.path_exists(worktree / EVIDENCE_PENDING):
+            return "native evidence preservation is pending; reconciliation retained"
+        checked = git("diff", "--check")
+        if checked.returncode:
+            return _git_failure("resolver output", checked)
+        git_checked("add", "--all")
+        git_checked("commit", "--no-edit", "--quiet")
+        merge = None
+        return None
+    finally:
+        if merge is not None and not broker.path_exists(worktree / EVIDENCE_PENDING):
+            git("merge", "--abort")

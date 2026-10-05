@@ -43,10 +43,11 @@ def construct_artifact(
     Portable dependencies must be regular files. Absolute-path virtualenvs and
     external interpreter links are not self-contained release artifacts.
     """
+    # Source and built trees can be large; spool them beside the release, not in /tmp.
     with (
-        tempfile.TemporaryFile() as incoming,
-        tempfile.TemporaryFile() as outgoing,
-        tempfile.TemporaryFile() as errors,
+        tempfile.TemporaryFile(dir=destination.parent) as incoming,
+        tempfile.TemporaryFile(dir=destination.parent) as outgoing,
+        tempfile.TemporaryFile(dir=destination.parent) as errors,
     ):
         with tarfile.open(fileobj=incoming, mode="w") as archive:
             archive.add(source, arcname=".")

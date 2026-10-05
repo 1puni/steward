@@ -9,7 +9,6 @@ from .config.schema import ControllerConfig
 from .repository_reconciler import RepositoryReconciler
 from .state import StateDatabase
 from .task_runner import TaskRunner
-from .task_query import is_task_query
 from .lease import Busy, Lease
 
 # What a lane yields: who the work belongs to, and the work.
@@ -35,16 +34,17 @@ def repository_lease(state: StateDatabase, repository: str) -> Lease:
 class Dispatch:
     """One budget of concurrent work, and the owners currently holding it.
 
-    `controller.workers` is the whole scheduling policy. Everything the
+    `controller.workers` bounds background work. Everything the
     steward schedules for itself — task slices, repository publication,
-    rhythms, desk messages, probes, result delivery — competes for the same
+    rhythms, probes, result assessment — competes for the same
     slots, and the executor's own queue is the assignment: first asked, first
     served. There is no per-lane reservation and no fairness ordering, because
     both are a scheduler, and a scheduler is the thing this row deletes.
 
+    Retained result transport has one independent worker and never runs cognition.
     A live conversation never comes here. The operator talking to their
-    steward runs on the ingress thread that received them, so the budget can
-    be full and they still get an answer.
+    steward is answered by the inbox drain, so the budget can be full and they
+    still get an answer.
 
     The dict is deliberately not an exclusion. `task_lock` and
     `repository_lease` are, and unlike a dict they are durable, so they hold
@@ -72,6 +72,14 @@ class Dispatch:
     def submit(self, key: Hashable, work: Callable[[], object]) -> None:
         if key not in self._inflight:
             self._inflight[key] = self._pool.submit(work)
+
+    def observation(self) -> dict:
+        """Current worker pressure, derived from the executor's existing futures."""
+        return {"running": sum(job.running() for job in self._inflight.values()),
+                "queued": sum(not job.running() and not job.done() for job in self._inflight.values()),
+                "world": ("running" if self._inflight[("rhythm", "world")].running() else "queued")
+                if ("rhythm", "world") in self._inflight and not self._inflight[("rhythm", "world")].done()
+                else "idle"}
 
     def stop(self) -> None:
         # Queued owners remain derivable from durable state after restart.
@@ -117,7 +125,7 @@ class StewardKernel:
         """
         if not self.state.paused():
             owed = (task.task_id for task in self.state.tasks.all()
-                    if task.dispatchable or is_task_query(task.status.value, task.reason))
+                    if task.dispatchable)
             for task_id in owed:
                 yield ("task", task_id), lambda task_id=task_id: self.tasks.prepare(
                     task_id

@@ -89,8 +89,8 @@ fire. What does count is a real change to what the rhythm reads: a product
 task's outcome landing on the input branch, or native work retained on an
 ordinary task, is new input even though the steward made it.
 
-An integer schedule uses interval seconds. At most one run is accepted for a
-rhythm in each interval bucket, on the first poll in that bucket that sees new
+For repository and organisation procedure rhythms, an integer schedule uses
+interval seconds. At most one run is accepted for a rhythm in each interval bucket, on the first poll in that bucket that sees new
 input; a bucket without new input admits nothing and calls no model. An
 incomplete run prevents overlap with later buckets. A reopened idle run, a
 waiting run, and workspace-write work still awaiting publication remain
@@ -170,15 +170,18 @@ protected procedure binding or configured publication/target requirements.
 
 Every rhythm explicitly declares `owner`. A configured `telegram:<topic>` or
 `desk:<conversation>` retains that protected result owner in each accepted task.
-Completion, questions and failures then enter the existing task-result assessment
-path: the owner's native conversation can commit world knowledge, propose useful
-follow-up tasks within configured repository authority, and return a concise
-result through its configured transport. Assessment cannot grant itself new
+Reportable completion, questions and failures enter the retained-result transport
+path independently of cognition. Later optional assessment in the owner's native
+conversation can commit world knowledge and propose useful follow-up tasks within
+configured repository authority. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
 repeating accepted world edits or follow-up admission.
 
-A finished rhythm run owes its owner a message only when its findings carry a
-`NOTIFY:` line ([what a rhythm sends](#what-a-rhythm-sends)). Its prompt says so.
+A finished rhythm run queues a message only through a native `notify` call ([what a rhythm sends](#what-a-rhythm-sends)). The shared turn prompt supplies that tool
+contract once; the conversation runner supplies the capability. Procedures say
+when a notification is useful, without repeating the tool instructions. Instance
+procedures may point to world-owned conduct instead of copying its authority and
+workflow into a second editable home.
 Otherwise the result lane never selects it: no assessment turn, no model call,
 no message. What it did is kept either way. A review's findings are its evidence
 commit, retained on the task ref. A writing run's work publishes like any task's,
@@ -220,7 +223,7 @@ procedures:
 
 A pinned run tries its provider and nothing else. When that provider cannot
 take it, the run fails like any other unavailable provider: a task blocks and a
-world rhythm consumes its interval.
+world rhythm holds its interval for explicit continuation.
 
 ### Ordered model list
 
@@ -239,15 +242,13 @@ procedures:
 
 The list is walked in order until an entry takes the run. An entry is passed over
 for any reason the provider cannot take it: not installed or unavailable, a usage
-limit, a refusal of the turn, or a scoped read the provider cannot isolate. An
-entry runs its own provider, model and effort exactly and never borrows another
-entry's model; a missing `effort` means that provider decides. Effort reaches
+limit, or a refusal of the turn. An entry runs its own provider, model and effort
+exactly and never borrows another entry's model; a missing `effort` means that provider decides. Effort reaches
 Codex as reasoning effort and Claude as `--effort`, as for a single preference.
 When every entry has declined, the run fails like any unavailable provider,
-naming each entry's reason: a task blocks, a world rhythm consumes its interval.
-Nothing else changes: the change guard, blocked-run supersession, read-only rules
-and the rule that public desk cognition never falls back to unrestricted
-cognition apply as before.
+naming each entry's reason: a task blocks, a world rhythm holds its interval for explicit continuation.
+Nothing else changes: the change guard, blocked-run supersession and read-only
+rules apply as before.
 
 Precedence and validation, all at config load:
 
@@ -262,11 +263,40 @@ Precedence and validation, all at config load:
   gateway family such as `glm` is not promised to accept it.
 - Without `models`, behaviour is exactly the single preference above.
 
+### Bounds
+
+A procedure run is bounded by its work, not by how long it takes:
+
+```yaml
+procedures:
+  sleep:
+    instructions: /etc/steward/procedures/sleep.md
+    provider: claude
+    model: {model: configured-night-model}
+    token_budget: 250000
+    timeout_seconds: 7200
+```
+
+`token_budget` counts output tokens, reasoning included, as the provider reports
+them: Claude (and `glm` through the same CLI) per finished message, so a run can
+pass its budget by at most one response; Codex as running totals for the turn's
+thread and its native children. At the budget the run is stopped exactly as a
+deadline stops it: a native interrupt, then containment. The run fails with
+`provider used N output tokens of its B budget`. A world rhythm holds its
+interval and its uncommitted work stays in the rhythm's retained workspace; it
+is not offered to a fallback provider. Unset, a run is unmetered, and Claude is
+not asked for the partial messages metering needs.
+
+`timeout_seconds` replaces `provider.timeout_seconds` for this procedure only.
+With a budget, it only has to catch a provider that has stalled, so it can be far
+longer than the conversational deadline. Without either, a procedure keeps
+`provider.timeout_seconds`.
+
 ## World rhythms
 
 A rhythm over `input: world` consolidates the world itself, such as a nightly
-sleep over accumulated episodes. It is not a task. Each interval is one ordinary
-world turn in the rhythm's own conversation, `rhythm:<name>`, taking the same
+sleep over accumulated episodes. It is not a task. Each captured interval is one obligation, with ordinary
+world-turn attempts in the rhythm's own conversation, `rhythm:<name>`, taking the same
 lease, checkpoint and acceptance as an operator's message. Its text is the
 procedure's instructions, and it runs on the procedure's
 [model preference](#model-preference). Each interval starts a fresh native
@@ -298,10 +328,39 @@ rhythms:
 A world rhythm needs a configured `world`, a `workspace-write` procedure and an
 integer interval or an `after` (below); configuration refuses anything else,
 including a `workdir`.
-The source key `rhythm:<name>:<interval index>` is the whole idempotency: after a
-restart, the key replays an accepted turn rather than repeating cognition. A
-provider failure or crash consumes its interval. At most one run happens in each
-interval, and a missed interval is not made up. `86400` fires once per UTC day
+The key `rhythm:<name>:<interval index>` identifies one logical obligation and
+its result receipt. Its first attempt uses that source key; an explicit
+continuation uses `<key>:continue:<previous turn id>`. Every attempt retains its
+own input, outcome and native evidence. Only accepted completion meets the
+obligation. A returned provider failure, timeout or cancellation leaves an
+interrupted attempt and a visible hold; it does not settle the interval.
+
+`/rhythm run <name>` durably queues one continuation with the original instruction text and
+the retained workspace, naming the previous attempt and directing the provider
+to reconcile possible external effects before doing remaining work. Routing and
+limits use current procedure configuration so an operator can repair unavailable
+providers or insufficient bounds. If the policy file could not be read at all,
+its text is first captured when a continuation can read it. The command does no provider work: the ordinary rhythm worker executes the
+reserved source within the shared budget, and duplicate requests find that same
+source. A restart preserves a queued source whose checkout was never claimed.
+Each explicit request permits one attempt; polling and restarts never authorize provider
+retries. A held interval prevents newer intervals of that rhythm from replacing
+it, while unrelated rhythms remain eligible. Only a later *accepted* interval
+settles an older interrupted one, because a procedure reads from its own cursor
+and that run already covered the gap; a dependent owes nothing for a settled
+predecessor interval. Without this, gg's inbox and night chain stopped on
+interruptions days older than their latest accepted runs (October 3, 2026). A continuation can recover an
+already accepted notification by replaying its original `source_id`, key and
+text through the notification tool; that returns the existing receipt without
+queuing another send. Changed text is a different intent and cannot overwrite
+that receipt.
+
+An uncertain crash that retained no provider completion remains fenced for
+inspection of native evidence. `/rhythm run` cannot override that custody.
+Retained completion and accepted turns recover through the existing acceptance
+boundary without another provider call, including when the result receipt was
+not saved. Accepted obligations cannot be run again. Clock intervals never
+captured by an attempt or predecessor are not backfilled. `86400` fires once per UTC day
 on the first poll after midnight UTC; `offset: 3600` moves the start of every
 interval an hour later, so the same rhythm fires on the first poll after 01:00
 UTC. The offset must be shorter than the interval, and it works the same way
@@ -316,7 +375,7 @@ rhythms:
     schedule: 3600
     procedure: staging
     input: world
-    paths: [episodes/, episodes.md]
+    paths: [episodes/]
     owner: null
 ```
 
@@ -347,61 +406,115 @@ rhythms:
 ```
 
 `after` takes the place of `schedule`. The dependent shares its predecessor's
-interval index, so its key `rhythm:rem:<index>` still admits at most one run per
-interval and replays after a restart exactly as above. It becomes due once the
-predecessor's turn for that interval has been accepted. If the predecessor
-failed or was interrupted, or a `paths` gate kept it from running, the
-dependent does not run in that interval: the chain stops for the night. A
-predecessor whose run is still going when its interval ends takes the chain
-with it, because the dependent is always asked about the current interval.
+captured interval index and waits until that interval has an accepted attempt.
+An interrupted predecessor holds the chain. When explicit continuation finally
+succeeds, the dependent becomes eligible for the original interval even after
+clock rollover or a controller restart. REM then wakes Dream Away in the same
+way. A predecessor excluded by its `paths` gate captures no obligation and
+wakes no dependent.
 `after` must name a configured world rhythm, and configuration refuses a cycle.
 
-World rhythms run one at a time. They all write the same world, and two
-started together make the later one's candidate a replay over a world that
-moved under it: correct, because acceptance holds the world lease, but wasted.
-The controller schedules them as a single owner. While one runs, the others
-wait, and on the first poll after it finishes the first due rhythm in configured
-order starts. No interval is lost by waiting, because a rhythm stays due until
-its interval ends. A night of Sleep, REM and Dream Away with an hourly Staging
-therefore runs Sleep, REM, Dream Away and then Staging, never Staging beside REM.
+World rhythms run one at a time because they all write the same world. The
+controller schedules them as a single owner within its shared worker budget.
+When that owner runs, it chooses the eligible captured interval with the earliest
+start; configured order breaks ties, including members of a night chain. This
+keeps a short-interval inbox from continually jumping ahead of due hourly or
+nightly work. Selection is recomputed when the worker starts, so time spent in
+the shared queue cannot capture an expired, previously unseen bucket. Existing
+obligations survive that rollover. There is no catch-up queue or second
+scheduling cursor. A rhythm can still miss an uncaptured interval if the shared
+worker budget or world writer remains occupied through its end. Manual
+continuation admission takes the same world-rhythm lease as automatic execution;
+a busy owner defers the request without creating another source.
 
-The turn cannot propose or steer tasks, because a rhythm has no transport to
-receive their results; it records suggested work in world files instead.
-`/rhythm list` shows whether the current interval ran. `/rhythm run` refuses a
-world rhythm, because a second run in the same interval is exactly what the key
-exists to prevent.
+Failures before cognition, including an unreadable policy file, are retained as
+interrupted attempts and hold the interval just like provider failures. Ordinary
+world/conversation lease deferrals remain eligible for retry. A completed turn
+without its result receipt is eligible for replay to finish that receipt, not a
+second model invocation.
+
+`/rhythm list` reports the current world admission state and observation time.
+The existing `/healthz` endpoint also carries `world_rhythms`: the controller's
+last admission observation, its age and freshness, pause state, shared worker
+pressure, and each world rhythm's effective interval/offset or predecessor,
+input paths, logical obligation and latest attempt source keys, source
+admission/completion times and evidence age. A queued continuation's admission
+time precedes its provider execution. The snapshot derives from the same evaluator as dispatch; it
+never controls scheduling. It becomes stale after the greater of 60 seconds
+and three controller polls. A missing sample is unknown, not healthy.
+
+`scheduled` means a result receipt settled this interval; `active` means a turn
+is running, and `receipt_pending` means acceptance needs its receipt completed.
+`continuation_queued` names an authorized source awaiting its worker;
+`acceptance_pending` names retained completion awaiting world acceptance.
+`held` and `predecessor_held` expose interrupted obligations awaiting intervention.
+`recovery_held` means a source still owns uncertain work but no rhythm writer
+holds the execution lease; inspect its retained evidence before proceeding.
+Offline observations cannot establish that liveness distinction. Meanwhile,
+`awaiting_input` and `awaiting_predecessor` explain why admission owes no run.
+`due`/`overdue` means eligible now with no current turn. `due_at` is the interval
+boundary, and `overdue_seconds` is its age, not proof of continuous eligibility:
+new input can arrive partway through a bucket. Neither an old completion nor
+absent history alone establishes missed execution. An offline observer unable
+to read the path guard or receipts says `input_unobserved` or
+`accepted_receipt_unobserved` instead of inventing a due/settled verdict.
+
+A `held` entry's `due_at` is its captured index multiplied by the rhythm's
+*current* `schedule`, not the schedule in effect when that index was
+captured. Nothing stores the latter. Reconfiguring a rhythm's `schedule`
+(`e0cdd9c6` moved `inbox` from 300 to 3600) therefore reinterprets any older
+held index under the new schedule and reports a `due_at` scaled by the ratio
+of new to old schedule — a captured index of 20 under a 300s schedule now
+reads back as `20 * 3600` instead of `20 * 300`, a 12x jump that lands far in
+the future. This is display-only: a `held` entry is never `eligible`
+(`world_rhythm_observation`), so a corrupted `due_at` cannot change which
+rhythm `due_world_rhythms` actually admits. It only misleads a reader of
+`/rhythm list` or `/healthz` about when a held obligation was originally due.
+There is no held obligation old enough to predate a schedule change that is
+not already an operator-visible hold awaiting `/rhythm run` or cleanup.
+
+Health `ok` and `sha` still attest only the loaded release. They do not certify
+scheduler freshness, successful firing, or the quality of a reflection. Verify
+release identity, current admission state, and accepted execution separately.
+
+By default the turn cannot propose or steer tasks. With `drive_tasks: true`,
+a world rhythm with a configured owner can submit repository tasks and use
+answer, retry and note on that owner's tasks. New tasks belong to the configured
+owner, so normal result delivery and assessment continue the work there.
+It cannot cancel tasks or resume cancelled work; unowned and other-topic tasks
+remain inaccessible. Repository allowlists, source receipts, session fences,
+publication gates and deployment policy still apply. Retries retain their exact
+request keys across intervals; a new interval is not a new work intent.
+`/rhythm list` shows both the current clock interval and the selected obligation
+key, which may be older. `/rhythm run` explicitly continues a held obligation or
+recovers retained completion; it refuses an extra accepted run. Admission pause
+also prevents manual continuation.
 
 ## What a rhythm sends
 
-A rhythm is silent unless it asks. Its reply reaches `owner` only from a line
-that starts with `NOTIFY:`: everything from that line to the end is the message.
-The marker is forgiving to write, in any case and behind Markdown emphasis, a
-bullet or a quote, and `NOTIFY: NONE` asks for nothing. A reply without the
-marker is recorded and sent to no one, and so is any reply when `owner` is null.
-Nothing blocks on a missing or malformed marker; the reply is still kept.
+A rhythm's final reply is recorded only. To send, it calls the native
+`steward_tasks` task tool with `operation="notify"`, `key` and `text`. The
+controller binds the owner and source; the caller cannot choose a destination.
+An owner of `null` rejects sending while preserving the findings.
 
-Silence had to become the default. When any reply that was not blank was sent,
-models told to stay silent answered `SILENT`, `(empty)`, `<br>`, a lone word
-joiner, or a sentence saying there was nothing to say, and each of those reached
-the owner's topic. A filter can drop one of these, but a model finds the next.
-With an explicit marker, sending is something the model does, and an evasion
-only fails to send.
+The key distinguishes independent messages. Exact retries reuse the existing
+receipt; a changed payload under the same key is rejected. A receipt confirms
+durable queuing, not transport completion. Calls can occur anywhere during the
+execution, zero, one or several times. A provider failure after queuing does not
+withdraw the message. A provider without a working tool channel records its
+reply and sends nothing. Final markers, silence tokens and trailing narration
+have no notification meaning.
 
-A world rhythm can name a file as its message:
+Notification intents use the existing controller-owned result receipts, with
+at-least-once transport semantics: a crash after external send but before the
+transport receipt may duplicate delivery. Replay of the operation itself does
+not create another intent. The native invocation capability expires when the
+execution ends; a later execution must use its current tool.
 
-```yaml
-rhythms:
-  rem: {after: sleep, procedure: rem, input: world, owner: telegram:5,
-        deliver: morning_brief.md}
-```
-
-When the accepted turn changed `deliver`, the owner receives the file as that
-turn left it, whatever the reply says. The accepted commit is found by its
-`Steward-Turn` trailer, so a turn that was replayed behind another still counts.
-A file the turn did not change is not sent again; that night's reply falls back
-to the ordinary `NOTIFY:` rule. The file is cut at 12,000 characters with a note
-that it continues in the world, and Telegram splits it into pieces as it does any
-long reply.
+A rhythm's document is read by its consumers. For example, `morning_brief.md`
+contains its own committed date; the voice host, dashboard and operator judge
+freshness from that document. A file change never instructs the harness to send
+it. The rhythm may deliberately notify its owner when a message is needed.
 
 Every reply is kept. The turn keeps it in state and the world commit keeps its
 text. Its result receipt keeps it as `result_text` and marks the interval
@@ -410,17 +523,13 @@ without sending in the last 24 hours, rhythm reviews below included, so an absen
 message can be told apart from a run that never happened. The controller also logs
 `world rhythm <key>: reply recorded, not delivered`.
 
-A procedure rhythm's findings follow the same rule. Findings above the closure
-lines are the run's evidence commit, and they notify no one unless they contain a
-`NOTIFY:` line. Until then the result costs no model turn: no assessment runs and
-nothing is sent. A flagged result is assessed by its owning conversation as
-before. The run's own message is what gets sent, unless the assessment writes a
-`NOTIFY:` line of its own to say it differently, and a follow-up task the
-assessment admitted is named after it. The assessment cannot silence a flagged
-result. An explicit request, a question and a failure still report as they
-always did, and so does a harness-prepared result that already carries its reply.
-A refused proposal or action in any automatic turn (`harness:*`) is kept on the
-turn and logged, not appended to the owner's message.
+A procedure rhythm's full final narration is its evidence commit. Notification
+calls queue their own receipts without an assessment turn; they neither replace
+nor depend on that narration. Questions, failures and explicitly requested runs
+keep their outcome-report route. Already prepared delivery receipts replay their
+frozen messages through upgrades. An automatic assessment's final reply is also
+recorded only; any additional message requires its own notification call.
+A refused task operation in an automatic turn is retained and logged.
 
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
 harness never invents a schedule for you. A world rhythm is configured like any
@@ -438,3 +547,10 @@ See [procedure construction](../src/steward_harness/procedures.py),
 [task execution](../src/steward_harness/task_runner.py),
 [convergence journeys](../tests/test_rewrite_convergence.py), and the
 [target contract](automatic-deployment.md).
+
+A world rhythm may use the native task tool's `list` and `show` operations to
+inspect tasks belonging to its configured notification owner. It cannot inspect
+other topics' task bodies. Without `drive_tasks`, it cannot mutate tasks.
+It can retain findings in its world
+and notify its owner of a new, actionable blocker. Recurrence does not grant
+permission to install controller configuration or change host access.

@@ -8,13 +8,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import subprocess
 import time
 from pathlib import Path
+from datetime import datetime
 
 from steward_harness.git_transport import GitTransportError
-from steward_harness.lease import Busy
-from steward_harness.notify import notification
+from steward_harness.lease import Busy, Lease
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.state import ConversationBusy, ConversationId, TaskId, TaskSpec, TaskStatus
 from steward_harness.task_store import ProcedureRun
@@ -43,17 +42,6 @@ def captured(runs):
             for sha in (task.procedure.candidate, *(task.procedure.activity or {}).values())}
 
 
-#: A delivered world file is a message, not an attachment: past this it is
-#: cut, and the rest stays in the world.
-DELIVERY_LIMIT = 12_000
-
-
-def _bounded_delivery(text, path):
-    if len(text) <= DELIVERY_LIMIT:
-        return text
-    return text[:DELIVERY_LIMIT] + f"\n\n[{path} continues in the world.]"
-
-
 def interval(rhythms, name, now):
     """The interval a rhythm is in; a dependent rhythm is in its predecessor's."""
     rhythm = rhythms[name]
@@ -62,9 +50,118 @@ def interval(rhythms, name, now):
     return int((now - rhythm.offset) // rhythm.schedule)
 
 
+def rhythm_attempts(runs):
+    """Group immutable execution sources by their captured interval."""
+    grouped = {}
+    for run in runs:
+        parts = run.source_event_key.split(":")
+        if len(parts) >= 3 and parts[0] == "rhythm":
+            grouped.setdefault(int(parts[2]), []).append(run)
+    return grouped
+
+
+def superseded(runs, name, receipt):
+    """Interrupted intervals that a later accepted interval has settled.
+
+    A rhythm procedure reads from its own cursor, so a later accepted run has
+    already covered what an older interrupted one missed. Clocks still never
+    supersede unfinished work: only an accepted completion does.
+    """
+    latest = next((index for index in sorted(runs, reverse=True)
+                   if runs[index][-1].state == "completed" and receipt(f"rhythm:{name}:{index}")),
+                  None)
+    return {index for index, attempts in runs.items()
+            if latest is not None and index < latest and attempts[-1].state == "interrupted"}
+
+
+def world_rhythm_interval(rhythms, name, now, runs, predecessors, receipt):
+    """Oldest captured obligation first; clocks never supersede unfinished work.
+
+    A predecessor's captured interval binds its dependent's obligation even
+    if no poll ran before rollover. Unobserved clock intervals are not backfilled.
+    Offline readers pass a receipt lookup returning None (unknown).
+    """
+    current = interval(rhythms, name, now)
+    settled = superseded(runs, name, receipt)
+    pending = {index for index, attempts in runs.items() if index not in settled
+               and (attempts[-1].state != "completed"
+                    or receipt(f"rhythm:{name}:{index}") is False)}
+    after = rhythms[name].after
+    skipped = superseded(predecessors, after, receipt) if after else set()
+    # A dependent owes its predecessor's intervals since its own newest run.
+    # A dependent added later starts at the predecessor's newest interval
+    # rather than replaying every one accepted before it existed.
+    floor = max(runs) if runs else max(predecessors, default=0)
+    pending.update(index for index in predecessors
+                   if index >= floor and index not in runs and index not in skipped)
+    return min(pending) if pending else current
+
+
+def world_rhythm_observation(rhythms, name, now, *, run=None, latest=None,
+                             receipt=None, before=None, changed=None, index=None,
+                             recoverable=False, queued=False, writer_active=None):
+    """Describe the captured obligation admission uses; unknown input is not due.
+
+    Callers supply canonical turns/receipts and the world's change guard. An
+    offline reader that cannot check that guard passes None, never guesses.
+    """
+    rhythm = rhythms[name]
+    root = rhythm
+    while root.after is not None:
+        root = rhythms[root.after]
+    index = interval(rhythms, name, now) if index is None else index
+    start = index * root.schedule + root.offset
+    key = f"rhythm:{name}:{index}"
+    last = run or latest
+    stamp = (last.completed_at or last.started_at) if last else None
+    updated = datetime.fromisoformat(stamp).timestamp() if stamp else None
+    value = dict(event=key, last_event=last.source_event_key if last else None,
+                 status=last.state if last else "never_started",
+                 started_at=last.started_at if last else None,
+                 completed_at=last.completed_at if last else None,
+                 updated=updated, evidence_age_seconds=max(0, now - updated) if updated else None,
+                 observed_at=now, due_at=start, interval_end=start + root.schedule,
+                 schedule=({'after': rhythm.after} if rhythm.after else
+                           {'interval': rhythm.schedule, 'offset': rhythm.offset}),
+                 paths=list(rhythm.paths or []), eligible=False,
+                 obligation=("accepted" if run and run.state == "completed"
+                             else "open" if run or before else "uncaptured"),
+                 turn_id=str(run.turn_id) if run else None)
+    if queued:
+        progress = "continuation_queued"
+        value["eligible"] = True
+    elif recoverable:
+        progress = "acceptance_pending"
+        value["eligible"] = True
+    elif run and run.state == "interrupted":
+        progress = "held"
+    elif receipt:
+        progress = "scheduled"
+        value['due_at'] = start + root.schedule
+    elif run and run.state == "completed" and receipt is None:
+        progress = "accepted_receipt_unobserved"
+    elif run:
+        progress = ("receipt_pending" if run.state == "completed" else
+                    "recovery_held" if writer_active is False else "active")
+        value['eligible'] = run.state == "completed"  # Never replay uncertain native work.
+    elif rhythm.after and (before is None or before.state != "completed"):
+        progress = "predecessor_held" if before and before.state == "interrupted" else "awaiting_predecessor"
+    elif rhythm.paths and changed is None:
+        progress = "input_unobserved"
+    elif rhythm.paths and not changed:
+        progress = "awaiting_input"
+    else:
+        progress = "overdue" if now > start else "due"
+        value['eligible'] = True
+    value['progress'] = progress
+    value['overdue_seconds'] = max(0, now - start) if progress == "overdue" else 0
+    return value
+
+
 class Procedures:
-    def __init__(self, config, state, transports, *, world=None):
+    def __init__(self, config, state, transports, *, world=None, alert=None):
         self.config, self.state, self.transports = config, state, transports
+        self.alert = alert or (lambda _key, _text: None)
         self.world = world
         # Per quiet rhythm: the commits seen so far, and when the newest arrived.
         self._quiet = {}
@@ -251,34 +348,57 @@ class Procedures:
                 # operator ingress alive while the operator repairs its policy.
                 log.error("Rhythm %s admission failed: %s", name, error)
 
-    def due_world_rhythms(self, *, now=None):
-        """Each world rhythm whose current interval has no settled run.
-
-        The source key is the whole idempotency: one turn per rhythm and
-        interval, replayed rather than repeated after a restart. A recorded
-        receipt settles the interval; an interrupted turn consumes it. A
-        dependent rhythm shares its predecessor's interval and waits for that
-        interval's accepted turn, so a failed predecessor ends the chain. A
-        rhythm with `paths` starts only when the world changed under them since
-        its last accepted run.
-        """
+    def world_rhythm_observations(self, *, now=None, writer_active=None):
+        """Fresh admission facts; no persisted cursor besides turns and receipts."""
         now = time.time() if now is None else now
-        for name, rhythm in self.config.rhythms.items():
-            if rhythm.input != "world":
-                continue
-            index = interval(self.config.rhythms, name, now)
+        observations = {}
+        if writer_active is None:
+            writer_active = self._world_rhythm_lease().held()
+        histories = {name: rhythm_attempts(self.state.rhythm_turns(ConversationId(f"rhythm:{name}")))
+                     for name, rhythm in self.config.rhythms.items() if rhythm.input == "world"}
+        claims = {row["turn_id"]: row for row in self.state.claimed_turns()}
+        # Retained output is accepted without new cognition, whether or not its
+        # candidate was captured before acceptance last deferred.
+        retained = {row["turn_id"] for row in [*claims.values(), *self.state.pending_turns()]
+                    if row["output"] is not None}
+        for name, runs in histories.items():
+            rhythm = self.config.rhythms[name]
+            predecessors = histories.get(rhythm.after, {})
+            index = world_rhythm_interval(self.config.rhythms, name, now, runs, predecessors,
+                                         lambda key: bool(self.state.result_receipt(key)))
             key = f"rhythm:{name}:{index}"
-            prior = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
-            if self.state.result_receipt(key) or (prior is not None and prior.state == "interrupted"):
-                continue
-            if rhythm.after is not None:
-                before = self.state.turn_for_source(
-                    ConversationId(f"rhythm:{rhythm.after}"), f"rhythm:{rhythm.after}:{index}")
-                if before is None or before.state != "completed":
-                    continue
-            if rhythm.paths and prior is None and not self._world_changed(name, rhythm.paths):
-                continue
-            yield name, key
+            attempts = runs.get(index, [])
+            prior = attempts[-1] if attempts else None
+            before = predecessors.get(index, [None])[-1]
+            receipt = bool(self.state.result_receipt(key))
+            changed = None
+            if (rhythm.paths and prior is None and not receipt
+                    and (not rhythm.after or (before and before.state == "completed"))):
+                changed = self._world_changed(name, rhythm.paths)
+            claim = claims.get(str(prior.turn_id)) if prior else None
+            observations[name] = world_rhythm_observation(
+                self.config.rhythms, name, now, run=prior,
+                latest=self.state.latest_rhythm_turn(ConversationId(f"rhythm:{name}")),
+                receipt=receipt, before=before, changed=changed, index=index,
+                recoverable=bool(prior and str(prior.turn_id) in retained),
+                queued=bool(prior and prior.state == "running" and prior.rhythm_continuation
+                            and claim is None), writer_active=writer_active)
+        return observations
+
+    def due_world_rhythms(self, *, now=None):
+        # Oldest captured interval first; configured order breaks ties (including
+        # a night chain). A short-period rhythm cannot continually jump ahead
+        # of an hourly/daily rhythm while both are due. No catch-up buckets.
+        observations = self.world_rhythm_observations(now=now)
+        for name, value in sorted(observations.items(), key=lambda item: item[1]['due_at']):
+            if value['eligible']:
+                yield name, value['event']
+
+    def advance_world_rhythm(self, conversations):
+        # Resolve at execution, not enqueue: backpressure may span intervals.
+        due = next(iter(self.due_world_rhythms()), None)
+        if due is not None and not self.state.paused():
+            self.run_world_rhythm(conversations, *due)
 
     def _world_changed(self, name, paths):
         """Did the world change under `paths` since this rhythm's last accepted run?
@@ -290,49 +410,106 @@ class Procedures:
         last = self.state.last_world_candidate(ConversationId(f"rhythm:{name}"))
         return last is None or self.world.changed(last, paths)
 
+    def _world_rhythm_lease(self):
+        # Commands and the automatic dispatcher share this exclusion boundary.
+        return Lease(self.state.path.parent, lock_name=self.state.path.name + ".rhythms.lock",
+                     timeout_seconds=0)
+
+    def continue_world_rhythm(self, name, *, now=None):
+        """Persist one continuation source for the ordinary budgeted rhythm worker."""
+        try:
+            with self._world_rhythm_lease():
+                if self.state.paused():
+                    return "World rhythm admission is paused."
+                observed = self.world_rhythm_observations(now=now, writer_active=False)[name]
+                key = observed["event"]
+                if observed["progress"] in {"continuation_queued", "receipt_pending", "acceptance_pending"}:
+                    return f"{key}: {observed['progress']}; awaiting the rhythm worker."
+                if observed["progress"] == "recovery_held":
+                    return (f"{key}: recovery held; inspect retained native evidence. "
+                            "No provider completion is available to resume safely.")
+                if observed["progress"] != "held":
+                    return f"{key}: {observed['progress']}; no interrupted obligation to continue."
+                owner = ConversationId(f"rhythm:{name}")
+                attempts = rhythm_attempts(self.state.rhythm_turns(owner))[int(key.split(":")[2])]
+                prior = attempts[-1]
+                original = next((attempt.input_text for attempt in attempts
+                                 if attempt.input_text != f"Scheduled {name} rhythm ({key})."), None)
+                if original is None:
+                    procedure = self.config.procedures[self.config.rhythms[name].procedure]
+                    original = Path(procedure.instructions).read_text()
+                text = (original + "\n\nContinue the open obligation " + key +
+                        f". Previous attempt: {prior.turn_id}. "
+                        "Inspect retained workspace and native records before acting. "
+                        "External actions may already have happened; reconcile their evidence "
+                        "instead of repeating them blindly. Complete only what remains.")
+                self.state.start_turn(owner, f"{key}:continue:{prior.turn_id}", "harness:rhythm", text)
+                return f"{key}: continuation queued."
+        except (Busy, ConversationBusy, OSError, ValueError) as error:
+            return f"{name}: held; {error}"
+
     def run_world_rhythm(self, conversations, name, key):
-        """Run one interval as a world turn, then hand any reply to its owner."""
+        """Run/recover one obligation without overlapping a manual continuation."""
+        try:
+            with self._world_rhythm_lease():
+                return self._run_world_rhythm(conversations, name, key)
+        except Busy as error:
+            log.info("world rhythm %s deferred: %s", key, error)
+
+    def _run_world_rhythm(self, conversations, name, key):
         rhythm = self.config.rhythms[name]
         procedure = self.config.procedures[rhythm.procedure]
         owner = ConversationId(f"rhythm:{name}")
+        runs = rhythm_attempts(self.state.rhythm_turns(owner))
+        index = int(key.split(":")[2])
+        attempts = runs.get(index, [])
+        prior = attempts[-1] if attempts else None
+        if self.state.result_receipt(key):
+            return
+        # Even a stale dispatched/manual request cannot skip an older hold.
+        settled = superseded(runs, name, lambda key: bool(self.state.result_receipt(key)))
+        if any(i < index and i not in settled and rows[-1].state != "completed"
+               for i, rows in runs.items()):
+            return
+        if prior and prior.state == "interrupted":
+            return
+        source = prior.source_event_key if prior else key
         self.state.open_conversation(owner, provider=procedure.lead_provider,
                                      profile=self.state.tasks.default_profile)
-        if self.state.turn_for_source(owner, key) is None:
-            # Each interval starts a fresh session on the procedure's provider:
-            # the world, not yesterday's session, carries what was consolidated.
+        if not attempts:
             self.state.bind_conversation_provider(owner, procedure.lead_provider, None)
         try:
+            text = prior.input_text if prior else Path(procedure.instructions).read_text()
             result = conversations.run_turn(
-                transport="rhythm", transport_key=name, source_event_key=key,
-                operator_id="harness:rhythm", text=Path(procedure.instructions).read_text(),
+                transport="rhythm", transport_key=name, source_event_key=source,
+                operator_id="harness:rhythm", text=text,
                 episode_input=f"Scheduled {name} rhythm ({key}).",
-                allow_empty_output=True, procedure=procedure,
+                allow_empty_output=True, procedure=procedure, notify_owner=rhythm.owner,
+                drive_tasks=rhythm.drive_tasks,
+                reserved_rhythm=bool(prior and prior.rhythm_continuation),
             )
         except (Busy, ConversationBusy, WorldContentConflict, WorldUpdatePending) as error:
             log.info("world rhythm %s deferred: %s", key, error)
             return
         except (RuntimeExecutionError, RuntimeUnavailable, OSError, ValueError) as error:
-            # The interval is consumed: at most one run, never a retry storm.
-            log.error("world rhythm %s failed: %s", key, error)
+            # Keep a visible hold even when preparation failed before a source
+            # could be created. Other rhythms can still use the world owner.
+            if self.state.turn_for_source(owner, source) is None:
+                failed, _ = self.state.start_turn(
+                    owner, source, "harness:rhythm", f"Scheduled {name} rhythm ({key}).")
+                self.state.interrupt_turn(failed.turn_id, str(error))
+            log.error("world rhythm %s held: %s", key, error)
+            self.alert(f"held:{key}", f"⚠️ The {name} rhythm is held ({key}): {str(error)[-600:]}\n"
+                       f"Once the cause is fixed, `/rhythm run {name}` continues it.")
             return
         recorded = result.reply_text.strip()
-        # Silence is the default: a run sends only what it asked to send.
-        message = notification(recorded)
-        if rhythm.deliver is not None and self.world is not None:
-            try:
-                changed = self.world.turn_file(str(result.turn_id), rhythm.deliver)
-            except (OSError, subprocess.SubprocessError, ValueError) as error:
-                # The reply and the world both keep the file; an unreadable
-                # one costs this delivery, never the run.
-                log.warning("world rhythm %s: %s unreadable: %s", key, rhythm.deliver, error)
-                changed = None
-            if changed and changed.strip():
-                message = _bounded_delivery(changed.strip(), rhythm.deliver)
-        if recorded and not message:
+        if recorded:
             log.info("world rhythm %s: reply recorded, not delivered", key)
-        # The ordinary result lane delivers a pending receipt to its owner.
+        # Record completion independently of any notification operation.
         self.state.save_result_receipt({
             "owner": rhythm.owner, "task_id": None, "source_key": key,
-            "result_text": recorded, "reply": message, "done": not (message and rhythm.owner),
-            "recorded_only": bool(recorded and not message), "recorded_at": time.time(),
+            "result_text": recorded, "reply": "", "done": True,
+            "recorded_only": bool(recorded
+                                  and str(result.turn_id) not in self.state.notification_sources()),
+            "recorded_at": time.time(),
         })

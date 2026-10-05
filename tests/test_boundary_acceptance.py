@@ -228,3 +228,37 @@ def test_a_readable_state_database_refuses_the_boundary_and_stops_the_harness() 
         with pytest.raises(ExecutionBoundaryUnavailable) as refusal:
             broker.run([sys.executable, "-c", "pass"], cwd=workdir, timeout=30)
         assert str(state_db) in str(refusal.value)
+
+
+def test_task_tool_is_bound_to_the_real_provider_invocation():
+    """A sibling process under the same agent UID cannot borrow the task socket."""
+    import json
+    from steward_harness.runtime.process import ProcessController
+    from steward_harness.runtime.task_call_mcp import CLIENT
+    from steward_harness.state import ConversationId, StateDatabase
+    from steward_harness.task_calls import TaskCalls, TaskCallServer
+
+    with _steward_tree(state_directory_mode=0o700, database_mode=0o600) as (_, broker, database, workdir):
+        state = StateDatabase(database.with_name('calls.db'))
+        state.tasks.repositories = {'app'}
+        owner = state.open_conversation(ConversationId('telegram:owner'), provider='codex', profile='fast')
+        turn, _ = state.start_turn(owner.conversation_id, 'call', 'operator', 'Submit work')
+        server = TaskCallServer(TaskCalls(state, turn.turn_id))
+        request = json.dumps(dict(jsonrpc='2.0', id=1, method='tools/call', params=dict(name='task',
+            arguments=dict(operation='submit', key='work', repository='app', title='Work', brief='Do it')))) + '\n'
+        controller = ProcessController(broker)
+        try:
+            replies = []
+            controller.run(['/usr/bin/python3', '-c', CLIENT, server.path], cwd=workdir,
+                           env={}, timeout_seconds=30, stdin_text=request,
+                           on_process_started=server.bind, on_stdout_line=replies.append)
+            receipt = json.loads(json.loads(replies[0])['result']['content'][0]['text'])
+            assert receipt['accepted']
+            replies.clear()
+            # Same socket, request and UID, but a different owned service.
+            controller.run(['/usr/bin/python3', '-c', CLIENT, server.path], cwd=workdir,
+                           env={}, timeout_seconds=30, stdin_text=request, on_stdout_line=replies.append)
+            assert json.loads(replies[0])['result']['isError']
+            assert len(state.tasks.all()) == 1
+        finally:
+            server.close()

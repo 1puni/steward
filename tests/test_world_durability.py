@@ -16,7 +16,8 @@ from steward_harness.config.schema import UntrustedExecutionConfig
 from steward_harness.conversations import ConversationService
 from steward_harness.runtime.contracts import ResolvedModel, RuntimeExecutionError, RuntimeResult, RuntimeInputResult
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-from steward_harness.state import ConversationBusy, StateDatabase
+from steward_harness.state import ConversationBusy, StateDatabase, TaskId
+from test_conversations import _task_reply
 from steward_harness.world.git_world import GitWorld
 from steward_harness.lease import Busy, Lease
 from steward_harness.world.turn_checkpoint import (
@@ -31,6 +32,8 @@ class Crash(BaseException):
 
 
 class EditingCognition:
+    submit = True
+
     def __init__(self, before_return=lambda request: None, repository="app"):
         self.calls = 0
         self.before_return = before_return
@@ -44,12 +47,25 @@ class EditingCognition:
             "The private consumer handoff is still outstanding.\n"
         )
         self.before_return(request)
+        output = "Investigation saved." if self.submit else "Discussion"
+        if self.submit and request.task_call_socket is not None:
+            reply = _task_reply(
+                dict(operation="submit", key=request.execution_id,
+                     repository=self.repository, title="Private handoff",
+                     brief="Connect the private consumer."),
+                output,
+            )(request)
+            output = reply.output
         return RuntimeResult(
-            output='Investigation saved.\nTASK_PROPOSAL: {"repository":"%s","title":"Private handoff","brief":"Connect the private consumer."}' % self.repository,
+            output=output,
             resolved=ResolvedModel("codex", "balanced", "model", "medium"),
             effective_model="model",
             provider_session_id="session",
         )
+
+
+def _task_id(result):
+    return TaskId(json.loads(result.reply_text.splitlines()[-1])['task_id'])
 
 
 def runtime(root: Path, cognition=None, repositories=frozenset({"app"})):
@@ -133,7 +149,7 @@ def test_completed_output_recovers_before_a_new_source(tmp_path, monkeypatch, bo
     with pytest.raises(WorldUpdatePending, match="awaits capture"):
         run(service, "second")
     assert cognition.calls == 1
-    assert state.tasks.all() == []
+    assert len(state.tasks.all()) == 1
 
     monkeypatch.setattr(GitWorld, "_git", original_git)
     reopened, restored, replay, _ = runtime(tmp_path, cognition)
@@ -149,7 +165,7 @@ def test_completed_output_recovers_before_a_new_source(tmp_path, monkeypatch, bo
     second = run(replay, "second")
     first_again = run(replay, "first")
     assert str(first_again.turn_id) == first
-    assert first_again.task_admission.task_id != second.task_admission.task_id
+    assert _task_id(first_again) != _task_id(second)
     assert cognition.calls == 2
     assert len(reopened.tasks.all()) == 2
     episodes = _episodes(restored.world.root)
@@ -170,7 +186,7 @@ def test_startup_recovers_completed_output_without_provider(tmp_path, monkeypatc
     StewardDaemon._recover_turns(reopened, replay, restored)
     assert len(reopened.tasks.all()) == 1
     assert cognition.calls == 1
-    assert run(replay).task_admission.task_id == reopened.tasks.all()[0].task_id
+    assert _task_id(run(replay)) == reopened.tasks.all()[0].task_id
 
 
 def test_captured_completion_does_not_restore_a_cleared_native_session(tmp_path, monkeypatch):
@@ -209,11 +225,11 @@ def test_unretained_output_keeps_owner_fenced_across_restart(tmp_path, monkeypat
     with pytest.raises(ConversationBusy, match="inspect its native records"):
         run(replay, "second")
     assert cognition.calls == 1
-    assert reopened.tasks.all() == []
+    assert len(reopened.tasks.all()) == 1
     monkeypatch.setattr(StateDatabase, "retain_output", retain)
     other = replay.run_turn(transport="telegram", transport_key="other",
         source_event_key="other", operator_id="operator", text="Independent request.")
-    assert other.task_admission is not None
+    assert _task_id(other) is not None
     assert cognition.calls == 2
 
 
@@ -228,8 +244,7 @@ def test_empty_completion_still_accepts_world_and_replays(tmp_path, monkeypatch)
         raise OSError("capture unavailable")
     monkeypatch.setattr(checkpoint, "retain", fail)
     arguments = dict(transport="telegram", transport_key="topic", source_event_key="result",
-                     operator_id="harness:task-result", text="Assess retained findings.",
-                     allow_empty_output=True)
+                     operator_id="operator", text="Retain the requested decision.")
     with pytest.raises(OSError):
         service.run_turn(**arguments)
     monkeypatch.setattr(checkpoint, "retain", retain)
@@ -238,7 +253,7 @@ def test_empty_completion_still_accepts_world_and_replays(tmp_path, monkeypatch)
     assert result.reply_text == ""
     assert reopened.prepared_turn(str(result.turn_id))["state"] == "completed"
     assert (restored.world.root / "decision.md").exists()
-    assert not reopened.tasks.all()
+    assert len(reopened.tasks.all()) == 1
     assert cognition.calls == 1
 
 
@@ -276,7 +291,7 @@ def test_accepted_replay_ignores_a_later_uncertain_checkout(tmp_path):
         run(service, "second")
     head = checkpoint.world.input_cursor()
     replay = run(service, "first")
-    assert replay.task_admission.task_id == first.task_admission.task_id
+    assert _task_id(replay) == _task_id(first)
     assert checkpoint.world.input_cursor() == head
     assert len(state.tasks.all()) == 1
     with pytest.raises(ConversationBusy):
@@ -352,7 +367,7 @@ def test_native_checkpoint_marker_cannot_skip_world_capture(tmp_path):
     )
     head = checkpoint.world.input_cursor()
     replay = run(service)
-    assert replay.task_admission.task_id == accepted.task_admission.task_id
+    assert _task_id(replay) == _task_id(accepted)
     assert len(state.tasks.all()) == 1 and cognition.calls == 1
     assert checkpoint.world.input_cursor() == head
 
@@ -372,7 +387,7 @@ def test_restart_retains_edits_and_admits_once(tmp_path, monkeypatch, boundary):
     def fail_after(*args, **kwargs):
         original(*args, **kwargs)
         if boundary != "accepted":
-            assert state.tasks.all() == []
+            assert len(state.tasks.all()) == 1
         raise Crash(boundary)
 
     monkeypatch.setattr(target, method, fail_after)
@@ -399,7 +414,7 @@ def test_restart_retains_edits_and_admits_once(tmp_path, monkeypatch, boundary):
     result = run(replay)
     again = run(replay)
     assert result.reply_text == again.reply_text
-    assert result.task_admission.task_id == again.task_admission.task_id
+    assert _task_id(result) == _task_id(again)
     assert len(reopened.tasks.all()) == 1
     assert cognition.calls == 1
     assert (
@@ -457,7 +472,7 @@ def test_interrupted_native_records_survive_turn_cleanup_and_restart(tmp_path):
 
     cognition.before_return = inspect_retained
     completed = run(replay, "next-message")
-    assert completed.task_admission is not None
+    assert _task_id(completed) is not None
     assert cognition.calls == 2
     assert len(reopened.tasks.all()) == 1
 
@@ -498,26 +513,28 @@ def test_one_conversation_owns_multiple_tasks(tmp_path, monkeypatch):
             execute(request, **kwargs), output="Let's discuss the layout too."
         ),
     )
+    cognition.submit = False
     between = run(inbound, "other-subject")
+    cognition.submit = True
     assert between.conversation_id == first.conversation_id
     assert between.task_admission is None
     monkeypatch.setattr(cognition, "run", execute)
     second = run(inbound, "second-task")
     assert first.conversation_id == second.conversation_id
-    assert first.task_admission.task_id != second.task_admission.task_id
+    assert _task_id(first) != _task_id(second)
     assert cognition.calls == 3
     assert len(state.tasks.all()) == 2
     for event, original in [("first-task", first), ("second-task", second)]:
         replay = run(inbound, event)
         assert replay.reply_text == original.reply_text
-        assert replay.task_admission.task_id == original.task_admission.task_id
+        assert _task_id(replay) == _task_id(original)
     assert cognition.calls == 3
     assert state.pending_turns() == []
 
     # Each task still delivers to the same originating thread independently.
     for result in (first, second):
         state.tasks.cancel(
-            result.task_admission.task_id,
+            _task_id(result),
             "operator changed direction",
         )
     # Both tasks report back to the one conversation that admitted them.
@@ -536,6 +553,7 @@ def test_one_conversation_owns_multiple_tasks(tmp_path, monkeypatch):
             execute(request, **kwargs), output="Let's discuss another subject."
         ),
     )
+    cognition.submit = False
     discussion = run(inbound, "later-discussion")
     assert discussion.conversation_id == first.conversation_id
     assert discussion.task_admission is None
@@ -559,11 +577,12 @@ def test_revocation_before_acceptance_and_replay_are_distinct(tmp_path, monkeypa
         tmp_path, cognition, repositories=set()
     )
     rejected = run(adapter)
-    assert rejected.task_admission is None and rejected.task_rejection
-    assert state.tasks.all() == []
+    assert _task_id(rejected) is not None
+    # Revoking a repository stops subsequent access, not an accepted Git effect.
+    assert len(state.tasks.refs()) == 1
     _, _, replay, _ = runtime(tmp_path, cognition, repositories=frozenset({"app"}))
     assert run(replay).reply_text == rejected.reply_text
-    assert state.tasks.all() == []
+    assert len(state.tasks.refs()) == 1
     assert cognition.calls == 1
 
 
@@ -606,7 +625,7 @@ def test_unknown_epoch_is_untouched(tmp_path):
 def test_previous_epoch_preserves_real_tasks_for_explicit_upgrade(tmp_path, epoch):
     state, _, adapter, _ = runtime(tmp_path)
     result = run(adapter)
-    state.tasks.note(result.task_admission.task_id, "Keep this operator note.")
+    state.tasks.note(_task_id(result), "Keep this operator note.")
     with state.connect(write=True) as connection:
         connection.execute("UPDATE steward_schema SET epoch=?", (epoch,))
     with sqlite3.connect(state.path) as connection:
@@ -616,7 +635,7 @@ def test_previous_epoch_preserves_real_tasks_for_explicit_upgrade(tmp_path, epoc
     with sqlite3.connect(state.path) as connection:
         assert list(connection.iterdump()) == before
     assert len(state.tasks.all()) == 1
-    assert tuple((k, t) for _, k, t, _ in state.tasks.get(result.task_admission.task_id).pending) == (("note", "Keep this operator note."),)
+    assert tuple((k, t) for _, k, t, _ in state.tasks.get(_task_id(result)).pending) == (("note", "Keep this operator note."),)
 
 
 
@@ -665,7 +684,7 @@ def test_concurrent_world_turns_keep_both_candidates(tmp_path, same_file):
         assert len(errors) == 1 and isinstance(errors[0], WorldContentConflict)
         pending = state.pending_turns()
         assert len(pending) == 1
-        assert len(state.tasks.all()) == 1
+        assert len(state.tasks.all()) == 2
         retained = subprocess.run(
             ["git", "show", f"{pending[0]['candidate_sha']}:shared.md"],
             cwd=checkpoint.world.root, check=True, capture_output=True, text=True,
@@ -688,13 +707,12 @@ def test_sql_failure_preserves_git_task_and_replay_admits_once(tmp_path, monkeyp
     replay admits once without re-running cognition.
     """
     state, checkpoint, adapter, cognition = runtime(tmp_path)
-    original = state._insert_task
+    original = state.accept_turn
 
     def fail(*args, **kwargs):
-        original(*args, **kwargs)
-        raise Crash("after insertion, before SQL commit")
+        raise Crash("before conversation acceptance")
 
-    monkeypatch.setattr(state, "_insert_task", fail)
+    monkeypatch.setattr(state, "accept_turn", fail)
     with pytest.raises(Crash):
         run(adapter)
     assert len(state.tasks.all()) == 1
@@ -762,7 +780,7 @@ def test_prepared_recovery_preserves_new_conversation_lineage(
     assert recovered.provider_session_id is None
     # Both controls rotate the session and neither touches the prepared
     # revision: the turn's work lands either way.
-    assert result.task_admission is not None
+    assert _task_id(result) is not None
     assert (checkpoint.world.root / "decision.md").exists()
 
 
@@ -936,20 +954,43 @@ def test_an_operator_message_is_remembered_as_the_operator_wrote_it(tmp_path):
     assert recorded["user"] == "Establish the private handoff."
 
 
-def test_an_empty_reply_releases_its_owner_like_any_provider_failure(tmp_path):
+def test_empty_ordinary_native_completion_accepts_its_own_work(tmp_path):
     class Quiet(EditingCognition):
-        quiet = True
-
         def run(self, request, **kwargs):
-            result = super().run(request, **kwargs)
-            return replace(result, output="") if self.quiet else result
+            return replace(super().run(request, **kwargs), output="")
 
     state, checkpoint, service, cognition = runtime(tmp_path, Quiet())
-    with pytest.raises(RuntimeError, match="empty world-session reply"):
-        run(service, "quiet")
+    accepted = run(service, "quiet")
+    assert accepted.reply_text == ""
     assert state.claimed_turns() == []
-    cognition.quiet = False
-    accepted = run(service, "next")
-    assert accepted.task_admission is not None
-    # The empty turn's edit was kept in the checkout for the next source.
     assert (checkpoint.world.root / "decision.md").is_file()
+    assert len(state.tasks.all()) == 1
+    assert state.prepared_turn(str(accepted.turn_id))["state"] == "completed"
+    replayed = run(service, "quiet")
+    assert replayed.turn_id == accepted.turn_id
+    assert cognition.calls == 1
+
+
+def test_a_storage_refusal_before_any_provider_leaves_the_source_to_replay(tmp_path):
+    """The reserve refused admission: nothing ran, so the message is not lost."""
+    from steward_harness.runtime.contracts import NativeStorageDeferred
+
+    class Refusing(EditingCognition):
+        refusals = 1
+
+        def run(self, request, *, execution_id=None):
+            if self.refusals:
+                self.refusals -= 1
+                request()  # Claimed its checkout, then the reserve refused.
+                raise NativeStorageDeferred("native evidence storage reserve reached")
+            return super().run(request, execution_id=execution_id)
+
+    cognition = Refusing()
+    state, _, service, _ = runtime(tmp_path, cognition)
+    with pytest.raises(Busy):
+        run(service)
+    with state.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM turns").fetchone()[0] == 0
+    accepted = run(service)
+    assert state.prepared_turn(str(accepted.turn_id))["state"] == "completed"
+    assert cognition.calls == 1

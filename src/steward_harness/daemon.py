@@ -10,11 +10,10 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from typing import cast
-from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 
-from steward_harness.retention import prune_tasks, prune_world_sessions
+from steward_harness.retention import prune_tasks, prune_world_sessions, retire_native_homes
 from steward_harness.repository_reconciler import RepositoryReconciler
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import (
@@ -23,19 +22,20 @@ from steward_harness.config.schema import (
 )
 from steward_harness.conversations import ConversationService
 from steward_harness.telegram.api import TelegramAPIError
-from steward_harness.desk import DeskEvents, DeskInbox, DeskMessage
+from steward_harness.inbox import EventLog, InboundMessage, Inbox, InboxDrain, Source
 from steward_harness.git import redact_command_output
 from steward_harness.git_transport import (
     ControllerGitTransport,
     GitTransportError,
     controller_transport,
+    world_transport,
 )
 from steward_harness.incidents.kernel import IncidentProbeLoop
 from steward_harness.kernel import Dispatch, Owner, StewardKernel, repository_lease
 from steward_harness.git_reconcile import ResolveTurn, ResolverTurn
 from steward_harness.prompts import build_conflict_prompt
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
-from steward_harness.runtime.contracts import CognitionAdapter, RuntimeExecutionError, RuntimeUnavailable
+from steward_harness.runtime.contracts import CognitionAdapter
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.providers import build_runtimes
 from steward_harness.procedures import Procedures, interval
@@ -48,7 +48,12 @@ from steward_harness.state import (
 )
 from steward_harness.task_runner import TaskRunner
 from steward_harness.task_lock import locked_tasks
-from steward_harness.telegram.service import TelegramService
+from steward_harness.telegram.service import (
+    TelegramContentRejected,
+    TelegramReceiptsUnadopted,
+    TelegramService,
+)
+from steward_harness.telegram.tasks import app_link, task_card
 from steward_harness.web.health import HealthServer
 from steward_harness.web.tasks import TaskBoard, TaskWeb
 from steward_harness.world.git_world import GitWorld
@@ -57,8 +62,8 @@ from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldCont
 
 log = logging.getLogger(__name__)
 
-DESK_INGRESS_POLL_SECONDS = 0.5
-DESK_BUSY_RETRY_SECONDS = 5.0
+#: How often the world exchanges with its remote, when it has one.
+WORLD_EXCHANGE_SECONDS = 30
 
 
 def exit_on_thread_fault(args: threading.ExceptHookArgs) -> None:
@@ -66,7 +71,7 @@ def exit_on_thread_fault(args: threading.ExceptHookArgs) -> None:
 
     There is no chain carrying a fault from one lane to the others any more,
     because there is one pass and it raises. This covers the threads that are
-    genuinely concurrent with it — Telegram's long poll and its executor —
+    genuinely concurrent with it — Telegram's long poll and the inbox drain —
     and it covers threads nobody registered, which the chain could not. The
     service manager restarts what exits non-zero.
 
@@ -82,15 +87,6 @@ def exit_on_thread_fault(args: threading.ExceptHookArgs) -> None:
         exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
     )
     os._exit(1)
-
-
-@dataclass(frozen=True, slots=True)
-class Desk:
-    """The filesystem ingress: what runs a message, what holds them, where replies go."""
-
-    drain: Callable[[DeskMessage | None], None]
-    inbox: DeskInbox
-    events: DeskEvents
 
 
 def deferral_cause(error: BaseException) -> str:
@@ -189,11 +185,12 @@ class KernelCommands:
             )
         if name == "tasks":
             tasks = self.state.tasks.all()[:20]
-            return "No tasks." if not tasks else "Tasks:\n" + "\n".join(
-                f"  • {task.task_id} {task.status.value}: "
-                f"{task.title} ({task.repository})"
-                for task in tasks
-            )
+            url = self.config.telegram.task_app_url if self.config.telegram else None
+            launch = app_link(url)
+            heading = f"[Open task board]({launch})" if launch else "**Tasks**"
+            chat = self.config.telegram.chat_id if self.config.telegram else None
+            cards = "\n\n".join(task_card(task, url, chat) for task in tasks)
+            return heading + "\n\n" + (cards or "No tasks yet.")
         if name == "pause":
             self.state.set_paused(True)
             return "⏸️ Scheduler paused; accepted publication and target convergence remain active."
@@ -270,7 +267,7 @@ class KernelCommands:
             return self._cancel(arg or "")
         detail = parts[2].removeprefix("::").strip() if len(parts) == 3 else ""
         try:
-            task_id = TaskId(raw_id)
+            task_id = self.state.tasks.resolve(raw_id)
             if verb in {"model", "model_family"}:
                 session = self.state.tasks.get(task_id).session_id
                 lineage = self.state.get_conversation(session)
@@ -302,13 +299,17 @@ class KernelCommands:
                 )
                 progress += f"\nPending inputs: {len(task.pending)}"
                 return (
-                    f"{task.task_id} — {task.status.value}"
+                    task_card(
+                        task, self.config.telegram.task_app_url if self.config.telegram else None,
+                        self.config.telegram.chat_id if self.config.telegram else None,
+                    )
                     + (
                         " (cancellation requested)"
                         if task.definition.hold == "cancelled" else ""
                     )
                     + f"\nRepository: {task.repository}\n"
-                    f"Priority: {task.priority}\nTitle: {task.title}\nBrief: {task.brief}{reason}{progress}"
+                    f"Priority: {task.priority}\nBrief: {task.brief}{reason}{progress}\n\n"
+                    f"`/task note {task.task_id.short} <text>`"
                 )
             if verb == "confirm" and not detail:
                 self.state.tasks.confirm(task_id)
@@ -359,7 +360,7 @@ class KernelCommands:
         lines = []
         for raw_id in ids.split()[1:]:
             try:
-                cancelled = self.state.tasks.cancel(TaskId(raw_id), normalized)
+                cancelled = self.state.tasks.cancel(self.state.tasks.resolve(raw_id), normalized)
                 # The marker says it was abandoned; the signal stops the
                 # slice that is running right now.
                 self.conversations.cancel(cancelled.session_id)
@@ -373,6 +374,7 @@ class KernelCommands:
         if parts == ["list"]:
             lines = []
             runs = [task.procedure for task in self.state.tasks.all()]
+            observations = self.procedures.world_rhythm_observations()
             for name, rhythm in self.config.rhythms.items():
                 schedule = (f"after {rhythm.after}" if rhythm.after is not None
                             else f"every {rhythm.schedule}s" if isinstance(rhythm.schedule, int)
@@ -383,6 +385,10 @@ class KernelCommands:
                     key = f"rhythm:{name}:{interval(self.config.rhythms, name, time.time())}"
                     turn = self.state.turn_for_source(ConversationId(f"rhythm:{name}"), key)
                     history = f"this interval: {turn.state if turn else 'not run yet'}"
+                    observed = observations[name]
+                    history += (f"; obligation={observed['event']}, {observed['progress']}, observed_at={observed['observed_at']:.0f}, "
+                                f"due_at={observed['due_at']:.0f}, "
+                                f"overdue_seconds={observed['overdue_seconds']:.0f}")
                 pause = "; automatic admission paused" if self.state.paused() else ""
                 lines.append(f"{name}: {schedule}, {rhythm.procedure}, {rhythm.input}, "
                              f"owner={rhythm.owner or 'retained only'}; {history}{pause}")
@@ -390,7 +396,7 @@ class KernelCommands:
         if len(parts) == 2 and parts[0] == "run" and parts[1] in self.config.rhythms:
             rhythm = self.config.rhythms[parts[1]]
             if rhythm.input == "world":
-                return f"{parts[1]} is a world rhythm; it runs once per interval on its schedule."
+                return self.procedures.continue_world_rhythm(parts[1])
             repository, candidate, base, activity = self.procedures.observe(rhythm)
             task = self.procedures.request(rhythm.procedure, repository, candidate, base,
                                           event=f"rhythm:{parts[1]}:manual:{uuid.uuid4().hex}",
@@ -413,8 +419,8 @@ class KernelCommands:
             if rest[0] not in self.config.repositories:
                 return f"Unknown repository {rest[0]!r}."
             try:
-                task = self.state.tasks.retarget(TaskId(name), rest[0])
-            except (RuntimeError, ValueError) as error:
+                task = self.state.tasks.retarget(self.state.tasks.resolve(name), rest[0])
+            except (LookupError, RuntimeError, ValueError) as error:
                 return f"⚠️ {error}"
             return f"🔀 Retargeted {task.task_id} to {task.repository}."
         repository = self.config.repositories.get(name)
@@ -507,11 +513,14 @@ class StewardDaemon:
             config, self.config_path
         )
         self.adapters = adapters
+        self._alerted: dict[str, float] = {}
         self._stop = threading.Event()
-        self._desk_ingress: threading.Thread | None = None
+        self._inbox: InboxDrain | None = None
         self._telegram: TelegramService | None = None
+        self._result_dispatch = Dispatch(1)
         self._kernel: StewardKernel | None = None
         self._health: HealthServer | None = None
+        self._rhythm_health: dict = {}
 
     def request_stop(self) -> None:
         """Ask the owned loop to finish its pass and drain, without waiting.
@@ -563,6 +572,9 @@ class StewardDaemon:
             self.adapters if self.adapters is not None else build_runtimes(self.config.provider, self.broker),
             self.config.provider.models,
             writable_roots=self.broker.writable_roots,
+            on_storage_deferred=lambda reason: self._alert(
+                "storage", "⚠️ Disk below the native storage reserve: new turns are waiting, "
+                f"none are lost. {reason}"),
         )
         def resolve(turn: ResolverTurn) -> None:
             name = self.config.world.reconcile if self.config.world else None
@@ -575,7 +587,8 @@ class StewardDaemon:
                 execution_id=f"world-reconcile:{turn.branch}:{uuid.uuid4().hex}",
                 profile=self.config.provider.default_profile,
                 prompt=prompt, cwd=turn.worktree,
-                timeout_seconds=self.config.provider.timeout_seconds,
+                **(procedure.limits(self.config.provider.timeout_seconds) if procedure
+                   else dict(timeout_seconds=self.config.provider.timeout_seconds)),
                 **(procedure.routing(self.config.provider.family_order) if procedure
                    else dict(provider_order=self.config.provider.family_order)),
                 sandbox_mode="workspace-write"))
@@ -585,18 +598,22 @@ class StewardDaemon:
         worktrees_root = Path(self.config.provider.workdir) / "worktrees"
         state.tasks.transports = transports
 
+        def telegram_admin(scope, request):
+            if self._telegram is None:
+                raise ValueError("Telegram is not available")
+            return self._telegram.admin(scope, request)
+
         conversations = ConversationService(
             state,
             cognition,
             provider_order=self.config.provider.family_order,
             profile=self.config.provider.default_profile,
             workspace=checkpoint or Path(self.config.provider.workdir).resolve(),
+            telegram_admin=telegram_admin,
             timeout_seconds=self.config.provider.timeout_seconds,
 
             desk_provider=self.config.desk.provider if self.config.desk else None,
             desk_profile=self.config.desk.profile if self.config.desk else None,
-            desk_access=self.config.desk.access if self.config.desk else "operator",
-            desk_readable_roots=tuple(map(Path, self.config.desk.readable_roots)) if self.config.desk else (),
             telegram_actions=(
                 self.config.telegram.agent_actions
                 if self.config.telegram is not None
@@ -610,7 +627,8 @@ class StewardDaemon:
         )
 
         procedures = Procedures(self.config, state, transports,
-                                world=checkpoint.world if checkpoint else None)
+                                world=checkpoint.world if checkpoint else None,
+                                alert=self._alert)
         targets = Targets(self.config, state, transports, procedures)
         self._procedures, self._targets = procedures, targets
         reconciler = RepositoryReconciler(
@@ -634,6 +652,7 @@ class StewardDaemon:
             timeout_seconds=self.config.provider.timeout_seconds,
             poll_seconds=self.config.controller.poll_seconds,
             actor_name=self.config.identity.name,
+            telegram_admin=telegram_admin,
         )
         incidents = IncidentProbeLoop(
             state,
@@ -669,20 +688,28 @@ class StewardDaemon:
         # twice asks the same question of the same object.
         state.interrupt_abandoned_turns()
         tasks.reconcile_worktrees()
-        if desk is not None:
+        desk_events = EventLog(self.config.desk.events_file) if self.config.desk else None
+        if desk is not None and desk_events is not None:
             recovered = desk.inbox.recover()
             if recovered:
-                desk.events.append(
+                desk_events.append(
                     "status", f"desk online; {recovered} claim(s) requeued"
                 )
         if self.config.controller.health_bind:
             self._health = HealthServer(
-                self.config.controller.health_bind, self._board(state)
+                self.config.controller.health_bind, self._board(state),
+                rhythms=lambda: self._rhythm_health,
+                observation_max_age=max(60, self.config.controller.poll_seconds * 3),
             )
             self._health.start()
         self._start_telegram(state, conversations, commands)
-        self._start_desk(desk)
-        return self._pass(state, conversations, kernel, incidents, desk, checkpoint)
+        sources = [source for source in (
+            self._telegram.source if self._telegram is not None else None, desk,
+        ) if source is not None]
+        if sources:
+            self._inbox = InboxDrain(sources)
+            self._inbox.start()
+        return self._pass(state, conversations, kernel, incidents, desk_events, checkpoint)
 
     def _board(self, state: StateDatabase) -> TaskWeb | None:
         """The read-only task board, when there is a bot to sign its readers in.
@@ -695,7 +722,7 @@ class StewardDaemon:
         if telegram is None:
             return None
         return TaskWeb(
-            TaskBoard(state),
+            TaskBoard(state, telegram.chat_id),
             token_path=telegram.token_path,
             allowed_users=telegram.allowed_users,
         )
@@ -741,40 +768,13 @@ class StewardDaemon:
             native_turn_handler=lambda *args: telegram_turn(*args, ongoing_only=True),
         )
         self._telegram = service
-        service.start()
-
-    def _start_desk(self, desk: Desk | None) -> None:
-        """Answer an operator's desk message the moment it lands, as Telegram does.
-
-        In the pass, a message waited for the next poll and then for a free
-        worker behind task executions: most of a minute for a phone caller
-        whose answer took five seconds to think. So operator messages get their
-        own thread, and like Telegram it ignores pause and drains its current
-        turn before the lease is released. Observations are controller work
-        and stay in the pass.
-        """
-        if desk is None:
-            return
-
-        def run() -> None:
-            while not self._stop.is_set():
-                deferred = False
-                for message in desk.inbox.pending():
-                    if message.observation or self._stop.is_set():
-                        continue
-                    try:
-                        desk.drain(message)
-                    except Exception:
-                        # drain has parked the message; an escaped fault here
-                        # would end the whole controller (exit_on_thread_fault).
-                        log.exception("desk message %s failed", message.msg_id)
-                    deferred = deferred or message.path.exists()
-                # A requeued message means its conversation is busy: retry, but
-                # not at the rate a fresh message is noticed.
-                self._stop.wait(DESK_BUSY_RETRY_SECONDS if deferred else DESK_INGRESS_POLL_SECONDS)
-
-        self._desk_ingress = threading.Thread(target=run, name="desk-ingress", daemon=True)
-        self._desk_ingress.start()
+        try:
+            service.start()
+        except TelegramReceiptsUnadopted as error:
+            # Everything else keeps running; results for Telegram stay pending.
+            log.critical("Telegram ingress NOT started: %s", error, exc_info=True)
+            self._telegram = None
+            service.api.close()
 
     def _pass(
         self,
@@ -782,16 +782,17 @@ class StewardDaemon:
         conversations: ConversationService,
         kernel: StewardKernel,
         incidents: IncidentProbeLoop,
-        desk: Desk | None,
+        desk_events: EventLog | None,
         checkpoint: WorldTurnCheckpoint | None = None,
     ) -> Callable[[], None]:
         """Build the one pass over every owner this daemon is responsible for.
 
         The pass enumerates and hands each owner to the shared `Dispatch`; it
-        never waits for one. That is the whole scheduler. `controller.workers`
-        is how many run at once, the executor's queue is who goes next, and a
-        live conversation is not here at all — it runs on the ingress thread
-        that received it, so a full budget never keeps the operator waiting.
+        never waits for one. `controller.workers` bounds background cognition;
+        a separate single transport worker delivers retained results. The shared
+        executor's queue is who goes next for cognition, and a
+        live conversation is not here at all — the inbox drain answers it, so
+        a full budget never keeps the operator waiting.
 
         Each lane below is a derivation of who is owed work right now, and an
         absent subsystem derives nothing rather than being asked about. The
@@ -809,8 +810,8 @@ class StewardDaemon:
         def deliver_result(owner: ConversationId) -> None:
             """Report one finished task back to the transport that admitted it."""
             def send(text: str, source_key: str) -> None:
-                if owner.kind == "desk" and desk is not None:
-                    desk.events.append("reply", text, source_key)
+                if owner.kind == "desk" and desk_events is not None:
+                    desk_events.append("reply", text, source_key)
                 elif owner.kind == "telegram" and self._telegram is not None:
                     self._telegram.send_result(
                         self._telegram.config.chat_id, int(owner.reference), text, source_key,
@@ -819,10 +820,32 @@ class StewardDaemon:
                     raise OSError(f"result transport unavailable for {owner}")
             try:
                 conversations.deliver_task_result(owner, send=send)
+            except TelegramContentRejected as error:
+                # Telegram answers this reply the same way every time (a deleted
+                # topic, say): name it undeliverable instead of retrying each pass.
+                receipt = state.retain_pending_result(owner)
+                if receipt is not None:
+                    receipt["undeliverable"] = True
+                    receipt["delivery_error"] = str(error)
+                    state.save_result_receipt(receipt)
+                log.warning("task result for %s undeliverable: %s", owner, error)
             except (Busy, ConversationBusy, GitTransportError, TelegramAPIError,
                     OSError, subprocess.TimeoutExpired, WorldContentConflict,
                     WorldUpdatePending, subprocess.CalledProcessError) as error:
                 log.info("task result deferred: %s", deferral_cause(error))
+
+        def assess_result(owner: ConversationId) -> None:
+            try:
+                conversations.assess_task_result(owner)
+            except (Busy, ConversationBusy, GitTransportError, OSError,
+                    subprocess.TimeoutExpired, WorldContentConflict,
+                    WorldUpdatePending, subprocess.CalledProcessError) as error:
+                log.info("task assessment deferred: %s", deferral_cause(error))
+
+        def assessments() -> Iterator[Owner]:
+            for owner in dict.fromkeys(ConversationId(r["owner"])
+                                      for r in state.pending_result_assessments()):
+                yield ("assessment", owner), lambda owner=owner: assess_result(owner)
 
         def probes() -> Iterator[Owner]:
             if paused():
@@ -830,28 +853,20 @@ class StewardDaemon:
             for name in self.config.pipelines:
                 yield ("probe", name), lambda name=name: incidents.observe(name)
 
-        def desk_messages() -> Iterator[Owner]:
-            # Observations only: an operator's message is a live conversation
-            # and has its own ingress thread (`_start_desk`).
-            if desk is None or paused():
-                return
-            for message in desk.inbox.pending():
-                if message.observation:
-                    yield ("desk", message.msg_id), lambda m=message: desk.drain(m)
-
         def rhythm() -> Iterator[Owner]:
+            now = time.time()
+            observations = (self._procedures.world_rhythm_observations(now=now)
+                            if self.config.rhythms else {})
+            self._rhythm_health = dict(
+                observed_at=now, paused=paused(), rhythms=observations,
+                workers=self.config.controller.workers,
+                dispatch=dispatch.observation() if hasattr(dispatch, "observation") else None)
             if paused() or not self.config.rhythms:
                 return
             yield ("rhythms",), self._procedures.advance_rhythms
-            # World rhythms are one owner. Each writes the same world, and two
-            # started together make the later one's candidate a replay of a
-            # world that moved under it; the lease keeps that correct, not
-            # cheap. While one runs the owner is in flight, so the next due
-            # rhythm, in configured order, starts on the first poll after it.
-            due = next(iter(self._procedures.due_world_rhythms()), None)
-            if due is not None:
-                yield ("rhythm", "world"), lambda name=due[0], key=due[1]: (
-                    self._procedures.run_world_rhythm(conversations, name, key))
+            # One world writer; choose fresh due work when its queued slot runs.
+            if any(value['eligible'] for value in observations.values()):
+                yield ("rhythm", "world"), lambda: self._procedures.advance_world_rhythm(conversations)
 
         def targets() -> Iterator[Owner]:
             for name in self.config.targets:
@@ -872,7 +887,7 @@ class StewardDaemon:
                         return "route is not a configured Telegram topic"
                 if self._telegram is None:
                     return "Telegram transport unavailable"
-            elif owner.kind != "desk" or desk is None:
+            elif owner.kind != "desk" or desk_events is None:
                 return f"result transport unavailable for {owner}"
             return None
 
@@ -903,7 +918,7 @@ class StewardDaemon:
                 topic = (telegram.topics.get("incidents", telegram.topics.get("operator"))
                          if telegram else None)
                 route = (("telegram", str(topic)) if topic is not None else
-                         ("desk", "operator") if desk is not None else None)
+                         ("desk", "operator") if desk_events is not None else None)
                 if route is None:
                     record_error(receipt, "no configured operator result route")
                     continue
@@ -915,6 +930,9 @@ class StewardDaemon:
                 receipt.pop("delivery_error", None)
                 state.save_result_receipt(receipt)
             for owner in state.pending_task_result_conversations():
+                pending = state.pending_task_result_for(owner)
+                if pending and state.result_receipt(pending[2]).get("undeliverable"):
+                    continue  # Reported by /status; resending gets the same rejection.
                 error = route_error(owner)
                 if error:
                     receipt = state.retain_pending_result(owner)
@@ -929,7 +947,27 @@ class StewardDaemon:
             except (OSError, GitTransportError, Busy, subprocess.CalledProcessError) as error:
                 log.warning("result discovery deferred: %s", error)
 
-        lanes = (kernel.owners, probes, desk_messages, rhythm, targets, results)
+        def converge_world() -> None:
+            try:
+                published = checkpoint.converge()
+            except (Busy, GitTransportError, OSError, RuntimeError,
+                    subprocess.TimeoutExpired, WorldContentConflict, WorldUpdatePending) as error:
+                log.warning("world remote deferred: %s", deferral_cause(error))
+            else:
+                if published:
+                    log.info("world published %s", published)
+
+        next_world_exchange = [0.0]
+
+        def world_remote() -> Iterator[Owner]:
+            # Publication, like repository publication, continues while paused.
+            if checkpoint is None or checkpoint.transport is None:
+                return
+            if time.monotonic() >= next_world_exchange[0]:
+                next_world_exchange[0] = time.monotonic() + WORLD_EXCHANGE_SECONDS
+                yield ("world", "remote"), converge_world
+
+        lanes = (kernel.owners, probes, rhythm, targets, assessments, world_remote)
 
         def sync_tasks():
             try:
@@ -939,13 +977,15 @@ class StewardDaemon:
 
         next_retention = 0.0
 
-        native_homes = [Path(path) for path in self.config.provider.native_homes.values()]
-
         def retain_workspaces() -> None:
-            prune_tasks(kernel.tasks, native_homes)
+            prune_tasks(kernel.tasks)
             if checkpoint is not None:
-                prune_world_sessions(checkpoint, self.config.controller.world_session_idle_seconds,
-                                     native_homes)
+                prune_world_sessions(checkpoint, self.config.controller.world_session_idle_seconds)
+            retire_native_homes(
+                state, self.broker, self.config.provider.native_homes,
+                self.config.world.root if self.config.world else None,
+                {name: repository.path for name, repository in self.config.repositories.items()},
+            )
 
         def step() -> None:
             nonlocal next_retention
@@ -954,6 +994,9 @@ class StewardDaemon:
                 next_retention = time.monotonic() + 3600
             kernel.dispatch.submit(("task-intake", "git"), sync_tasks)
             dispatch.reap()
+            self._result_dispatch.reap()
+            for key, work in results():
+                self._result_dispatch.submit(key, work)
             kernel.tasks.flush_inputs()
             for key, work in chain.from_iterable(lane() for lane in lanes):
                 dispatch.submit(key, work)
@@ -978,6 +1021,7 @@ class StewardDaemon:
             execution_broker=self.broker,
             state=state,
             resolve_turn=resolve,
+            transport=world_transport(self.config),
         )
 
     @staticmethod
@@ -1003,62 +1047,35 @@ class StewardDaemon:
         if checkpoint is not None:
             checkpoint.startup_cleanup()
 
-    def _desk(self, conversations: ConversationService) -> Desk | None:
-        if self.config.desk is None:
+    def _desk(self, conversations: ConversationService) -> Source | None:
+        """The filesystem desk: clients queue messages in its inbox and read replies from its log."""
+        desk = self.config.desk
+        if desk is None:
             return None
-        inbox = DeskInbox(self.config.desk.inbox_dir)
-        events = DeskEvents(self.config.desk.events_file)
+        events = EventLog(desk.events_file)
 
-        def drain(message: DeskMessage | None = None) -> None:
-            if message is None:
-                pending = inbox.pending()
-                if not pending:
-                    return
-                message = pending[0]
-            message = inbox.claim(message)
-            try:
-                if not events.has_reply(message.msg_id):
-                    if message.profile is not None and self.config.desk.profile is None:
-                        conversation = conversations.conversation_for("desk", str(message.topic_id))
-                        if conversation.profile != message.profile:
-                            conversations.set_profile(
-                                conversation.conversation_id, cast(ProviderProfile, message.profile)
-                            )
-                    result = conversations.run_turn(
-                        transport="desk",
-                        transport_key=str(message.topic_id),
-                        source_event_key=message.msg_id,
-                        operator_id="harness:desk-watch" if message.observation else "desk",
-                        text=(f"{message.context}\n\n{message.text}" if message.context
-                              else message.text),
-                        episode_input=message.text,
+        def answer(message: InboundMessage) -> None:
+            if events.has_reply(message.msg_id):
+                return
+            if message.profile is not None and desk.profile is None:
+                conversation = conversations.conversation_for("desk", str(message.topic_id))
+                if conversation.profile != message.profile:
+                    conversations.set_profile(
+                        conversation.conversation_id, cast(ProviderProfile, message.profile)
                     )
-                    reply = result.transport_reply
-                    if message.observation:
-                        # This acknowledges acceptance, not repair completion.
-                        # Task result delivery retains its own ordinary receipt.
-                        receipt = (f"Controller accepted task {result.task_admission.task_id}."
-                                   if result.task_admission else
-                                   "Controller accepted observation; no new task admitted.")
-                        reply = f"{reply}\n\n{receipt}".strip()
-                    if reply:
-                        events.append("reply", reply, message.msg_id)
-                inbox.done(message)
-            except (Busy, ConversationBusy, WorldUpdatePending, WorldContentConflict) as error:
-                log.info("desk message %s deferred: %s", message.msg_id, deferral_cause(error))
-                inbox.requeue(message)
-                return
-            except (RuntimeExecutionError, RuntimeUnavailable) as error:
-                # A provider refusing one turn (a usage limit, a failed run) ends
-                # that turn, not the controller. Telegram treats it the same way.
-                log.warning("desk message %s failed: %s", message.msg_id, error)
-                inbox.park_failed(message)
-                return
-            except Exception:
-                inbox.park_failed(message)
-                raise
+            reply = conversations.run_turn(
+                transport="desk",
+                transport_key=str(message.topic_id),
+                source_event_key=message.msg_id,
+                operator_id="desk",
+                text=(f"{message.context}\n\n{message.text}" if message.context
+                      else message.text),
+                episode_input=message.text,
+            ).transport_reply
+            if reply:
+                events.append("reply", reply, message.msg_id)
 
-        return Desk(drain, inbox, events)
+        return Source(Inbox(desk.inbox_dir), answer)
 
     def _require_boundary(self) -> None:
         if not self.config.requires_execution_boundary:
@@ -1072,6 +1089,21 @@ class StewardDaemon:
     def _notify(self, text: str) -> None:
         """Deliver incident state changes without making transport part of policy."""
         self._notify_topic("incidents", text)
+
+    def _alert(self, key: str, text: str, *, quiet_seconds: float = 3600) -> None:
+        """Tell the operator, without a model, that the harness itself stalled.
+
+        A watcher that hands its findings to cognition fails exactly when
+        cognition does; on 2026-10-04 every such handoff was refused by the
+        storage reserve it was reporting. This path is the transport alone.
+        Each key speaks at most once per quiet period.
+        """
+        now = time.monotonic()
+        if now - self._alerted.get(key, -quiet_seconds) < quiet_seconds:
+            return
+        self._alerted[key] = now
+        log.warning("operator alert %s: %s", key, text)
+        self._notify_topic("incidents", text[:3500])
 
     def _notify_topic(self, topic: str, text: str) -> None:
         service = self._telegram
@@ -1095,15 +1127,19 @@ class StewardDaemon:
         self._stop.set()
         if self._telegram is not None:
             self._telegram.request_stop()
+        if self._inbox is not None:
+            self._inbox.request_stop()
         if self._kernel is not None:
             # Task turns have no routine deadline; draining writers would wait
             # on them indefinitely unless they are asked to end first.
             self._kernel.tasks.interrupt_running()
             self._kernel.stop()
+        self._result_dispatch.stop()
+        # Inbound answers reply through Telegram, so they finish before it closes.
+        if self._inbox is not None:
+            self._inbox.stop()
         if self._telegram is not None:
             self._telegram.stop()
-        if self._desk_ingress is not None and self._desk_ingress is not threading.current_thread():
-            self._desk_ingress.join()
         if self._health is not None:
             self._health.stop()
 

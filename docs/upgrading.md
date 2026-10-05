@@ -85,8 +85,9 @@ The rehearsal has to establish that:
 1. the target opens the converted database without resetting it;
 2. native session originals and the right provider homes resume under the real
    execution identity (an empty directory is not a login);
-3. prepared world work applies or stays explicitly unresolved, with no repeated
-   dependent admission, and interrupted unprepared work keeps its actual files;
+3. prepared world work applies or stays explicitly unresolved, independently
+   admitted tasks survive without duplicate admission, and interrupted unprepared
+   work keeps its actual files;
 4. task branches, pending inputs, withdrawals and origins survive;
 5. publication observes the trusted remote before claiming a result, including
    across a rebased push;
@@ -138,9 +139,72 @@ old database, adjacent files, task history, turn and source identities, and nati
 lineage; and writes `epoch50-conversion.json`, which must say `complete: true`
 before the result is deployable.
 
+## Callable notifications and task closure
+
+Drain active executions through the existing release path before switching code;
+`/pause` alone is not a writer barrier. New invocations receive the native tool
+and updated procedure instructions together. Remove any rhythm `deliver` keys
+from installed configuration before startup; unknown keys remain a validation
+error. Preserve task refs, native homes,
+world-turn records and adjacent result/transport receipts. Existing prepared
+messages replay exactly; unprepared final markers acquire no sending authority.
+A retained query-shaped waiting question is now ordinary operator input, so
+inspect any such waiting tasks and answer or retry them deliberately.
+
+World rhythms and procedure tasks use callable notification. Successful native
+completion no longer requires a close call; task waits and explicit continuation
+still use the existing tool until native callbacks are connected. No notification
+capability means recorded-only findings. Ordinary conversations also accept an empty
+reply after successful native completion, preserving that turn's own world changes
+and action receipts rather than passing them to another source.
+Verify tonight's schedule, current procedure files, provider MCP startup, a
+notification receipt, settled task closure and brief document freshness on
+the deployed host. Local scripted-provider tests do not establish those live
+facts. Do not manually replay accepted messages to test delivery.
+
 ## Report the outcome
 
 Say what version now runs, what was converted, what evidence survived, what
 acceptance passed and what is still open. Keep a local rehearsal, a staged release
 and a production cutover distinct. And do not carry a historical test total
 forward as evidence for a different revision.
+
+
+## World-rhythm obligations
+
+World-rhythm interruption leaves a held obligation across interval rollover.
+Existing interrupted turns also remain open on upgrade: inspect `/rhythm list`
+and retained native evidence, then use `/rhythm run <name>` to authorize one
+continuation. An accepted predecessor can wake its original interval's dependent
+after rollover. This can expose previously abandoned intervals in existing
+history; review them before resuming. No state-schema migration is needed:
+attempt source keys and ordinary turns/receipts own this behavior. Older releases
+do not understand continuation keys when deciding interval eligibility, so
+rolling back after a continuation can misreport completion or strand its chain.
+See the [world-rhythm contract](rhythms.md#world-rhythms).
+
+
+## One inbox for Telegram and the desk
+
+Telegram updates and desk messages now share one inbox format and one drain.
+The desk inbox, its event log and the `desk` configuration keys are unchanged,
+so desk clients need nothing. Telegram's retained updates move from
+`<state_db>.telegram-receipts/<chat>/<update>.json` to
+`<state_db>.telegram-inbox/<chat>/`, and the poll offset, which used to live
+only in memory, is persisted there as `offset`.
+
+The conversion is automatic and needs no operator step. On its first start,
+before polling, the Telegram ingress queues every unfinished receipt with its
+saved reply and confirmed pieces and sets the offset past every receipt. The
+previous release removed a receipt only after a poll had acknowledged its
+update, so every update it answered but had not yet acknowledged still has
+one, and none is answered twice. The persisted offset marks completion, so
+later starts skip the step. Receipts are never edited or removed, and
+`task-results/` there still holds result delivery receipts. If the receipts
+cannot be read, the controller logs `Telegram ingress NOT started` at critical
+level and runs without Telegram rather than polling from offset 0; desk
+messages, tasks and rhythms continue, and Telegram results stay pending.
+Repair the receipt directory and restart.
+
+Rolling back after the new controller has answered messages is not clean: the
+old release ignores the inbox and starts from offset 0.

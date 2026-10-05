@@ -113,8 +113,8 @@ rhythm's input; the world is read by its owner's assessment, not observed for
 admission. A failed fetch skips that rhythm for the poll without changing its
 quiet state; other rhythms remain eligible.
 
-A finished rhythm run whose findings do not ask to notify (`NOTIFY:`) owes its
-owner nothing. A review's checkpoint is retained evidence, a writing run's work
+A finished rhythm run records its findings without sending them. Notification
+calls queue independent delivery receipts. A review's checkpoint is retained evidence, a writing run's work
 lands, and the result lane never selects either for assessment or delivery; see
 [rhythms](rhythms.md).
 
@@ -159,7 +159,7 @@ serving or has durably received, rather than echo a requested revision.
 
 ## Observation feedback
 
-Only outcomes are delivered, never progress. A target has two outcomes at a
+Only outcomes are retained, never progress. A target has two outcomes at a
 revision: **live** (observed satisfied) and **failing** (`failed`, `blocked` or
 `failed-evidence`). `pending`, `busy`, `awaiting-evidence` and a moved ref are the
 loop at work and produce no receipt. A failure becomes an outcome only after it
@@ -169,7 +169,13 @@ do not reset it. The controller's shutdown drain fails every observe for a pass
 or two, and those failures, like any that recover within the window, are never
 told. The clock is in memory: a restart looks afresh.
 
-Each outcome is delivered once per revision. A failure that was told and then
+Routine success is retained as a settled receipt with an empty reply. It creates
+no message, assessment or routing obligation, including when several targets
+follow the same publication. Publication already reports task completion;
+observing that revision on each target does not independently authorize another
+update. Explicit `/git target` requests still return the current observation.
+
+A persistent failure is reported once per revision. A failure that was told and then
 recovers produces one "recovered" message. A failure that recovered before it
 was told stays silent, because no one acted on it and a recovery notice would
 describe a non-event. Transient failures that come and go within the window do
@@ -178,26 +184,26 @@ not add up to messages.
 A target outcome returns to an existing conversation only when its desired
 revision is exactly the commit that landed that conversation's task.
 The controller retains the dated driver observation and desired SHA in an ordinary
-result receipt. A live outcome carries its plain reply ("`<target>` is live at
-`<sha>`"), because the observation already says everything the owner's model
-could. A failing outcome carries no reply and goes through the same assessment
-and world-acceptance path as task results, where the owner can act or propose an
-authorized follow-up. Readiness still requires external observation and exact
-evidence; the assessment does not confer deployment authority.
+result receipt. A recovery carries a plain reply; routine success stays quiet.
+A failing outcome follows the task-result delivery and assessment path: its
+retained observation reaches the owner before optional assessment. Assessment
+retains its final prose and sends additional updates only through explicit
+`notify`, where the owner can act or propose an authorized follow-up. Readiness
+still requires external observation and exact evidence; the assessment does not confer deployment authority.
 
 Driver prose and error text vary between polls and are not new outcomes.
 Target locking serializes receipt selection with observation. Existing receipt
 replay retains order and retries transport without repeating accepted cognition.
-Full evidence remains in the receipt and the accepted world turn's commit; task
-completion remains publication, independently of deployment.
+Full evidence remains in the receipt and, when assessed, the accepted world
+turn's commit; task completion remains publication, independently of deployment.
 
 The recipient rule deliberately excludes historical ancestor candidates and tasks
 without an owner/publication. Coalesced or skipped intermediate candidates do not
 each receive task feedback. An outcome without an exact task recipient is
-retained in the same receipt store with no task ID and a plain report: live,
-recovered, or not reaching the revision with the driver's reason.
-The delivery lane assigns the configured `incidents` or `operator` Telegram
-topic, or the operator desk route. Without a configured route it remains pending
+retained in the same receipt store with no task ID. Failure and recovery carry a
+plain report: recovered, or not reaching the revision with the driver's reason.
+For these reports the delivery lane assigns the configured `incidents` or
+`operator` Telegram topic, or the operator desk route. Without a configured route it remains pending
 and `/status` explains the delivery problem. No synthetic task or model assessment
 is needed to report an external target's state. Ref-resolution failures likewise
 remain visible without pretending that a desired SHA was established.

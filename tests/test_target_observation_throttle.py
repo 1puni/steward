@@ -151,7 +151,7 @@ class _Script:
                       key=lambda receipt: receipt["sequence"])
 
 
-def test_progress_is_never_delivered_and_live_is_delivered_once(tmp_path, monkeypatch):
+def test_progress_is_not_retained_and_routine_success_is_quiet_evidence(tmp_path, monkeypatch):
     with _harness(tmp_path) as (daemon, _clone, _calls):
         target = _Script(daemon._targets, monkeypatch)
         assert "not yet observed" in target.step("pending")
@@ -163,7 +163,7 @@ def test_progress_is_never_delivered_and_live_is_delivered_once(tmp_path, monkey
         [live] = target.receipts()
         revision = live["observation"][0]
         assert live["observation"] == [revision, "satisfied"]
-        assert live["reply"] == f"production is live at {revision[:12]}."
+        assert live["reply"] == "" and live["done"]
         assert live["owner"] is None and live["task_id"] is None
 
 
@@ -201,7 +201,7 @@ def test_a_persistent_failure_is_told_once_and_its_recovery_once(tmp_path, monke
         target.step("ready", at=910)
         target.step("ready", at=920)
         assert len(target.receipts()) == 3
-        assert target.receipts()[-1]["reply"].startswith("production recovered and is live at ")
+        assert target.receipts()[-1]["reply"].startswith("production recovered; target satisfied at ")
 
 
 def test_a_told_failure_survives_restart_without_being_told_again(tmp_path, monkeypatch):
@@ -238,7 +238,7 @@ def test_receipts_from_before_outcomes_do_not_repeat_a_live_message(tmp_path, mo
         assert len(target.receipts()) == 1
 
 
-def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, monkeypatch):
+def test_an_owning_task_keeps_success_quiet_and_assesses_failure(tmp_path, monkeypatch):
     with _harness(tmp_path) as (daemon, clone, _calls):
         revision = _git("rev-parse", "HEAD", cwd=clone)
         targets = daemon._targets
@@ -254,8 +254,43 @@ def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, m
         target.step("failed", at=400)
         live, failed = target.receipts()
         assert (live["owner"], live["task_id"]) == ("telegram:42", "task-1")
-        # A live observation says everything; no model turn restates it.
-        assert live["reply"] == f"production is live at {revision[:12]}."
+        # Publication already reports task completion; success adds no send.
+        assert live["reply"] == "" and live["done"]
         # A failure is the owner's to assess, so it carries no canned reply.
         assert (failed["owner"], failed["task_id"]) == ("telegram:42", "task-1")
         assert "reply" not in failed
+
+
+def test_empty_site_target_does_not_claim_live_application(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, _clone, _calls):
+        target = _Script(daemon._targets, monkeypatch)
+        monkeypatch.setattr(daemon._targets, 'call', lambda name, operation, repository, revision:
+                            Observation(revision=revision, ready=True, details='no sites declared'))
+        target.step('ready')
+        [receipt] = target.receipts()
+        assert receipt['reply'] == '' and receipt['done']
+        assert 'no sites declared' in receipt['result_text']
+        assert not daemon._targets.state.pending_result_receipts()
+
+
+def test_two_targets_on_one_ref_stay_quiet_across_publications_and_restart(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, clone, _calls):
+        targets = daemon._targets
+        targets.config.targets["pages"] = targets.config.targets["production"].model_copy()
+        for generation in range(2):
+            for _ in range(2):
+                # Restart and observe both targets, as happens after self-deploy.
+                targets = Targets(targets.config, targets.state, targets.transports, targets.procedures)
+                scripted = _Script(targets, monkeypatch)
+                for name in ("production", "pages"):
+                    assert "satisfied" in targets.advance(name)
+                assert not targets.state.pending_result_receipts()
+                assert not targets.state.pending_task_result_conversations()
+            receipts = scripted.receipts()
+            assert len(receipts) == 2 * (generation + 1)
+            assert all(r["done"] and r["reply"] == "" for r in receipts)
+            assert all("Observed:" in r["result_text"] for r in receipts)
+            if generation == 0:
+                (clone / "README.md").write_text("next publication\n")
+                _git("commit", "-qam", "next publication", cwd=clone)
+                _git("push", "-q", "origin", "main", cwd=clone)

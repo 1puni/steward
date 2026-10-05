@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
 import logging
 import sqlite3
@@ -12,12 +11,14 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal, cast
 
+from steward_harness.task_calls import TaskCalls, TaskCallServer, REPLY_DIRECTIVE
 from steward_harness.cognition import Cognition, CognitionRequest
-from steward_harness.notify import notification
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
-from steward_harness.runtime.contracts import ReadScope, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable
+from steward_harness.runtime.contracts import (
+    NativeStorageDeferred, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable,
+)
 from steward_harness.world.orientation import repository_orientation, world_orientation
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldTurnWorktree, WorldUpdatePending, WorldContentConflict
 from steward_harness.lease import Busy, Lease
@@ -27,9 +28,7 @@ from steward_harness.state import (
     ConversationId,
     StateDatabase,
     TaskAdmission,
-    TaskAction,
     TaskId,
-    TaskSpec,
     Turn,
     TurnId,
 )
@@ -59,69 +58,18 @@ class ConversationTurnResult:
         return self.reply_text if self.execution_turn_id is None else ""
 
 
-@dataclass(frozen=True, slots=True)
-class ParsedTaskIntent:
-    """One final-line admission or steering proposal and its visible reply."""
+def _retired_task_markers(reply: str) -> tuple[str, str | None]:
+    """Hide retired control lines and refuse their authority, regardless of syntax.
 
-    reply_text: str
-    spec: TaskSpec | None
-    error: str | None = None
-    action: TaskAction | None = None
-
-
-def parse_task_intent(reply: str) -> ParsedTaskIntent:
-    """Parse one admission or steering object from the final nonblank line."""
+    Historical completed turns replay their accepted receipts. Unaccepted output
+    is only narration; parsing an old proposal cannot make it an operation.
+    """
     lines = reply.rstrip().splitlines()
-    marker_lines = [
-        index
-        for index, line in enumerate(lines)
-        if line.startswith((_TASK_MARKER, _ACTION_MARKER))
-    ]
-    if not marker_lines:
-        return ParsedTaskIntent(reply.strip(), None)
-
-    visible = "\n".join(
-        line for index, line in enumerate(lines) if index not in marker_lines
-    ).strip()
-    if len(marker_lines) != 1 or marker_lines[0] != len(lines) - 1:
-        return ParsedTaskIntent(visible, None, "marker must be the final line")
-
-    is_action = lines[-1].startswith(_ACTION_MARKER)
-    marker = _ACTION_MARKER if is_action else _TASK_MARKER
-    payload = lines[-1][len(marker) :].strip()
-    try:
-        value = json.loads(payload)
-    except json.JSONDecodeError:
-        return ParsedTaskIntent(visible, None, "marker is not valid JSON")
-    if is_action:
-        if not isinstance(value, dict) or set(value) != {"task_id", "action", "text"}:
-            return ParsedTaskIntent(
-                visible, None, "action must contain task_id, action, and text"
-            )
-        if not all(isinstance(item, str) for item in value.values()):
-            return ParsedTaskIntent(visible, None, "action fields must be strings")
-        try:
-            action = TaskAction(
-                TaskId(value["task_id"]), value["action"], value["text"].strip()
-            )
-        except ValueError as error:
-            return ParsedTaskIntent(visible, None, str(error))
-        return ParsedTaskIntent(visible, None, action=action)
-    if not isinstance(value, dict) or set(value) != {"repository", "title", "brief"}:
-        return ParsedTaskIntent(
-            visible, None, "task must contain repository, title, and brief"
-        )
-    if not all(isinstance(value[field], str) for field in value):
-        return ParsedTaskIntent(visible, None, "task fields must be strings")
-    try:
-        spec = TaskSpec(
-            repository=value["repository"].strip(),
-            title=value["title"].strip(),
-            brief=value["brief"].strip(),
-        )
-    except ValueError as error:
-        return ParsedTaskIntent(visible, None, str(error))
-    return ParsedTaskIntent(visible, spec)
+    visible = [line for line in lines if not line.startswith((_TASK_MARKER, _ACTION_MARKER))]
+    rejection = None if len(visible) == len(lines) else (
+        "Final task markers are retired; use a live task call and its receipt. No operation was performed."
+    )
+    return "\n".join(visible).strip(), rejection
 
 
 class ConversationService:
@@ -138,10 +86,9 @@ class ConversationService:
         timeout_seconds: int,
         desk_provider: ProviderFamily | None = None,
         desk_profile: ProviderProfile | None = None,
-        desk_access: Literal["operator", "read-only"] = "operator",
-        desk_readable_roots: tuple[Path, ...] = (),
         telegram_actions: tuple[str, ...] = (),
         delivery_roots: tuple[str, ...] = (),
+        telegram_admin=None,
     ) -> None:
         if not provider_order or len(set(provider_order)) != len(provider_order):
             raise ValueError("conversation provider order must be nonempty and unique")
@@ -162,11 +109,10 @@ class ConversationService:
             raise ValueError("desk provider must be configured")
         self._desk_provider = desk_provider
         self._desk_profile = desk_profile
-        self._desk_access = desk_access
-        self._desk_readable_roots = desk_readable_roots
         self._workspace = workspace
         self._timeout_seconds = timeout_seconds
 
+        self._telegram_admin = telegram_admin
         self._telegram_actions = telegram_actions
         self._delivery_roots = delivery_roots
 
@@ -202,8 +148,12 @@ class ConversationService:
         episode_input: str | None = None,
         images: tuple[Path, ...] = (),
         ongoing_only: bool = False,
-        allow_empty_output: bool = False,
+        allow_empty_output: bool = True,
         procedure: ProcedureConfig | None = None,
+        reserved_rhythm: bool = False,
+        notify_owner: str | None = None,
+        drive_tasks: bool = False,
+        automatic: bool = False,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
 
@@ -265,6 +215,12 @@ class ConversationService:
                     "an accepted execution; inspect retained evidence before retrying"
                 )
         event_id = str(turn.turn_id)
+        if reserved_rhythm:
+            if not turn.rhythm_continuation:
+                raise ValueError("reserved execution requires a rhythm continuation source")
+            # The rhythm lease excludes concurrent consumers. Custody is taken
+            # before tools; a claimed crash can never enter this branch.
+            started = (turn.state == "running" and self._claimed(event_id) is None)
         if not started:
             if self._state.prepared_turn(event_id) is not None:
                 accepted = self.accept_prepared(event_id)
@@ -281,17 +237,13 @@ class ConversationService:
             checkpoint = self._workspace if isinstance(self._workspace, WorldTurnCheckpoint) else None
             # A worldless turn reads the checkout it runs in, read-only.
             orientation = world_orientation() if checkpoint else repository_orientation()
-            if self._read_only_desk(conversation.conversation_id):
-                orientation = ("This is a public knowledge conversation. Only these trusted paths "
-                               "are readable: " + json.dumps(list(map(str, self._desk_readable_roots)))
-                               + ". Repository tasks, external actions and private history are unavailable.")
             return build_turn_prompt(
                 text,
                 transport=transport,
                 orientation=orientation,
                 event_id=event_id,
-                telegram_actions=() if self._read_only_desk(conversation.conversation_id) else self._telegram_actions,
-                delivery_roots=() if self._read_only_desk(conversation.conversation_id) else self._delivery_roots,
+                telegram_actions=self._telegram_actions,
+                delivery_roots=self._delivery_roots,
             )
 
         accepted = self._execute_turn(
@@ -303,6 +255,10 @@ class ConversationService:
             live_input=True,
             allow_empty_output=allow_empty_output,
             procedure=procedure,
+            keep_unclaimed=reserved_rhythm,
+            notify_owner=notify_owner,
+            drive_tasks=drive_tasks,
+            automatic=automatic,
         )
         assert isinstance(accepted, ConversationTurnResult)
         return accepted
@@ -316,8 +272,12 @@ class ConversationService:
         episode_input: str,
         images: tuple[Path, ...],
         live_input: bool,
-        allow_empty_output: bool = False,
+        allow_empty_output: bool = True,
         procedure: ProcedureConfig | None = None,
+        keep_unclaimed: bool = False,
+        notify_owner: str | None = None,
+        drive_tasks: bool = False,
+        automatic: bool = False,
     ) -> ConversationTurnResult | Turn:
         """Run, retain and accept one declared world-session turn.
 
@@ -365,13 +325,13 @@ class ConversationService:
                 if current is not None and current[0] == turn.turn_id:
                     del self._native_inputs[conversation.conversation_id]
 
-        checkpoint = (self._workspace if isinstance(self._workspace, WorldTurnCheckpoint)
-                      and not self._read_only_desk(conversation.conversation_id) else None)
+        checkpoint = self._workspace if isinstance(self._workspace, WorldTurnCheckpoint) else None
         worktree = None
         result = None
         withdrawn = False
+        task_calls = None
         def prepare_request() -> CognitionRequest:
-            nonlocal worktree, withdrawn
+            nonlocal worktree, withdrawn, task_calls
             prompt = build_prompt()
             if checkpoint is not None:
                 try:
@@ -379,7 +339,8 @@ class ConversationService:
                 except Busy:
                     # No provider has received the source, so the turn never
                     # happened: its replay after contention starts it afresh.
-                    self._state.withdraw_turn(turn.turn_id)
+                    if not keep_unclaimed:
+                        self._state.withdraw_turn(turn.turn_id)
                     withdrawn = True
                     raise
             # Establish custody before a provider can change the checkout. If
@@ -389,15 +350,27 @@ class ConversationService:
                 world_root=str(checkpoint.world.root) if checkpoint else None,
                 base_sha=worktree.base_sha if worktree else None,
             )
+            task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel,
+                                                 notify_owner=notify_owner, telegram_admin=self._telegram_admin,
+                                                 drive_tasks=drive_tasks))
+            if conversation.conversation_id.kind != "rhythm" or drive_tasks:
+                prompt += "\n\n" + task_calls.prompt
+                if drive_tasks:
+                    prompt += "\nThis rhythm may submit, answer, retry or note tasks for its configured owner. It cannot cancel tasks or resume cancelled work. Results return to the owner for normal assessment."
+                if not automatic and conversation.conversation_id.kind != "rhythm":
+                    prompt += "\n" + REPLY_DIRECTIVE
             return CognitionRequest(
                 execution_id=event_id,
+                task_call_socket=task_calls.path,
+                on_process_started=task_calls.bind,
                 native_owner=str(conversation.conversation_id),
                 native_generation=lambda provider: lineage_generation + (provider != lineage_provider),
                 profile=cast(ProviderProfile, conversation.profile),
                 prompt=prompt,
                 cwd=(worktree.path if worktree else self._workspace.world.root
                      if isinstance(self._workspace, WorldTurnCheckpoint) else self._workspace),
-                timeout_seconds=self._timeout_seconds,
+                **(procedure.limits(self._timeout_seconds) if procedure
+                   else dict(timeout_seconds=self._timeout_seconds)),
                 # A procedure's model pins only its own provider; fallbacks run their own.
                 **(procedure.routing(self._provider_order) if procedure
                    else dict(provider_order=self._order_from(conversation.provider))),
@@ -406,10 +379,7 @@ class ConversationService:
                 if conversation.provider_session_id
                 else None,
                 images=images,
-                sandbox_mode=("workspace-write" if checkpoint and not self._read_only_desk(
-                    conversation.conversation_id) else "read-only"),
-                read_scope=(ReadScope(str(conversation.conversation_id), self._desk_readable_roots)
-                            if self._read_only_desk(conversation.conversation_id) else None),
+                sandbox_mode="workspace-write" if checkpoint else "read-only",
                 allow_empty_output=allow_empty_output,
                 on_session_started=session_started,
                 on_session_invalidated=session_invalidated,
@@ -421,7 +391,11 @@ class ConversationService:
                 ) if live_input else (lambda _evidence: None),
             )
         try:
-            result = self._cognition.run(prepare_request, execution_id=event_id)
+            try:
+                result = self._cognition.run(prepare_request, execution_id=event_id)
+            finally:
+                if task_calls is not None:
+                    task_calls.close()
             release_input()
             if not result.output.strip() and not allow_empty_output:
                 # A returned provider failure like any other: nothing to
@@ -447,6 +421,15 @@ class ConversationService:
                 # work. A process crash or unretained completed reply remains
                 # uncertain and requires its original evidence to be inspected.
                 self._state.release_claim(turn.turn_id)
+            if isinstance(error, NativeStorageDeferred) and not withdrawn:
+                # Storage refused before any provider started: the turn never
+                # happened, so its source stays queued and starts it afresh.
+                try:
+                    if not keep_unclaimed:
+                        self._state.withdraw_turn(turn.turn_id)
+                    withdrawn = True
+                except RuntimeError:
+                    pass  # Linked or claimed after all: interrupt it below.
             if (not withdrawn and self._state.prepared_turn(event_id) is None
                     and not self._claimed(event_id)):
                 self._state.interrupt_turn(
@@ -481,7 +464,7 @@ class ConversationService:
         candidate_sha = checkpoint.retain(
             WorldTurnWorktree(checkpoint.workspace(ConversationId(row["conversation_id"]).workspace),
                               row["base_sha"]),
-            event_id, row["episode_input"], parse_task_intent(row["output"]).reply_text,
+            event_id, row["episode_input"], _retired_task_markers(row["output"])[0],
             row["source_event_key"],
         )
         self._state.record_candidate(event_id, candidate_sha)
@@ -519,60 +502,75 @@ class ConversationService:
     def deliver_task_result(
         self, conversation_id: ConversationId, *, send: Callable[[str, str], None],
     ) -> str | None:
-        """Assess a retained result, send it, and only then acknowledge delivery."""
-        receipt = self._state.retain_pending_result(
-            conversation_id,
-        )
+        """Send retained evidence without acquiring a conversation or cognition slot."""
+        receipt = self._state.retain_pending_result(conversation_id)
         if receipt is None:
             return None
-        result_text, source_event_key = receipt["result_text"], receipt["source_key"]
-        task_id = TaskId(receipt["task_id"]) if receipt.get("task_id") else None
         if "reply" not in receipt:
-            try:
-                receipt["reply"] = self._assess_task_result(
-                    conversation_id, task_id, result_text, source_event_key,
-                ) if task_id is not None else result_text
-            except (RuntimeExecutionError, RuntimeUnavailable) as error:
-                # The task's findings remain deliverable when assessment failed.
-                # Repeating uncertain model side effects is not transport retry.
-                receipt["reply"] = f"{result_text}\n\nResult assessment interrupted: {error}"
+            # A legacy receipt without a frozen message is not a send decision
+            # for a quiet automatic task. Only explicit notify receipts carry one.
+            quiet = bool(receipt.get("task_id") and receipt["source_key"].endswith(":done")
+                         and self._state.tasks.get(
+                TaskId(receipt["task_id"])).quiet)
+            receipt["reply"] = "" if quiet else receipt["result_text"]
+            # Freeze the delivery decision before attempting external transport.
+            receipt["assess"] = bool(receipt.get("task_id")) and not quiet
             self._state.save_result_receipt(receipt)
         if receipt["reply"]:
-            send(receipt["reply"], source_event_key)
+            send(receipt["reply"], receipt["source_key"])
         receipt.pop("delivery_error", None)
         receipt["done"] = True
         self._state.save_result_receipt(receipt)
         return receipt["reply"]
+
+    def assess_task_result(self, conversation_id: ConversationId) -> None:
+        """Optional judgment after delivery; final prose creates no second send."""
+        receipt = next((r for r in self._state.pending_result_assessments()
+                        if r["owner"] == str(conversation_id)), None)
+        if receipt is None:
+            return
+        task = self._state.tasks.get(TaskId(receipt["task_id"]))
+        current_source = f"task_result:{task.task_id}:{task.outcome}:{task.status.value}"
+        if task.owner != str(conversation_id) or (
+            receipt["source_key"].startswith("task_result:")
+            and receipt["source_key"] != current_source
+        ):
+            receipt["assessment_done"] = True
+            receipt["assessment_skipped"] = "task outcome or owner changed"
+            self._state.save_result_receipt(receipt)
+            return
+        try:
+            self._assess_task_result(
+                conversation_id, TaskId(receipt["task_id"]),
+                receipt["result_text"], receipt["source_key"],
+            )
+        except (RuntimeExecutionError, RuntimeUnavailable) as error:
+            receipt["assessment_error"] = str(error)
+        # Busy/world-acceptance failures propagate and remain pending. Accepted
+        # world turns replay their own receipt if this write is interrupted.
+        receipt["assessment_done"] = True
+        self._state.save_result_receipt(receipt)
 
     def _assess_task_result(
         self, conversation_id: ConversationId, task_id: TaskId,
         result_text: str, source_event_key: str,
     ) -> str:
         task = self._state.tasks.get(task_id)
-        procedure = self._state.tasks.read(task_id)[1].procedure
-        # A scheduled read-only run retains evidence for its owner to assess.
-        # Explicit requests and actionable execution outcomes still owe a report.
         target_result = source_event_key.startswith("target_result:")
-        # A writing run's work has landed; like a review's evidence, it is
-        # kept whether or not anyone hears of it.
-        rhythm = bool(procedure and procedure.event.startswith("rhythm:")
-                      and source_event_key.endswith(":done"))
-        review = target_result or rhythm
-        # A scheduled run arrives here only when its findings asked to notify.
-        notice = notification(task.findings) if rhythm else ""
         self._state.open_conversation(conversation_id,
                                       provider=self._state.tasks.default_provider,
                                       profile=self._state.tasks.default_profile)
         conversation = self._state.get_conversation(conversation_id)
         prior = self._state.turn_for_source(conversation_id, source_event_key)
         text = prior.input_text if prior is not None else build_result_assessment_request(
-            task.brief, result_text, quiet=review, notice=notice,
+            task.brief, result_text,
         )
         result = self.run_turn(
             transport=conversation.transport,
             transport_key=conversation.transport_key,
             source_event_key=source_event_key,
             operator_id="harness:task-result",
+            automatic=True,
             text=text,
             allow_empty_output=True,
             # The episode names the result; it does not restate it. Everything
@@ -583,27 +581,7 @@ class ConversationService:
             episode_input=(result_text if target_result else
                            f"Harness task result for {task_id} in {task.repository}."),
         )
-        reply = result.reply_text
-        # Old accepted assessments retain the meaning of their frozen request.
-        # New completion requests never instruct or interpret a silence token.
-        legacy = prior is not None and "reply exactly silent" in text.casefold()
-        if legacy and reply.strip() == "SILENT":
-            reply = ""
-        if rhythm and notice and not legacy and result.execution_turn_id is None:
-            # The run decided that its owner hears of it; this turn may only
-            # say it differently. Its other words stay in the world, and a
-            # follow-up it admitted is named, since that is news too.
-            message = notification(reply) or notice
-            if result.task_admission is not None:
-                message += f"\n\nTask admitted: {result.task_admission.task_id}"
-            return message
-        if review and result.execution_turn_id is None:
-            return reply
-        return (
-            result_text
-            if result.execution_turn_id is not None or not reply.strip()
-            else f"{result_text}\n\n{reply}"
-        )
+        return result.reply_text
 
     def accept_prepared(self, event_id: str) -> ConversationTurnResult | Turn:
         row = self._state.prepared_turn(event_id)
@@ -616,37 +594,12 @@ class ConversationService:
             current = self._state.prepared_turn(event_id)
             if current["state"] == "completed":
                 return current
-            parsed = parse_task_intent(current["output"])
-            rejection = (
-                f"Malformed task proposal: {parsed.error}." if parsed.error else None
-            )
-            spec = parsed.spec
-            action = parsed.action
-            if self._read_only_desk(turn.conversation_id) and (spec is not None or action is not None):
-                rejection = "Read-only desk cannot admit or change tasks."
-                spec, action = None, None
-            if turn.conversation_id.kind == "rhythm" and (spec is not None or action is not None):
-                # A task's result returns to its owner, and a rhythm is not one.
-                rejection = "A rhythm cannot admit or change tasks."
-                spec, action = None, None
-            configured = self._state.tasks.repositories
-            if spec is not None and spec.repository not in (configured or ()):
-                rejection, spec = (
-                    f"Task proposal for {spec.repository!r} was not authorized.",
-                    None,
-                )
+            visible, rejection = _retired_task_markers(current["output"])
             return self._state.accept_turn(
-                event_id,
-                visible_reply=parsed.reply_text,
-                spec=spec,
-
-                action=action,
-                rejection=rejection,
+                event_id, visible_reply=visible, spec=None, rejection=rejection,
             )
 
         if fresh and row["world_root"] is not None:
-            if self._read_only_desk(turn.conversation_id):
-                raise RuntimeExecutionError("Read-only desk cannot accept a prior writable world turn")
             if not isinstance(self._workspace, WorldTurnCheckpoint):
                 raise RuntimeError("pending turn requires its configured Git world")
             row = self._workspace.apply(event_id, finalize)
@@ -677,9 +630,6 @@ class ConversationService:
         if current.provider == provider:
             return current
         return self._state.bind_conversation_provider(conversation_id, provider, None)
-
-    def _read_only_desk(self, identity: ConversationId) -> bool:
-        return identity.transport == "desk" and self._desk_access == "read-only"
 
     def conversation_for(self, transport: Transport, transport_key: str) -> Conversation:
         """Resolve command routing through the same real transport identity as turns."""
