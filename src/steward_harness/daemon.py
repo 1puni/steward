@@ -603,12 +603,18 @@ class StewardDaemon:
         worktrees_root = Path(self.config.provider.workdir) / "worktrees"
         state.tasks.transports = transports
 
+        def telegram_admin(scope, request):
+            if self._telegram is None:
+                raise ValueError("Telegram is not available")
+            return self._telegram.admin(scope, request)
+
         conversations = ConversationService(
             state,
             cognition,
             provider_order=self.config.provider.family_order,
             profile=self.config.provider.default_profile,
             workspace=checkpoint or Path(self.config.provider.workdir).resolve(),
+            telegram_admin=telegram_admin,
             timeout_seconds=self.config.provider.timeout_seconds,
 
             desk_provider=self.config.desk.provider if self.config.desk else None,
@@ -650,6 +656,7 @@ class StewardDaemon:
             timeout_seconds=self.config.provider.timeout_seconds,
             poll_seconds=self.config.controller.poll_seconds,
             actor_name=self.config.identity.name,
+            telegram_admin=telegram_admin,
         )
         incidents = IncidentProbeLoop(
             state,

@@ -166,7 +166,9 @@ class TaskRunner:
         actor_name: str = "Steward",
         actor_email: str = "steward@localhost",
         poll_seconds: float = 5,
+        telegram_admin=None,
     ) -> None:
+        self.telegram_admin = telegram_admin
         self.state = state
         self.repositories = dict(repositories)
         self.transports = dict(transports)
@@ -686,7 +688,7 @@ class TaskRunner:
             return request
 
         task_calls = None
-        calls = TaskExecutionCalls(self.state, task.task_id, self.repositories)
+        calls = TaskExecutionCalls(self.state, task.task_id, self.repositories, telegram_admin=None if procedure else self.telegram_admin)
         watcher = None if procedure else threading.Thread(
             target=self._watch_offers, args=(task.task_id, live),
             name=f"offers-{task.task_id}", daemon=True)

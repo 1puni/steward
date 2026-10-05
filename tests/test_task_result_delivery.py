@@ -450,3 +450,14 @@ def test_unprepared_legacy_rhythm_receipt_does_not_send_final_markers(tmp_path):
     assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("legacy marker sent")) == ""
     assert not service._state.pending_result_assessments()
     assert len(cognition.requests) == 1
+
+
+def test_automatic_assessment_keeps_recorded_only_final_instruction(tmp_path):
+    service, facts, cognition, owner, task_id = admitted(tmp_path)
+    close_task_slice(service._state, task_id, 'ask', detail='Needs help')
+    service.deliver_task_result(owner, send=lambda *_: None)
+    cognition.replies.append(_reply('Recorded.'))
+    service.assess_task_result(owner)
+    prompt = cognition.requests[-1].prompt
+    assert 'Final replies from automatic runs are recorded only' in prompt
+    assert 'Your final reply is delivered to the operator' not in prompt

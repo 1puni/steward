@@ -19,7 +19,7 @@ from steward_harness.provider_types import (
     ProviderProfile,
 )
 
-TelegramAgentAction = Literal["pin_reply", "pin_message"]
+TelegramAgentAction = Literal["pin_reply", "pin_message", "set_photo", "set_description"]
 
 _DEFAULT_UNTRUSTED_ENVIRONMENT = (
     "COLORTERM",
