@@ -19,7 +19,7 @@ import time
 from http.server import BaseHTTPRequestHandler
 from threading import Thread
 
-from steward_harness.state import ConversationId, TaskAction, TaskId, TaskSpec, TaskOriginKind
+from steward_harness.state import ConversationId, TaskAction, TaskId, TaskSpec, TaskOriginKind, TaskStatus
 from steward_harness.task_store import PREFIX
 
 
@@ -73,7 +73,7 @@ def queue_notification(state, *, owner, source, key, text, require_current=lambd
 class TaskCalls:
     """Authority is captured by the controller, never supplied by the caller."""
 
-    def __init__(self, state, turn_id, *, cancel=lambda _execution: False, notify_owner=None, telegram_admin=None):
+    def __init__(self, state, turn_id, *, cancel=lambda _execution: False, notify_owner=None, telegram_admin=None, drive_tasks=False):
         self.state = state
         self.telegram_admin = telegram_admin
         self.cancel = cancel
@@ -85,6 +85,8 @@ class TaskCalls:
             raise ValueError("task calls require a running conversation")
         self.owner = ConversationId(row["conversation_id"])
         self.notify_owner = notify_owner if self.owner.kind == "rhythm" else str(self.owner)
+        self.drive_tasks = drive_tasks and self.owner.kind == "rhythm" and bool(self.notify_owner)
+        self.task_owner = ConversationId(self.notify_owner) if self.owner.kind == "rhythm" and self.notify_owner else self.owner
         self.operator_id = row["operator_id"]
         self.generation = state.lineage(self.owner).generation
 
@@ -122,7 +124,8 @@ class TaskCalls:
         if not all(isinstance(value, str) for value in request.values()):
             raise ValueError("fields must be strings")
         if self.owner.kind == "rhythm" and operation not in {"notify", "list", "show"}:
-            raise ValueError("rhythms may only notify or inspect their owner's tasks")
+            if not self.drive_tasks or operation not in {"submit", "answer", "retry", "note"}:
+                raise ValueError("rhythms may only notify or inspect their owner's tasks unless drive_tasks enables submit/answer/retry/note")
         if self.owner.kind == "rhythm" and operation in {"list", "show"} and not self.notify_owner:
             raise ValueError("this rhythm has no task inspection owner")
         tasks = self.state.tasks
@@ -193,7 +196,9 @@ class TaskCalls:
                 if request["repository"] not in (tasks.repositories or ()):
                     raise ValueError("repository work is not authorized")
             else:
-                self._owned(request["task_id"], operator_id)
+                task = self._owned(request["task_id"], operator_id)
+                if self.owner.kind == "rhythm" and operation == "retry" and task.status is TaskStatus.CANCELLED:
+                    raise ValueError("a rhythm cannot resume cancelled work")
                 if operator_id == "harness:desk-watch" and operation != "note":
                     raise ValueError("a desk observation may only note owned work")
             # Search only accepted task first-parent histories: native work cannot
@@ -227,11 +232,11 @@ class TaskCalls:
                 self.state._insert_task(connection, TaskSpec(repository=request["repository"],
                     title=request["title"], brief=request["brief"]), task_id=task_id,
                     source=source, kind=TaskOriginKind.CONVERSATION, origin_ref=None,
-                    conversation_id=self.owner, provider=lineage.provider, profile=lineage.profile)
+                    conversation_id=self.task_owner, provider=lineage.provider, profile=lineage.profile)
             else:
                 task_id = TaskId(request["task_id"])
                 _, rejection = self.state._apply_task_action(
-                    self.owner, operator_id,
+                    self.task_owner, operator_id,
                     TaskAction(task_id, operation, request["text"]), source=source)
                 if rejection:
                     raise ValueError(rejection)
