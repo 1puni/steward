@@ -20,6 +20,7 @@ from steward_harness.landing.checkpoint import (
     WorktreeCheckpointError,
 )
 from steward_harness.landing.worktree import WorktreeError, WorktreeManager
+from steward_harness.runtime.native_evidence import CAPTURED_ROOT
 from steward_harness.prompts import RHYTHM_FINDINGS, build_task_prompt, build_procedure_scope
 from steward_harness.provider_types import ProviderFamily
 from steward_harness.runtime.contracts import (
@@ -799,12 +800,24 @@ class TaskRunner:
         A review has no work of its own. Whatever an earlier or interrupted
         slice left in the checkout is discarded rather than committed, so every
         slice — a retry included — reviews the candidate, and every commit on
-        the task branch records only how a slice ended. Ignored files stay, as
-        they are never committed.
+        the task branch records only how a slice ended. Native records under
+        `artefacts/` are the harness's evidence of those slices, not the
+        review's work, so they stay. Ignored files stay, as they are never
+        committed.
         """
-        for args in (("read-tree", "--reset", "-u", task.procedure.candidate), ("clean", "-fdq")):
-            if run_agent_git(self.broker, *args, cwd=worktree, timeout=60).returncode:
-                raise RuntimeExecutionError("read-only review could not reopen at its exact candidate")
+        def git(*args):
+            result = run_agent_git(self.broker, *args, cwd=worktree, timeout=60)
+            if result.returncode:
+                raise RuntimeExecutionError("read-only review could not reopen at its exact candidate: "
+                                            + (result.stderr or "").strip()[-300:])
+            return [path for path in result.stdout.split("\0") if path and not path.startswith(CAPTURED_ROOT)]
+
+        changed = git("diff", "-z", "--name-only", "--no-renames", task.procedure.candidate)
+        added = git("ls-files", "-z", "--others", "--exclude-standard")
+        if changed:
+            git("restore", f"--source={task.procedure.candidate}", "--staged", "--worktree", "--", *changed)
+        if added:
+            git("clean", "-fq", "--", *added)
 
     def _provider_order(self, primary: str) -> tuple[ProviderFamily, ...]:
         return (

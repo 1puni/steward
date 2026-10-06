@@ -284,13 +284,24 @@ def test_interrupted_read_only_review_is_retried_at_its_exact_candidate(tmp_path
     def sandbox_failed(request):
         transcribe(request)
         (Path(request.cwd) / "partial.txt").write_text("left by the failed run")
+        record = Path(request.cwd) / "artefacts" / "codex" / "sessions" / "rollout-failed.jsonl"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text("{}\n")
         raise RuntimeExecutionError("provider sandbox could not start")
     adapter.execute = sandbox_failed
     runner.prepare(task)
     assert "could not start" in state.tasks.get(task).reason
     branch = state.tasks.get(task).branch
     agent = runner.repositories["app"].path
-    assert _git("rev-parse", f"{branch}^{{tree}}", cwd=agent) == _git("rev-parse", f"{candidate}^{{tree}}", cwd=agent)
+
+    def reviewed(revision):
+        """The tree a review saw: everything but the harness's native records."""
+        return [line for line in _git("ls-tree", "-r", revision, cwd=agent).splitlines()
+                if not line.split("\t")[1].startswith("artefacts/")]
+
+    assert reviewed(branch) == reviewed(candidate)
+    # The failed run's native record is evidence, and stays on the branch.
+    assert "artefacts/codex/sessions/rollout-failed.jsonl" in _git("ls-tree", "-r", "--name-only", branch, cwd=agent)
 
     adapter.execute = transcribe
     state.tasks.retry(task, "Run the review again")
@@ -299,7 +310,8 @@ def test_interrupted_read_only_review_is_retried_at_its_exact_candidate(tmp_path
     assert len(adapter.requests) == count + 1
     assert state.tasks.get(task).verdict == "pass"
     assert procedures.require(("security-one",), "app", candidate, candidate) == ""
-    assert _git("rev-parse", f"{branch}^{{tree}}", cwd=agent) == _git("rev-parse", f"{candidate}^{{tree}}", cwd=agent)
+    assert reviewed(branch) == reviewed(candidate)
+    assert "artefacts/codex/sessions/rollout-failed.jsonl" in _git("ls-tree", "-r", "--name-only", branch, cwd=agent)
 
 
 def test_failed_requirement_returns_the_reviewers_findings(tmp_path):
