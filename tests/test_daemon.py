@@ -43,6 +43,7 @@ from steward_harness.state import (
     TaskStatus,
 )
 from steward_harness.lease import Busy
+from steward_harness.telegram.api import TelegramAPIError
 from world_fixtures import ReadingAdapter
 
 
@@ -981,6 +982,73 @@ def test_owned_live_target_reaches_its_owner_without_a_model_turn(tmp_path):
             work()
     assert sent == [(1, 44, "app is live at aaaaaaaaaaaa.", "target_result:owned")]
     assert state.result_receipt("target_result:owned")["done"]
+
+
+def test_a_refused_result_settles_and_the_next_one_for_its_owner_goes(tmp_path):
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    for sequence in (1, 2):
+        state.save_result_receipt({
+            "owner": "telegram:42", "task_id": None, "target": "app",
+            "sequence": sequence, "source_key": f"target_result:{sequence}",
+            "result_text": f"Observation {sequence}", "reply": f"Report {sequence}",
+        })
+    daemon, queued, step = _result_pass(tmp_path, config, state)
+    sent = []
+
+    def send_result(_chat, _topic, text, _key):
+        if text == "Report 1":
+            raise TelegramAPIError("HTTP 400: message thread not found", rejected=True)
+        sent.append(text)
+
+    daemon._telegram = SimpleNamespace(config=config.telegram, send_result=send_result)
+    for _ in range(3):
+        queued.clear()
+        step()
+        for key, work in queued:
+            if key[0] == "result":
+                work()
+    assert sent == ["Report 2"]
+    refused = state.result_receipt("target_result:1")
+    assert refused["done"] and "message thread not found" in refused["rejected"]
+    assert state.pending_result_receipts() == []
+
+
+def test_a_transient_send_failure_keeps_the_result_owed(tmp_path):
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    state.save_result_receipt({
+        "owner": "telegram:42", "task_id": None, "target": "app", "sequence": 1,
+        "source_key": "target_result:1", "result_text": "Observation", "reply": "Report",
+    })
+    daemon, queued, step = _result_pass(tmp_path, config, state)
+
+    def send_result(*_args):
+        raise TelegramAPIError("Telegram API HTTP 502: bad gateway")
+
+    daemon._telegram = SimpleNamespace(config=config.telegram, send_result=send_result)
+    step()
+    for key, work in queued:
+        if key[0] == "result":
+            work()
+    assert not state.result_receipt("target_result:1").get("done")
+
+
+def test_status_names_results_telegram_refused(tmp_path):
+    commands = _status_commands(tmp_path)
+    commands.state.save_result_receipt({
+        "owner": "telegram:99", "task_id": None, "source_key": "target_result:refused",
+        "result_text": "Retained", "done": True, "rejected": "message thread not found",
+        "rejected_at": time.time(),
+    })
+    reply = commands("status", None, 1, 42, 7)
+    assert "Refused by Telegram (24h): telegram:99: message thread not found" in reply
 
 
 def test_status_exposes_undeliverable_receipts(tmp_path):

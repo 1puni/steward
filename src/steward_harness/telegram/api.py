@@ -24,11 +24,18 @@ class TelegramAPIError(RuntimeError):
 
     ``retry_after`` is Telegram's own instruction, in seconds, present only on
     a 429. It is the wait that will actually clear; anything shorter is spent.
+
+    ``rejected`` means this request will be answered the same way every time:
+    Telegram called it a bad request (a deleted topic, unparseable markup, an
+    oversized message), or the harness refused it before sending. Retrying it
+    never delivers; it only holds up whatever is queued behind it.
     """
 
-    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+    def __init__(self, message: str, *, retry_after: float | None = None,
+                 rejected: bool = False) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+        self.rejected = rejected
 
 
 #: Telegram never asks for more than a few minutes; a larger number is a bug
@@ -79,6 +86,9 @@ class TelegramAPI:
             raise TelegramAPIError(
                 f"Telegram API HTTP {res.status_code}: {res.text[:200]}",
                 retry_after=_retry_after(res),
+                # 401/403/404 name the bot or chat, not this message, and
+                # clear when the operator repairs them; only 400 is the request.
+                rejected=res.status_code == 400,
             )
 
         try:

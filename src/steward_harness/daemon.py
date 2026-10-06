@@ -175,6 +175,10 @@ class KernelCommands:
                 f"{r.get('owner') or r.get('target', 'unowned')}: {r['delivery_error']}"
                 for r in blocked[:10]
             )
+            refused = self.state.refused_results(time.time() - 86_400)
+            if refused:
+                delivery += "\nRefused by Telegram (24h): " + "; ".join(
+                    f"{r['owner']}: {r['rejected']}" for r in refused[:10])
             # Rhythms are silent unless they ask, so their silence is counted.
             silent = self.state.recorded_not_sent(time.time() - 86_400)
             recorded = "" if not silent else (
@@ -808,7 +812,10 @@ class StewardDaemon:
 
         def deliver_result(owner: ConversationId) -> None:
             """Report one finished task back to the transport that admitted it."""
+            sending: list[str] = []
+
             def send(text: str, source_key: str) -> None:
+                sending.append(source_key)
                 if owner.kind == "desk" and desk is not None:
                     desk.events.append("reply", text, source_key)
                 elif owner.kind == "telegram" and self._telegram is not None:
@@ -819,7 +826,18 @@ class StewardDaemon:
                     raise OSError(f"result transport unavailable for {owner}")
             try:
                 conversations.deliver_task_result(owner, send=send)
-            except (Busy, ConversationBusy, GitTransportError, TelegramAPIError,
+            except TelegramAPIError as error:
+                if not (error.rejected and sending):
+                    log.info("task result deferred: %s", deferral_cause(error))
+                    return
+                # Refused the same way every time: retrying would keep every
+                # later result for this owner queued behind it.
+                receipt = state.result_receipt(sending[-1])
+                receipt.pop("delivery_error", None)
+                receipt.update(done=True, rejected=str(error), rejected_at=time.time())
+                state.save_result_receipt(receipt)
+                log.error("result %s refused by Telegram: %s", receipt["source_key"], error)
+            except (Busy, ConversationBusy, GitTransportError,
                     OSError, subprocess.TimeoutExpired, WorldContentConflict,
                     WorldUpdatePending, subprocess.CalledProcessError) as error:
                 log.info("task result deferred: %s", deferral_cause(error))

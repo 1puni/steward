@@ -2385,3 +2385,82 @@ def test_poll_wait_budget_reaches_every_reply_piece(tmp_path, monkeypatch, piece
     with pytest.raises(TelegramDeliveryError):
         service.send_reply(1, 7, text, max_wait_seconds=service_module._POLL_THREAD_MAX_WAIT)
     assert sleeps == []
+
+
+def test_a_bad_request_is_refused_at_once_and_settles_the_reply(tmp_path, monkeypatch):
+    """Telegram answers a 400 the same way every time; retrying only delays."""
+    monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(service_module, "format_markdown_chunks", lambda _text: ["first", "second"])
+    service = _service(tmp_path)
+    attempts = []
+
+    def send(_chat, text, **_kwargs):
+        attempts.append(text)
+        if text == "second":
+            raise TelegramAPIError("HTTP 400: message thread not found", rejected=True)
+        return 101
+
+    monkeypatch.setattr(service.api, "send_message", send)
+    with pytest.raises(TelegramDeliveryError) as refused:
+        service.send_reply(1, 42, "anything")
+    assert refused.value.rejected
+    assert attempts == ["first", "second"]
+
+
+def test_one_retryable_piece_keeps_the_whole_reply_retryable(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(service_module, "format_markdown_chunks", lambda _text: ["first", "second"])
+    service = _service(tmp_path)
+
+    def send(_chat, text, **_kwargs):
+        raise TelegramAPIError("refused", rejected=text == "first")
+
+    monkeypatch.setattr(service.api, "send_message", send)
+    with pytest.raises(TelegramDeliveryError) as failed:
+        service.send_reply(1, 42, "anything")
+    assert not failed.value.rejected
+
+
+def test_a_refused_reply_does_not_hold_its_topic(tmp_path, monkeypatch):
+    (tmp_path / "token").write_text("tok")
+    received = []
+
+    def respond(_event, _chat, _topic, _user, text, _images):
+        received.append(text)
+        if text == "second":
+            service.request_stop()
+        return f"reply to {text}"
+
+    service = TelegramService(
+        TelegramConfig(token_path=str(tmp_path / "token"), chat_id=1, allowed_users=(2,)),
+        respond, command_handler=lambda *args: pytest.fail("not a command"),
+        state_db=StateDatabase(tmp_path / "state.db"), execution_broker=_broker(),
+    )
+    replies = []
+
+    def send_reply(_chat, _topic, text, **_kw):
+        if text == "reply to first":
+            raise TelegramDeliveryError("1 of 1 reply piece(s) failed", rejected=True)
+        replies.append(text)
+
+    monkeypatch.setattr(service, "send_reply", send_reply)
+    monkeypatch.setattr(service.api, "send_chat_action", lambda *a, **kw: None)
+    for update_id, text in [(1, "first"), (2, "second")]:
+        service._ingest_update({
+            "update_id": update_id,
+            "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": text},
+        })
+    _drain(service)
+    assert received == ["first", "second"]
+    assert replies == ["reply to second"]
+    assert not service._has_pending()
+
+
+@pytest.mark.parametrize(("status", "rejected"), [(400, True), (401, False), (403, False), (429, False), (502, False)])
+def test_only_a_bad_request_is_a_refusal(monkeypatch, status, rejected):
+    api = TelegramAPI("tok")
+    response = httpx.Response(status, json={"ok": False, "description": "no"})
+    monkeypatch.setattr(api._client, "request", lambda *a, **kw: response)
+    with pytest.raises(TelegramAPIError) as error:
+        api.send_message(1, "text")
+    assert error.value.rejected is rejected

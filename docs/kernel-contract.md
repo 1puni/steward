@@ -283,7 +283,10 @@ saved reply, including silence, without repeating assessment. Checkpoints are lo
 Git/log evidence; they have no separate broadcast channel. Accepted world work is replayed without another model turn;
 failed assessment still delivers the retained task findings with its interruption.
 Telegram reuses per-piece receipts across retry and restart. Preserve both adjacent
-receipt directories during upgrades. A crash between the transport accepting a send
+receipt directories during upgrades. A send Telegram refuses as a bad request (HTTP
+400: a deleted topic, unparseable markup) is never retried: the reply is settled as
+far as it got, the result receipt records `rejected`, and `/status` names it for a
+day. Every other failure, including 401, 403 and 429, stays retryable. A crash between the transport accepting a send
 and the local receipt write can still duplicate that piece: this is at-least-once
 delivery with receipts, not exactly-once.
 

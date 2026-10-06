@@ -1388,6 +1388,12 @@ class StateDatabase:
                  and datetime.fromisoformat(task.updated_at).timestamp() >= since]
         return sorted(world) + sorted(tasks)
 
+    def refused_results(self, since: float) -> list[dict]:
+        """Results Telegram refused since `since`: settled, so nothing else names them."""
+        return [receipt for receipt in (
+            json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
+            if receipt.get("rejected_at", 0) >= since]
+
     def retain_pending_result(self, conversation_id) -> dict | None:
         """Retain the selected outcome before assessment or route diagnostics."""
         pending = self.pending_task_result_for(conversation_id)

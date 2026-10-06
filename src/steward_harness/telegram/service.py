@@ -75,6 +75,8 @@ class TelegramDeliveryError(TelegramAPIError):
 
     Never swallow this into a log line: a caller that only logs it recreates the
     exact "silent failure, fabricated success" bug this class exists to prevent.
+    It is `rejected` only when every failed piece was: then the reply is
+    settled, delivered as far as it ever will be, and must not be retried.
     """
 
 
@@ -485,6 +487,15 @@ class TelegramService:
                 self._handle_update(update)
             except (TelegramAPIError, Busy, ConversationBusy,
                     WorldUpdatePending, WorldContentConflict) as exc:
+                if getattr(exc, "rejected", False):
+                    # Requeued at the front, a reply Telegram refuses would hold
+                    # every later message in its topic behind it, forever.
+                    log.error("Telegram refused the reply to an update; settling it: %s", exc)
+                    path = self._receipt_path(update)
+                    if path is not None:
+                        write_receipt(path, {**self._read_receipt(path), "done": True,
+                                             "rejected": str(exc)})
+                    continue
                 log.debug("Transient error processing update, requeueing: %s", exc)
                 # Return to the front so per-topic ordering is preserved.
                 with self._queue_lock:
@@ -836,6 +847,7 @@ class TelegramService:
         clean_text, artifacts = extract_artifact_markers(clean_text)
         chunks = format_markdown_chunks(clean_text)
         failures: list[str] = []
+        retryable = False
         artifact_failures: list[tuple[OutboundArtifact, str, Path | None]] = []
         sent_message_ids: list[int] = []
         allowed_actions = set(self.config.agent_actions)
@@ -854,7 +866,7 @@ class TelegramService:
             ):
                 failures.append("pin_message message id exceeds Telegram's numeric range")
         if failures:
-            raise TelegramDeliveryError("; ".join(failures))
+            raise TelegramDeliveryError("; ".join(failures), rejected=True)
 
         for index, chunk in enumerate(chunks):
             try:
@@ -873,6 +885,7 @@ class TelegramService:
             except TelegramAPIError as exc:
                 log.error("Failed to send Telegram reply chunk after retries: %s", exc)
                 failures.append(f"message chunk: {exc}")
+                retryable = retryable or not exc.rejected
 
         for index, artifact in enumerate(artifacts):
             if (getattr(self._delivery_context, "path", None) is not None
@@ -885,7 +898,8 @@ class TelegramService:
                 if size > limit:
                     raise TelegramAPIError(
                         f"{path.name} is {size // (1024 * 1024)}MB; "
-                        f"configured Telegram cap is {self.config.media_max_mb}MB"
+                        f"configured Telegram cap is {self.config.media_max_mb}MB",
+                        rejected=True,
                     )
                 if artifact.kind is ArtifactKind.IMAGE:
                     send = lambda p=path: self.api.send_photo(
@@ -901,6 +915,7 @@ class TelegramService:
                 log.error("Failed to send %s %s after retries: %s", label, artifact.path, exc)
                 detail = f"{label} {artifact.path}: {exc}"
                 failures.append(detail)
+                retryable = retryable or not getattr(exc, "rejected", False)
                 record = self._quarantine(str(exc), chat_id=chat_id, topic_id=topic_id,
                                          kind=artifact.kind.value, path=artifact.path)
                 artifact_failures.append((artifact, str(exc), record))
@@ -926,6 +941,7 @@ class TelegramService:
             except TelegramAPIError as exc:
                 log.error("Failed to execute Telegram %s after retries: %s", action.kind, exc)
                 failures.append(f"{action.kind.value}: {exc}")
+                retryable = retryable or not exc.rejected
 
         if artifact_failures:
             records = [record.name for _artifact, _error, record in artifact_failures if record]
@@ -945,7 +961,8 @@ class TelegramService:
         if failures:
             raise TelegramDeliveryError(
                 f"{len(failures)} of {len(chunks) + len(artifacts)} reply piece(s) failed to "
-                f"deliver: {'; '.join(failures)}"
+                f"deliver: {'; '.join(failures)}",
+                rejected=not retryable,
             )
 
     def _drain_delivery_outbox(self) -> None:
@@ -1010,10 +1027,10 @@ class TelegramService:
         except (OSError, ValueError) as exc:
             raise TelegramAPIError(f"could not resolve delivery artifact: {exc}") from exc
         if not artifact.is_file():
-            raise TelegramAPIError(f"delivery artifact is not a file: {artifact}")
+            raise TelegramAPIError(f"delivery artifact is not a file: {artifact}", rejected=True)
         roots = [Path(root).resolve() for root in self.config.delivery_roots]
         if not any(artifact.is_relative_to(root) for root in roots):
-            raise TelegramAPIError("delivery artifact is outside configured delivery_roots")
+            raise TelegramAPIError("delivery artifact is outside configured delivery_roots", rejected=True)
         return artifact
 
     def _quarantine(self, error: str, *, job: Path | None = None, **facts: object) -> Path | None:
@@ -1054,7 +1071,7 @@ class TelegramService:
             try:
                 return send()
             except TelegramAPIError as exc:
-                if attempt == _SEND_ATTEMPTS:
+                if attempt == _SEND_ATTEMPTS or exc.rejected:
                     raise
                 # Wait what Telegram asked for when it said so. Retrying a 429
                 # early is not a retry: it is another rate-limited request,
