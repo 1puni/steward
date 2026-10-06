@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from steward_harness.runtime.contracts import (
-    NativeInputClosed, RuntimeExecutionError, RuntimeInput, RuntimeRequest, resolve_model,
+    NativeInputClosed, RuntimeExecutionError, RuntimeInput, RuntimeRequest, RuntimeUnavailable,
+    resolve_model,
 )
 from steward_harness.runtime.providers.claude import ClaudeInputStream, _ClaudeLifecycle
 
@@ -535,3 +536,37 @@ def test_only_a_budgeted_request_asks_for_partial_messages(tmp_path):
                               timeout_seconds=5, token_budget=budget)
     assert "--include-partial-messages" not in adapter._command(request(None), None)
     assert "--include-partial-messages" in adapter._command(request(5000), None)
+
+def bare(tmp_path, provider="glm"):
+    """A CLI that predates the native command queue: no command_lifecycle at all."""
+    request = RuntimeRequest(
+        execution_id="native", resolved=resolve_model(provider, "fast"),
+        provider_session_id=None, prompt="work", cwd=tmp_path, timeout_seconds=5,
+        on_input_ready=None, on_input_result=lambda _result: None,
+    )
+    stream = ClaudeInputStream(request, _ClaudeLifecycle(None, provider))
+    stream.connect(Wire())
+    return stream
+
+
+def test_a_cli_without_the_native_command_queue_is_named_as_too_old(tmp_path):
+    stream = bare(tmp_path)
+    emit(stream, type="system", subtype="init", model="glm")
+    with pytest.raises(RuntimeExecutionError, match="predates the native command queue"):
+        emit(stream, type="result", subtype="success", result="GLM_OK", usage={})
+
+
+def test_a_failed_turn_reports_its_own_cause_before_any_identity(tmp_path):
+    stream = bare(tmp_path)
+    with pytest.raises(RuntimeExecutionError, match="sandbox is unavailable") as caught:
+        emit(stream, type="result", subtype="error_during_execution", is_error=True,
+             errors=["sandbox is unavailable: bwrap: No permissions to create new namespace"])
+    assert "command identity" not in str(caught.value)
+
+
+def test_a_declined_turn_still_reaches_a_fallback_without_command_identity(tmp_path):
+    stream = bare(tmp_path, "claude")
+    emit(stream, type="system", subtype="init", model="claude")
+    with pytest.raises(RuntimeUnavailable):
+        emit(stream, type="result", subtype="success", is_error=True,
+             result="Failed to authenticate: OAuth session expired and could not be refreshed")
