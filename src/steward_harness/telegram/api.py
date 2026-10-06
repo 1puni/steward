@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
+import stat
 import uuid
 from hashlib import sha256
 from json import JSONDecodeError
@@ -304,9 +305,28 @@ class TelegramAPI:
         media_type: str,
         timeout: float,
     ) -> int:
-        with path.open("rb") as file_handle:
-            result = self._request(
-                "POST", endpoint, timeout=timeout, data=data,
-                files={field_name: (path.name, file_handle, media_type)},
-            )
+        # The service already resolved and authorized this path. Resolving it
+        # again could accept a symlink installed after that check. Walk the
+        # original canonical components using descriptors, never following links.
+        path = path.absolute()
+        if ".." in path.parts:
+            raise OSError("upload path must not contain parent traversal")
+        directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=directory)
+                os.close(directory)
+                directory = child
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+            with os.fdopen(descriptor, "rb") as file_handle:
+                if not stat.S_ISREG(os.fstat(file_handle.fileno()).st_mode):
+                    raise OSError("upload must be a regular file")
+                result = self._request(
+                    "POST", endpoint, timeout=timeout, data=data,
+                    files={field_name: (path.name, file_handle, media_type)},
+                )
+        finally:
+            os.close(directory)
         return result.get("message_id", 0)

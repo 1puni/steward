@@ -88,7 +88,7 @@ YAML is trusted policy. Each block owns one kind of decision:
 | `procedures` | Accepted instructions, model and access settings |
 | `rhythms` | Non-overlapping interval triggers for procedures; `input: world` keeps one obligation per captured interval |
 | `targets` | Desired refs, installed drivers and required evidence |
-| `telegram`, `desk` | Optional transports: each feeds the shared inbox and receives its own replies and results |
+| `telegram`, `slack`, `desk` | Optional transports: each feeds the shared inbox and receives its own replies and results; [Slack configuration and recovery](slack.md) |
 
 `controller.poll_seconds` bounds only background rechecks — admission, convergence and
 probes. Conversation ingress and running task turns do not wait on it, so raising it
@@ -330,11 +330,12 @@ reply parsing nor assessment is a fallback send mechanism.
 Every inbound message is a file in an inbox, and one drain answers them all. The
 suffix is ownership: `.json` queued, `.json.claimed` being answered, `.json.failed`
 and `.rejected` parked for the operator. A restart returns claims to the queue. The
-drain answers messages in name order within a conversation and different
+drain answers messages in source-defined order (filename by default) within a conversation and different
 conversations concurrently; a deferral (a busy owner, a storage refusal, pending or
 conflicting world work, a transient transport error) returns the message to the front
 of its conversation and retries it a second later. A message is removed only after
-its reply is delivered. Each source replies through its own transport.
+its reply is delivered; Slack retains a completed-event tombstone. Each source
+replies through its own transport.
 
 The directory names who is speaking, never the record. The desk inbox
 (`desk.inbox_dir`) accepts `{"kind": "message", "id", "text", "topic", "profile"?,
@@ -343,7 +344,10 @@ replies are `reply` lines in `desk.events_file` carrying the message `id`. The T
 ingress admits a sender first and then writes the same record shape, with its chat,
 sender, message and image metadata, into a private inbox under
 `<state_db>.telegram-inbox/<chat>/`. A desk client therefore cannot speak as a
-Telegram operator.
+Telegram operator. Slack writes its own private inbox at `<state_db>.slack-inbox`,
+retains event-ID tombstones and uses full workspace/channel/thread keys. Its
+[ingress and delivery contract](slack.md#durability-and-recovery) includes
+acknowledgment ordering and explicit unknown-send recovery.
 
 ### Telegram ingress
 
@@ -549,6 +553,7 @@ deployed instance has passed it. Implementation paths are relative to
 | World acceptance applies the retained candidate under the world lease | `world/turn_checkpoint.py`, `state.py` | [world durability](../tests/test_world_durability.py), [checkpoint acceptance](../tests/test_world_turn_checkpoint.py) |
 | Native sessions use private homes and candidate-owned records | `runtime/native_workspace.py`, `runtime/providers/` | [workspace](../tests/test_native_workspace.py), [Claude transport](../tests/test_claude_stream.py), [Codex transport](../tests/test_codex_app_server.py) |
 | Provider errors separate "declined" from "failed" | `runtime/providers/` | [provider errors](../tests/test_provider_errors.py) |
+| Slack admission, thread identity and uncertain-send recovery | `slack/`, `inbox.py`, `receipts.py` | [Slack contract](slack.md), [ingress](../tests/test_slack.py), [delivery](../tests/test_slack_delivery.py), [daemon](../tests/test_slack_daemon.py) |
 | Task results survive restart and are not re-assessed | `conversations.py`, `receipts.py`, `telegram/` | [result delivery](../tests/test_task_result_delivery.py), [Telegram](../tests/test_telegram.py) |
 | Live conversations stay responsive with a full worker budget | `daemon.py`, `inbox.py` | [responsiveness](../tests/test_scheduler_responsiveness.py), [inbox](../tests/test_inbox.py) |
 | The broker enforces a separate service identity | `runtime/execution.py` | [Linux boundary acceptance](../tests/test_boundary_acceptance.py) |

@@ -54,6 +54,9 @@ from steward_harness.telegram.service import (
     TelegramService,
 )
 from steward_harness.telegram.tasks import app_link, task_card
+from steward_harness.slack.commands import slack_command
+from steward_harness.slack.routing import retain_notice, unowned_route
+from steward_harness.slack.service import SlackContentRejected, SlackService
 from steward_harness.web.health import HealthServer
 from steward_harness.web.tasks import TaskBoard, TaskWeb
 from steward_harness.world.git_world import GitWorld
@@ -173,9 +176,11 @@ class KernelCommands:
             )
             # Rhythms are silent unless they ask, so their silence is counted.
             refused = self.state.refused_results(time.time() - 86_400)
-            if refused:
-                delivery += "\nRefused by Telegram (24h): " + "; ".join(
-                    f"{r['owner']}: {r['rejected']}" for r in refused[:10])
+            for transport in ("telegram", "slack"):
+                rejected = [r for r in refused if ConversationId(r["owner"]).kind == transport]
+                if rejected:
+                    delivery += f"\nRefused by {transport.title()} (24h): " + "; ".join(
+                        f"{r['owner']}: {r['rejected']}" for r in rejected[:10])
             silent = self.state.recorded_not_sent(time.time() - 86_400)
             recorded = "" if not silent else (
                 f"\nRecorded, not sent (24h): {len(silent)}: "
@@ -218,9 +223,12 @@ class KernelCommands:
             return self._adapter(adapter, name, arg, chat_id, topic_id, user_id)
         raise ValueError(f"command {name!r} is not admitted")
 
-    def _conversation(self, name: str, arg: str | None, topic_id: int) -> str:
+    def _conversation(
+        self, name: str, arg: str | None, topic_id: str | int,
+        *, transport: str = "telegram",
+    ) -> str:
         """Commands scoped to this topic's ordinary conversation."""
-        existing = self.state.find_conversation("telegram", str(topic_id))
+        existing = self.state.find_conversation(transport, str(topic_id))
         if name == "cancel":
             # Cancellation acts on a live turn. Creating a conversation in order
             # to find nothing to cancel would be a mutation wearing a read's face.
@@ -232,7 +240,7 @@ class KernelCommands:
             return f"🛑 Cancellation requested for {turn.turn_id}."
 
         conversation = existing or self.conversations.conversation_for(
-            "telegram", str(topic_id)
+            transport, str(topic_id)
         )
         if name == "clear":
             self.state.clear_conversation(conversation.conversation_id)
@@ -258,7 +266,7 @@ class KernelCommands:
             f"{selected.generation}. The new provider receives no foreign session."
         )
 
-    def _task(self, arg: str | None) -> str:
+    def _task(self, arg: str | None, *, card: Callable | None = None) -> str:
         parts = (arg or "").split(maxsplit=2)
         usage = (
             "Usage: /task show|confirm|reject|answer|retry|note|cancel|priority|model|model_family "
@@ -303,10 +311,10 @@ class KernelCommands:
                 )
                 progress += f"\nPending inputs: {len(task.pending)}"
                 return (
-                    task_card(
+                    (card(task) if card is not None else task_card(
                         task, self.config.telegram.task_app_url if self.config.telegram else None,
                         self.config.telegram.chat_id if self.config.telegram else None,
-                    )
+                    ))
                     + (
                         " (cancellation requested)"
                         if task.definition.hold == "cancelled" else ""
@@ -521,6 +529,8 @@ class StewardDaemon:
         self._stop = threading.Event()
         self._inbox: InboxDrain | None = None
         self._telegram: TelegramService | None = None
+        self._slack: SlackService | None = None
+        self._state: StateDatabase | None = None
         self._result_dispatch = Dispatch(1)
         self._kernel: StewardKernel | None = None
         self._health: HealthServer | None = None
@@ -563,6 +573,7 @@ class StewardDaemon:
 
     def _start_owned(self) -> Callable[[], None]:
         state = StateDatabase(Path(self.config.provider.state_db).resolve())
+        self._state = state
         state.tasks.remote = self.config.tasks.remote_url
         state.tasks.repositories = set(self.config.repositories)
         state.tasks.default_provider = self.config.provider.default_family
@@ -627,6 +638,9 @@ class StewardDaemon:
                 self.config.telegram.delivery_roots
                 if self.config.telegram is not None
                 else ()
+            ),
+            slack_delivery_roots=(
+                self.config.slack.delivery_roots if self.config.slack is not None else ()
             ),
         )
 
@@ -707,8 +721,10 @@ class StewardDaemon:
             )
             self._health.start()
         self._start_telegram(state, conversations, commands)
+        self._start_slack(state, conversations, commands)
         sources = [source for source in (
-            self._telegram.source if self._telegram is not None else None, desk,
+            self._telegram.source if self._telegram is not None else None,
+            self._slack.source if self._slack is not None else None, desk,
         ) if source is not None]
         if sources:
             self._inbox = InboxDrain(sources)
@@ -780,6 +796,28 @@ class StewardDaemon:
             self._telegram = None
             service.api.close()
 
+    def _start_slack(
+        self,
+        state: StateDatabase,
+        conversations: ConversationService,
+        commands: KernelCommands,
+    ) -> None:
+        """Socket ingress retains events for the same drain as Telegram and desk."""
+        if self.config.slack is None:
+            return
+
+        def slack_turn(event: str, route: str, user: str, text: str) -> str:
+            return conversations.run_turn(
+                transport="slack", transport_key=route,
+                source_event_key=event, operator_id=user, text=text,
+            ).transport_reply
+
+        self._slack = SlackService(
+            self.config.slack, state=state, turn_handler=slack_turn,
+            command_handler=lambda name, arg, route, _user: slack_command(commands, name, arg, route),
+        )
+        self._slack.start()
+
     def _pass(
         self,
         state: StateDatabase,
@@ -823,12 +861,14 @@ class StewardDaemon:
                     self._telegram.send_result(
                         self._telegram.config.chat_id, int(owner.reference), text, source_key,
                     )
+                elif owner.kind == "slack" and self._slack is not None:
+                    self._slack.send_result(owner.reference, text, source_key)
                 else:
                     raise OSError(f"result transport unavailable for {owner}")
             try:
                 conversations.deliver_task_result(owner, send=send)
-            except TelegramContentRejected as error:
-                # Telegram answers this reply the same way every time (a deleted
+            except (TelegramContentRejected, SlackContentRejected) as error:
+                # The transport answers this reply the same way every time (a deleted
                 # topic, say). Settle the receipt that was refused: left pending,
                 # it would keep every later result for this owner behind it.
                 receipt = state.result_receipt(sending[-1]) if sending else {}
@@ -836,10 +876,13 @@ class StewardDaemon:
                     receipt.pop("delivery_error", None)
                     receipt.update(done=True, rejected=str(error), rejected_at=time.time())
                     state.save_result_receipt(receipt)
-                log.error("task result for %s refused by Telegram: %s", owner, error)
+                log.error("task result for %s refused by %s: %s", owner, owner.kind, error)
             except (Busy, ConversationBusy, GitTransportError, TelegramAPIError,
                     OSError, subprocess.TimeoutExpired, WorldContentConflict,
                     WorldUpdatePending, subprocess.CalledProcessError) as error:
+                receipt = state.result_receipt(sending[-1]) if sending else {}
+                if receipt:
+                    record_error(receipt, deferral_cause(error))
                 log.info("task result deferred: %s", deferral_cause(error))
 
         def assess_result(owner: ConversationId) -> None:
@@ -882,7 +925,13 @@ class StewardDaemon:
                     yield ("target", name), lambda name=name: log.info(self._targets.advance(name))
 
         def route_error(owner: ConversationId) -> str | None:
-            if owner.kind == "telegram":
+            if owner.kind == "slack":
+                slack = self.config.slack
+                if slack is None or self._slack is None:
+                    return "Slack transport unavailable"
+                if not slack.valid_route(owner.reference):
+                    return "route is outside the configured Slack workspace/channel"
+            elif owner.kind == "telegram":
                 telegram = self.config.telegram
                 if telegram is None:
                     return "Telegram transport unavailable"
@@ -922,11 +971,7 @@ class StewardDaemon:
             for receipt in state.pending_result_receipts():
                 if receipt.get("owner"):
                     continue
-                telegram = self.config.telegram
-                topic = (telegram.topics.get("incidents", telegram.topics.get("operator"))
-                         if telegram else None)
-                route = (("telegram", str(topic)) if topic is not None else
-                         ("desk", "operator") if desk_events is not None else None)
+                route = unowned_route(self.config, "incidents", desk_enabled=desk_events is not None)
                 if route is None:
                     record_error(receipt, "no configured operator result route")
                     continue
@@ -1111,6 +1156,13 @@ class StewardDaemon:
         self._notify_topic("incidents", text[:3500])
 
     def _notify_topic(self, topic: str, text: str) -> None:
+        route = unowned_route(self.config, topic)
+        if route is not None and route[0] == "slack" and self._state is not None:
+            try:
+                retain_notice(self._state, route, topic, text)
+            except OSError:
+                log.exception("%s notification retention failed", topic)
+            return
         service = self._telegram
         if service is None:
             log.info("%s: %s", topic, text)
@@ -1132,6 +1184,8 @@ class StewardDaemon:
         self._stop.set()
         if self._telegram is not None:
             self._telegram.request_stop()
+        if self._slack is not None:
+            self._slack.request_stop()
         if self._inbox is not None:
             self._inbox.request_stop()
         if self._kernel is not None:
@@ -1140,11 +1194,13 @@ class StewardDaemon:
             self._kernel.tasks.interrupt_running()
             self._kernel.stop()
         self._result_dispatch.stop()
-        # Inbound answers reply through Telegram, so they finish before it closes.
+        # Answers and results drain before either outbound transport closes.
         if self._inbox is not None:
             self._inbox.stop()
         if self._telegram is not None:
             self._telegram.stop()
+        if self._slack is not None:
+            self._slack.stop()
         if self._health is not None:
             self._health.stop()
 

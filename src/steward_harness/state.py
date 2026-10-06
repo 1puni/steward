@@ -96,7 +96,7 @@ class ConversationId:
 
     value: str
 
-    KINDS: ClassVar[frozenset[str]] = frozenset({"telegram", "desk", "task", "rhythm"})
+    KINDS: ClassVar[frozenset[str]] = frozenset({"telegram", "slack", "desk", "task", "rhythm"})
 
     def __post_init__(self) -> None:
         kind, _, reference = self.value.partition(":")
@@ -105,7 +105,7 @@ class ConversationId:
 
     @classmethod
     def for_transport(cls, transport: str, transport_key: str) -> Self:
-        if transport not in {"telegram", "desk", "rhythm"}:
+        if transport not in {"telegram", "slack", "desk", "rhythm"}:
             raise ValueError("conversation transport is invalid")
         if not transport_key.strip():
             raise ValueError("conversation transport key must be nonblank")
@@ -1376,7 +1376,7 @@ class StateDatabase:
             if task.reason:
                 entry.append("  " + " ".join(task.reason.split())[:300])
             entry.append(f"  {action.format(id=task.task_id)} · or /task cancel {task.task_id}")
-            owner = task.owner if task.owner and ConversationId(task.owner).kind == "telegram" else None
+            owner = task.owner if task.owner and ConversationId(task.owner).kind in {"telegram", "slack"} else None
             routes.setdefault(owner, []).append("\n".join(entry))
         recorded = 0
         for owner, entries in routes.items():
