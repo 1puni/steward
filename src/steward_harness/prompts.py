@@ -132,9 +132,9 @@ def build_turn_prompt(
     delivery_roots: tuple[str, ...] = (),
 ) -> str:
     """Current machine interface, observations, and input for every execution."""
-    # A rhythm owns no transport, so it cannot receive a task's result, and
-    # it speaks to its owner only by opting in.
-    interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE] if transport == "rhythm"
+    # Rhythms speak to their configured owner only through explicit notification.
+    # Opted-in task-driving runs return task results through that same owner.
+    interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE, "The native steward_tasks tool can inspect your configured notification owner's tasks: operation=list, or operation=show with task_id. Task mutations require controller-enabled drive_tasks; without it you may only inspect and notify. Telegram cosmetics are unavailable to world rhythms."] if transport == "rhythm"
                  else [])
     if transport == "telegram":
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")

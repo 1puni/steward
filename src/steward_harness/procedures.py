@@ -485,6 +485,7 @@ class Procedures:
                 operator_id="harness:rhythm", text=text,
                 episode_input=f"Scheduled {name} rhythm ({key}).",
                 allow_empty_output=True, procedure=procedure, notify_owner=rhythm.owner,
+                drive_tasks=rhythm.drive_tasks,
                 reserved_rhythm=bool(prior and prior.rhythm_continuation),
             )
         except (Busy, ConversationBusy, WorldContentConflict, WorldUpdatePending) as error:
