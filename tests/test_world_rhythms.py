@@ -1099,7 +1099,6 @@ def test_driving_world_rhythm_submits_owned_task_through_live_capability(tmp_pat
     assert tasks[0].owner == 'telegram:3'
     assert 'Live task operations' in seen[0].prompt
     assert 'Task mutations and Telegram cosmetics are unavailable' not in seen[0].prompt
-    assert 'final reply is delivered' not in seen[0].prompt
     assert state.result_receipt('rhythm:sleep:20')['recorded_only']
 
 

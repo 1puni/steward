@@ -361,19 +361,39 @@ def test_source_receipt_replays_after_restart_but_cannot_authorize_new_work(tmp_
 
 @pytest.mark.parametrize('count', [0, 1, 3])
 def test_notifications_are_independent_calls_and_final_reply_is_not_a_send(tmp_path, count):
+    """A run whose final reply is recorded speaks only through its notifications."""
+    state = StateDatabase(tmp_path / 'state.db')
+    owner = state.open_conversation(ConversationId('telegram:owner'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'event', 'harness:task-result', 'assess')
+    calls = TaskCalls(state, turn.turn_id)
     receipts = []
-    def during(request):
-        for n in range(count):
-            receipt = call(request.task_call_socket, operation='notify', key=f'message-{n}', text=f'Notice {n}')
-            assert receipt['accepted'] and not receipt['replayed']
-            receipts.append(receipt)
-            assert call(request.task_call_socket, operation='notify', key=f'message-{n}', text=f'Notice {n}')['replayed']
-    service = _service(tmp_path, CallingCognition(during))
-    _turn(service, 'notify')
-    pending = service._state.pending_result_receipts()
+    for n in range(count):
+        receipt = calls(dict(operation='notify', key=f'message-{n}', text=f'Notice {n}'))
+        assert receipt['accepted'] and not receipt['replayed']
+        receipts.append(receipt)
+        assert calls(dict(operation='notify', key=f'message-{n}', text=f'Notice {n}'))['replayed']
+    pending = state.pending_result_receipts()
     assert len(pending) == count
     assert {r['reply'] for r in pending} == {f'Notice {n}' for n in range(count)}
     assert {r['source_key'] for r in pending} == {r['receipt'] for r in receipts}
+
+
+def test_an_operator_turn_has_one_voice_its_reply(tmp_path):
+    """Its final reply is sent, so it is offered no second channel to the operator."""
+    refused = []
+    def during(request):
+        result = subprocess.run(['curl', '--silent', '--noproxy', '*', '--unix-socket', request.task_call_socket,
+                                 '-H', 'Content-Type: application/json', '--data-binary', '@-',
+                                 'http://localhost/task'],
+                                input=json.dumps(dict(operation='notify', key='progress', text='Working on it')),
+                                text=True, capture_output=True)
+        refused.append(result.stdout)
+        assert '- notify:' not in request.prompt
+    service = _service(tmp_path, CallingCognition(during))
+    result = _turn(service, 'notify')
+    assert 'unknown operation' in refused[0]
+    assert service._state.pending_result_receipts() == []
+    assert result.transport_reply == 'Submitted and inspected.'
 
 
 def test_notification_survives_crash_before_receipt_and_exact_replay(tmp_path, monkeypatch):

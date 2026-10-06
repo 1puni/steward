@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal, cast
 
-from steward_harness.task_calls import TaskCalls, TaskCallServer, REPLY_DIRECTIVE
+from steward_harness.task_calls import TaskCalls, TaskCallServer
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
@@ -352,13 +352,12 @@ class ConversationService:
             )
             task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel,
                                                  notify_owner=notify_owner, telegram_admin=self._telegram_admin,
-                                                 drive_tasks=drive_tasks))
+                                                 drive_tasks=drive_tasks,
+                                                 reply_delivered=not automatic and conversation.conversation_id.kind != "rhythm"))
             if conversation.conversation_id.kind != "rhythm" or drive_tasks:
                 prompt += "\n\n" + task_calls.prompt
                 if drive_tasks:
                     prompt += "\nThis rhythm may submit, answer, retry or note tasks for its configured owner. It cannot cancel tasks or resume cancelled work. Results return to the owner for normal assessment."
-                if not automatic and conversation.conversation_id.kind != "rhythm":
-                    prompt += "\n" + REPLY_DIRECTIVE
             return CognitionRequest(
                 execution_id=event_id,
                 task_call_socket=task_calls.path,
