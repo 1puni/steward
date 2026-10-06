@@ -599,8 +599,6 @@ class StewardDaemon:
 
             desk_provider=self.config.desk.provider if self.config.desk else None,
             desk_profile=self.config.desk.profile if self.config.desk else None,
-            desk_access=self.config.desk.access if self.config.desk else "operator",
-            desk_readable_roots=tuple(map(Path, self.config.desk.readable_roots)) if self.config.desk else (),
             telegram_actions=(
                 self.config.telegram.agent_actions
                 if self.config.telegram is not None

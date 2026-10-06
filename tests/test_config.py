@@ -658,17 +658,16 @@ def test_world_rhythm_requires_a_world_and_a_writing_procedure():
         StewardConfig.model_validate(base | {"rhythms": {"sleep": rhythm | {"input": "worlds"}}})
 
 
-def test_desk_model_and_authority_configuration():
+def test_desk_model_configuration():
     from steward_harness.config.schema import DeskConfig
 
     assert DeskConfig().provider is None
     assert DeskConfig().profile is None
-    assert DeskConfig().access == "operator"
     config = StewardConfig.model_validate({
         "identity": {"name": "test", "slug": "test"},
         "provider": {"default_family": "codex", "fallback_families": [],
                      "models": {"codex": {"fast": "gpt-5.6-luna"}}},
-        "desk": {"provider": "codex", "profile": "fast", "access": "read-only"},
+        "desk": {"provider": "codex", "profile": "fast"},
     })
     assert config.desk.profile == "fast"
     assert resolve_model("codex", "fast", config.provider.models).model == "gpt-5.6-luna"
@@ -677,8 +676,10 @@ def test_desk_model_and_authority_configuration():
             StewardConfig.model_validate({"identity": {"name": "test", "slug": "test"}, "desk": {"provider": provider}})
     with pytest.raises(ValidationError):
         DeskConfig(profile="arbitrary-client-model")
-    with pytest.raises(ValidationError):
-        DeskConfig(access="write-everywhere")
+    # The read-only desk is gone; its keys are refused rather than ignored.
+    for removed in ({"access": "read-only"}, {"readable_roots": ["/srv/public"]}):
+        with pytest.raises(ValidationError):
+            DeskConfig(**removed)
 
 
 def _listed_config(models, **procedure):

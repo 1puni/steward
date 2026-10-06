@@ -38,7 +38,6 @@ class ProviderCapabilities:
 
     images: bool = False
     ongoing_input: bool = False
-    scoped_reads: bool = False
 
 
 SESSION_WORKSPACE_CAPABILITIES = ProviderCapabilities()
@@ -175,20 +174,6 @@ class RuntimeInputResult:
 
 
 @dataclass(frozen=True, slots=True)
-class ReadScope:
-    """Trusted public knowledge grant and private native conversation namespace."""
-
-    identity: str
-    roots: tuple[Path, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.identity.strip():
-            raise ValueError("read scope requires a conversation identity")
-        if any(not root.is_absolute() or root == Path(root.anchor) for root in self.roots):
-            raise ValueError("read scope roots must be bounded absolute paths")
-
-
-@dataclass(frozen=True, slots=True)
 class RuntimeRequest:
     execution_id: str
     resolved: ResolvedModel
@@ -202,7 +187,6 @@ class RuntimeRequest:
     images: tuple[Path, ...] = ()
     sandbox_mode: SandboxMode = "read-only"
     writable_roots: tuple[Path, ...] = ()
-    read_scope: ReadScope | None = None
     on_session_started: Callable[[str], None] = lambda _session_id: None
     on_started: Callable[[Callable[[], None]], None] | None = None
     on_input_ready: Callable[[Callable[[RuntimeInput], None]], None] | None = None
@@ -224,8 +208,6 @@ class RuntimeRequest:
             raise ValueError("Timeout must be at least 1 second")
         if any(not image.is_absolute() for image in self.images):
             raise ValueError("Images must be absolute files")
-        if self.read_scope is not None and (self.sandbox_mode != "read-only" or self.images):
-            raise ValueError("scoped reads require read-only execution without image paths")
         if self.sandbox_mode == "read-only" and self.writable_roots:
             raise ValueError("read-only turns cannot declare writable roots")
         if any(not root.is_absolute() for root in self.writable_roots):

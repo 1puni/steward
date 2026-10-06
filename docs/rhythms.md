@@ -239,15 +239,13 @@ procedures:
 
 The list is walked in order until an entry takes the run. An entry is passed over
 for any reason the provider cannot take it: not installed or unavailable, a usage
-limit, a refusal of the turn, or a scoped read the provider cannot isolate. An
-entry runs its own provider, model and effort exactly and never borrows another
-entry's model; a missing `effort` means that provider decides. Effort reaches
+limit, or a refusal of the turn. An entry runs its own provider, model and effort
+exactly and never borrows another entry's model; a missing `effort` means that provider decides. Effort reaches
 Codex as reasoning effort and Claude as `--effort`, as for a single preference.
 When every entry has declined, the run fails like any unavailable provider,
 naming each entry's reason: a task blocks, a world rhythm consumes its interval.
-Nothing else changes: the change guard, blocked-run supersession, read-only rules
-and the rule that public desk cognition never falls back to unrestricted
-cognition apply as before.
+Nothing else changes: the change guard, blocked-run supersession and read-only
+rules apply as before.
 
 Precedence and validation, all at config load:
 

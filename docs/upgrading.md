@@ -11,6 +11,16 @@ inspects the actual instance and performs a bounded, rehearsed conversion.
 
 New installation? You want [getting started](getting-started.md), not this.
 
+## Changes that need you
+
+### Every desk client is an operator
+
+`desk.access` and `desk.readable_roots` are gone, and a configuration that still
+sets either is refused at load. **Every desk conversation now has operator
+authority**: the world checkout, task proposals and actions, Telegram actions and
+delivery. Do not just delete the keys. A client that was given a read-only desk
+would gain all of that; take it off the desk inbox first.
+
 ## Identify what is running
 
 Record the running release SHA, the loaded config, the service identity and the

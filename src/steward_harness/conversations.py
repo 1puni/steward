@@ -17,7 +17,7 @@ from steward_harness.notify import notification
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
-from steward_harness.runtime.contracts import ReadScope, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable
+from steward_harness.runtime.contracts import RuntimeInput, RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.world.orientation import repository_orientation, world_orientation
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldTurnWorktree, WorldUpdatePending, WorldContentConflict
 from steward_harness.lease import Busy, Lease
@@ -138,8 +138,6 @@ class ConversationService:
         timeout_seconds: int,
         desk_provider: ProviderFamily | None = None,
         desk_profile: ProviderProfile | None = None,
-        desk_access: Literal["operator", "read-only"] = "operator",
-        desk_readable_roots: tuple[Path, ...] = (),
         telegram_actions: tuple[str, ...] = (),
         delivery_roots: tuple[str, ...] = (),
     ) -> None:
@@ -162,8 +160,6 @@ class ConversationService:
             raise ValueError("desk provider must be configured")
         self._desk_provider = desk_provider
         self._desk_profile = desk_profile
-        self._desk_access = desk_access
-        self._desk_readable_roots = desk_readable_roots
         self._workspace = workspace
         self._timeout_seconds = timeout_seconds
 
@@ -281,17 +277,13 @@ class ConversationService:
             checkpoint = self._workspace if isinstance(self._workspace, WorldTurnCheckpoint) else None
             # A worldless turn reads the checkout it runs in, read-only.
             orientation = world_orientation() if checkpoint else repository_orientation()
-            if self._read_only_desk(conversation.conversation_id):
-                orientation = ("This is a public knowledge conversation. Only these trusted paths "
-                               "are readable: " + json.dumps(list(map(str, self._desk_readable_roots)))
-                               + ". Repository tasks, external actions and private history are unavailable.")
             return build_turn_prompt(
                 text,
                 transport=transport,
                 orientation=orientation,
                 event_id=event_id,
-                telegram_actions=() if self._read_only_desk(conversation.conversation_id) else self._telegram_actions,
-                delivery_roots=() if self._read_only_desk(conversation.conversation_id) else self._delivery_roots,
+                telegram_actions=self._telegram_actions,
+                delivery_roots=self._delivery_roots,
             )
 
         accepted = self._execute_turn(
@@ -365,8 +357,7 @@ class ConversationService:
                 if current is not None and current[0] == turn.turn_id:
                     del self._native_inputs[conversation.conversation_id]
 
-        checkpoint = (self._workspace if isinstance(self._workspace, WorldTurnCheckpoint)
-                      and not self._read_only_desk(conversation.conversation_id) else None)
+        checkpoint = self._workspace if isinstance(self._workspace, WorldTurnCheckpoint) else None
         worktree = None
         result = None
         withdrawn = False
@@ -406,10 +397,7 @@ class ConversationService:
                 if conversation.provider_session_id
                 else None,
                 images=images,
-                sandbox_mode=("workspace-write" if checkpoint and not self._read_only_desk(
-                    conversation.conversation_id) else "read-only"),
-                read_scope=(ReadScope(str(conversation.conversation_id), self._desk_readable_roots)
-                            if self._read_only_desk(conversation.conversation_id) else None),
+                sandbox_mode="workspace-write" if checkpoint else "read-only",
                 allow_empty_output=allow_empty_output,
                 on_session_started=session_started,
                 on_session_invalidated=session_invalidated,
@@ -622,9 +610,6 @@ class ConversationService:
             )
             spec = parsed.spec
             action = parsed.action
-            if self._read_only_desk(turn.conversation_id) and (spec is not None or action is not None):
-                rejection = "Read-only desk cannot admit or change tasks."
-                spec, action = None, None
             if turn.conversation_id.kind == "rhythm" and (spec is not None or action is not None):
                 # A task's result returns to its owner, and a rhythm is not one.
                 rejection = "A rhythm cannot admit or change tasks."
@@ -645,8 +630,6 @@ class ConversationService:
             )
 
         if fresh and row["world_root"] is not None:
-            if self._read_only_desk(turn.conversation_id):
-                raise RuntimeExecutionError("Read-only desk cannot accept a prior writable world turn")
             if not isinstance(self._workspace, WorldTurnCheckpoint):
                 raise RuntimeError("pending turn requires its configured Git world")
             row = self._workspace.apply(event_id, finalize)
@@ -677,9 +660,6 @@ class ConversationService:
         if current.provider == provider:
             return current
         return self._state.bind_conversation_provider(conversation_id, provider, None)
-
-    def _read_only_desk(self, identity: ConversationId) -> bool:
-        return identity.transport == "desk" and self._desk_access == "read-only"
 
     def conversation_for(self, transport: Transport, transport_key: str) -> Conversation:
         """Resolve command routing through the same real transport identity as turns."""

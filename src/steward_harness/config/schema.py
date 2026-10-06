@@ -489,17 +489,11 @@ class DeskConfig(BaseModel):
 
     provider: ProviderFamily | None = None
     profile: ProviderProfile | None = None
-    access: Literal["operator", "read-only"] = "operator"
-    readable_roots: tuple[str, ...] = ()
     inbox_dir: str = "/var/lib/steward/desk-inbox"
     events_file: str = "/var/lib/steward/desk/events.jsonl"
 
     @model_validator(mode="after")
     def validates_paths(self) -> "DeskConfig":
-        for path in self.readable_roots:
-            _require_bounded_absolute("desk readable root", path)
-        if self.readable_roots and self.access != "read-only":
-            raise ValueError("desk readable_roots require read-only access")
         _require_bounded_absolute("desk inbox_dir", self.inbox_dir)
         _require_bounded_absolute("desk events_file", self.events_file)
         return self
