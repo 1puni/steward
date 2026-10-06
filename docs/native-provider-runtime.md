@@ -183,6 +183,12 @@ The adapter requires every offered command to complete and every fresh native
 turn to supply a successful result before closing the writer. It does not count
 result messages or treat a user-message echo as completion.
 
+A Claude Code release that emits no `command_lifecycle` cannot run here, and is
+named as too old rather than reported as an identity mismatch; upgrade the CLI
+instead of patching the adapter. A failed result is reported in the provider's own
+words before any identity is checked, so a sandbox that could not start, or a
+sign-in that a fallback could cover, is not hidden behind a correlation error.
+
 Claude's `system/dev_intent` and `system/task_notification` notices are
 informational and may arrive before initialization or during a turn without a
 session identity. They neither establish a session nor complete a command.
