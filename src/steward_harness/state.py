@@ -1432,6 +1432,12 @@ class StateDatabase:
             json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
             if receipt.get("notification_source")}
 
+    def refused_results(self, since: float) -> list[dict]:
+        """Results Telegram refused since `since`: settled, so nothing else names them."""
+        return [receipt for receipt in (
+            json.loads(path.read_text()) for path in self.result_receipt_path("").parent.glob("*.json"))
+            if receipt.get("rejected_at", 0) >= since]
+
     def recorded_not_sent(self, since: float) -> list[str]:
         """What automatic runs recorded since `since` without notifying anyone.
 

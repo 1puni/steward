@@ -991,36 +991,54 @@ def test_owned_live_target_reaches_its_owner_without_a_model_turn(tmp_path):
     assert state.result_receipt("target_result:owned")["done"]
 
 
-def test_result_rejected_by_telegram_is_undeliverable_not_retried(tmp_path):
-    """A deleted topic answers every resend with the same 400."""
+def test_a_refused_result_settles_and_the_next_one_for_its_owner_goes(tmp_path):
+    """A deleted topic answers every resend with the same 400; later results still go."""
     from steward_harness.telegram.service import TelegramContentRejected
     config = StewardConfig.model_validate({
         **_config(tmp_path).model_dump(),
         "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 42, "work": 44}},
     })
     state = StateDatabase(config.provider.state_db)
-    state.save_result_receipt({
-        "owner": "telegram:44", "task_id": "task-1", "source_key": "task_result:gone",
-        "result_text": "Task done", "reply": "Task done",
-    })
+    for sequence in (1, 2):
+        state.save_result_receipt({
+            "owner": "telegram:44", "task_id": None, "target": "app", "sequence": sequence,
+            "source_key": f"target_result:{sequence}", "result_text": f"Observation {sequence}",
+            "reply": f"Report {sequence}",
+        })
     daemon, queued, step = _result_pass(tmp_path, config, state)
-    attempts = []
+    attempts, sent = [], []
 
-    def rejected(*args):
-        attempts.append(args)
-        raise TelegramContentRejected("1 of 1 reply piece(s) failed to deliver: "
-                                      "Bad Request: message thread not found")
-    daemon._telegram = SimpleNamespace(config=config.telegram, send_result=rejected)
-    for _ in range(2):
+    def send_result(_chat, _topic, text, _key):
+        attempts.append(text)
+        if text == "Report 1":
+            raise TelegramContentRejected("1 of 1 reply piece(s) failed to deliver: "
+                                          "Bad Request: message thread not found")
+        sent.append(text)
+
+    daemon._telegram = SimpleNamespace(config=config.telegram, send_result=send_result)
+    for _ in range(3):
         queued.clear()
         step()
         for key, work in queued:
             if key[0] == "result":
                 work()
-    assert len(attempts) == 1
-    receipt = state.result_receipt("task_result:gone")
-    assert receipt["undeliverable"] and "thread not found" in receipt["delivery_error"]
-    assert not receipt.get("done")
+    assert attempts.count("Report 1") == 1
+    assert sent == ["Report 2"]
+    refused = state.result_receipt("target_result:1")
+    assert refused["done"] and "thread not found" in refused["rejected"]
+    assert state.pending_result_receipts() == []
+
+
+def test_status_names_results_telegram_refused(tmp_path):
+    import time
+    commands = _status_commands(tmp_path)
+    commands.state.save_result_receipt({
+        "owner": "telegram:99", "task_id": None, "source_key": "target_result:refused",
+        "result_text": "Retained", "done": True, "rejected": "message thread not found",
+        "rejected_at": time.time(),
+    })
+    reply = commands("status", None, 1, 42, 7)
+    assert "Refused by Telegram (24h): telegram:99: message thread not found" in reply
 
 
 def test_status_exposes_undeliverable_receipts(tmp_path):
