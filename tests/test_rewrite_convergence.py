@@ -264,6 +264,43 @@ def test_read_only_procedure_still_rejects_product_mutation_beside_a_transcript(
     assert state.tasks.get(task).verdict is None
 
 
+def test_interrupted_read_only_review_is_retried_at_its_exact_candidate(tmp_path):
+    """A review has no work of its own: what a failed run leaves is never committed.
+
+    The interrupt path autosaves. Committing what a failed provider left in the
+    checkout made the task branch differ from the candidate, so every retry was
+    refused before cognition ran and the review could only be cancelled.
+    """
+    from steward_harness.runtime.contracts import RuntimeExecutionError
+    bare, clone = _repository(tmp_path)
+    adapter = InvestigationAdapter()
+    state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter)
+    _, procedures = setup_procedures(tmp_path, state, runner)
+    candidate = runner.transports["app"].fetch()
+    task = procedures.request("security-one", "app", candidate, candidate)
+    _transcribing(adapter)
+    transcribe = adapter.execute
+    def sandbox_failed(request):
+        transcribe(request)
+        (Path(request.cwd) / "partial.txt").write_text("left by the failed run")
+        raise RuntimeExecutionError("provider sandbox could not start")
+    adapter.execute = sandbox_failed
+    runner.prepare(task)
+    assert "could not start" in state.tasks.get(task).reason
+    branch = state.tasks.get(task).branch
+    agent = runner.repositories["app"].path
+    assert _git("rev-parse", f"{branch}^{{tree}}", cwd=agent) == _git("rev-parse", f"{candidate}^{{tree}}", cwd=agent)
+
+    adapter.execute = transcribe
+    state.tasks.retry(task, "Run the review again")
+    count = len(adapter.requests)
+    runner.prepare(task)
+    assert len(adapter.requests) == count + 1
+    assert state.tasks.get(task).verdict == "pass"
+    assert procedures.require(("security-one",), "app", candidate, candidate) == ""
+    assert _git("rev-parse", f"{branch}^{{tree}}", cwd=agent) == _git("rev-parse", f"{candidate}^{{tree}}", cwd=agent)
+
+
 def test_failed_requirement_returns_the_reviewers_findings(tmp_path):
     bare, clone = _repository(tmp_path)
     adapter = InvestigationAdapter()
@@ -280,7 +317,7 @@ def test_failed_requirement_returns_the_reviewers_findings(tmp_path):
     assert "The consumer handoff is unverified." in failure
 
 
-def test_read_only_procedure_rejects_product_mutation_and_corrupt_resume(tmp_path):
+def test_read_only_procedure_rejects_product_mutation_and_retries_at_the_candidate(tmp_path):
     bare, clone = _repository(tmp_path)
     adapter = InvestigationAdapter()
     state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter)
@@ -296,11 +333,15 @@ def test_read_only_procedure_rejects_product_mutation_and_corrupt_resume(tmp_pat
     assert "changed its input" in state.tasks.get(task).reason
     assert state.tasks.get(task).verdict is None
     state.tasks.retry(task, "Resume the review")
-    count = len(adapter.requests)
+    seen = []
+    def review(request):
+        seen.append((Path(request.cwd) / "injected.txt").exists())
+        return replace(execute(request), output="VERDICT: PASS\nCOMMIT: review\nDISPOSITION: idle\nQUESTION: NONE")
+    adapter.execute = review
     runner.prepare(task)
-    assert len(adapter.requests) == count
-    assert "differs from its exact candidate" in state.tasks.get(task).reason
-    assert procedures.require(("security-one",), "app", candidate, candidate) is None
+    # The rejected edit was never committed; the retry reviews the candidate.
+    assert seen == [False]
+    assert procedures.require(("security-one",), "app", candidate, candidate) == ""
     assert _git("rev-parse", "main", cwd=bare) == candidate
 
 

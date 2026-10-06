@@ -514,7 +514,10 @@ class TaskRunner:
         return task_id
 
     def _autosave(self, task: Task, reason: str | None = None) -> None:
-        """Commit whatever an interrupted execution left in the task worktree."""
+        """Commit whatever an interrupted execution left in the task worktree.
+
+        A read-only review leaves nothing: its worktree reopens at the candidate.
+        """
         repository = self.repositories.get(task.repository)
         if repository is None:
             return
@@ -620,13 +623,6 @@ class TaskRunner:
         before = None
         if procedure:
             from steward_harness.landing.gates import GateRunner
-            if procedure.access == "read-only":
-                changed = run_agent_git(self.broker, "diff", "--name-only", procedure.candidate,
-                                        cwd=worktree, timeout=30)
-                added = run_agent_git(self.broker, "ls-files", "--others", "--exclude-standard",
-                                      cwd=worktree, timeout=30)
-                if changed.returncode or added.returncode or (changed.stdout + added.stdout).strip():
-                    raise RuntimeExecutionError("read-only review workspace differs from its exact candidate")
             before = GateRunner._snapshot(worktree, self.broker)
         procedure_prompt = build_procedure_scope(
             candidate=procedure.candidate,
@@ -735,6 +731,9 @@ class TaskRunner:
             closure_error = str(error)
             closure = TickClosure(commit_subject(None, task.title), "continue")
 
+        if not writes:
+            # Its excused session state is not work either.
+            self._reopen_review(task, worktree)
         # Staging rejects an unfinished Git operation or a switched branch.
         checkpointer.stage(expected_branch=task.branch)
         # Every slice commits, a findings-only one included: the tip of a task
@@ -780,6 +779,8 @@ class TaskRunner:
         worktree = manager.create_worktree(
             str(task.task_id), branch_name=task.branch, base_sha=base
         )
+        if task.procedure and task.procedure.access == "read-only":
+            self._reopen_review(task, worktree)
         checkpointer = WorktreeCheckpointer(
             worktree,
             actor_name=self.actor_name,
@@ -787,6 +788,19 @@ class TaskRunner:
             execution_broker=self.broker,
         )
         return manager, worktree, checkpointer
+
+    def _reopen_review(self, task: Task, worktree: Path) -> None:
+        """Make a read-only review's tree and index exactly its candidate.
+
+        A review has no work of its own. Whatever an earlier or interrupted
+        slice left in the checkout is discarded rather than committed, so every
+        slice — a retry included — reviews the candidate, and every commit on
+        the task branch records only how a slice ended. Ignored files stay, as
+        they are never committed.
+        """
+        for args in (("read-tree", "--reset", "-u", task.procedure.candidate), ("clean", "-fdq")):
+            if run_agent_git(self.broker, *args, cwd=worktree, timeout=60).returncode:
+                raise RuntimeExecutionError("read-only review could not reopen at its exact candidate")
 
     def _provider_order(self, primary: str) -> tuple[ProviderFamily, ...]:
         return (

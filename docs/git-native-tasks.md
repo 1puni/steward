@@ -190,8 +190,10 @@ Target requirements review the full exact candidate tree, including existing
 security defects. Base equals candidate for that full-tree request; it is not a
 claim that a first-parent diff covers all changes since deployment. Publication
 requirements additionally bind the true integration parent. Read-only procedures
-cannot publish product work; changed tracked or untracked inputs are rejected,
-including on resumed executions. Accepted verdicts and their work graph are one
+cannot publish product work; a run that changes tracked or untracked inputs has its
+evidence rejected. A review has no work of its own, so every slice, a retry or
+resumption included, reopens its worktree at the exact candidate: nothing an
+interrupted or rejected run left behind is committed. Accepted verdicts and their work graph are one
 checkpoint commit, so interruption cannot strand an idle run without its evidence.
 
 Driver success is not target satisfaction. The external observation must report
