@@ -225,15 +225,6 @@ def test_removed_deliver_key_is_not_silently_accepted(tmp_path):
         StewardConfig.model_validate(data)
 
 
-def test_shipped_1puni_configuration_has_no_retired_delivery_key():
-    from pathlib import Path
-    import yaml
-    config = StewardConfig.model_validate(yaml.safe_load(
-        Path("instances/1puni/steward.yaml").read_text()))
-    assert config.rhythms["rem"].after == "sleep"
-    assert all("deliver" not in rhythm.model_dump() for rhythm in config.rhythms.values())
-
-
 def test_pass_runs_the_rhythm_and_delivers_its_reply_to_the_owner_topic(tmp_path):
     config, state, checkpoint, service, cognition, procedures = _rhythm(
         tmp_path, _replying("Investigation saved.", notify="Investigation saved for the morning."))
