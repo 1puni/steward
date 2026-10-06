@@ -136,6 +136,16 @@ definitions or persisted schedule overrides.
    rerun publishing or provider execution blindly after an uncertain response.
    Use remote/release evidence and the harness's documented recovery boundary.
 
+5. If the user expects the steward to work unattended, configure the rhythms that
+   do it and observe one run end to end: it fired on its own, read its input and
+   delivered or recorded what its procedure says. A configured rhythm and one
+   requested task prove only reactive execution. Name each fallback provider
+   that is actually authenticated, or state the single-provider outage risk;
+   an empty `fallback_families` means one quota limit stops the steward.
+6. Keep one source of installed configuration. If the instance installs its config
+   from a repository on every start, edits made live during onboarding go into
+   that source before the first self-deployment, which would otherwise revert them.
+
 If a required external mutation is outside the existing grant, first finish the
 reviewable config and setup changes. Then request only the specific missing grant,
 with the target and effect stated. Do not provision accounts, send messages or
@@ -143,4 +153,6 @@ publish test changes merely because discovery is authorized.
 
 Deliver the actual config path, per-repository release ownership and evidence,
 and the exact remaining blocker where a path could not be completed. Distinguish
-`configured`, `published`, and `deployed`; one does not imply the next.
+`configured`, `published`, `deployed` and `observed running unattended`; one does
+not imply the next. Report onboarding as partial, with the concrete remaining
+work, until every outcome the user asked for has been observed.
