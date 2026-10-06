@@ -13,14 +13,21 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 
 import yaml
 
 from steward_harness.state import ConversationId, StateDatabase, TaskId
 from steward_harness.task_store import Definition, GitTaskStore, PREFIX
+from steward_harness.git import controller_git_dir, hardened_git_argv, validate_object_id
 
 
-def convert(source: Path, destination: Path) -> dict:
+def convert(source: Path, destination: Path, *, remote_tips: dict[str, str] | None = None) -> dict:
+    # These heads must be observed independently, not copied from tracking refs.
+    # Conversion stays offline and never fetches into its preserved source.
+    remote_tips = remote_tips or {}
+    for tip in remote_tips.values():
+        validate_object_id(tip)
     source = source.resolve()
     destination = destination.resolve()
     if destination.exists() or destination.is_relative_to(source.parent):
@@ -70,7 +77,8 @@ def convert(source: Path, destination: Path) -> dict:
     state = StateDatabase(db)
     report = {'source_epoch': 49, 'target_epoch': 50, 'turns': len(turns),
               'world_records': len(worlds), 'lineages': len(lineage),
-              'reconciled_accepted_turns': [], 'tasks': {}, 'preserved_verdicts': 0}
+              'reconciled_accepted_turns': [], 'tasks': {}, 'preserved_verdicts': 0,
+              'landed_publications': {}}
     with state.connect(write=True) as connection:
         for key, entry in lineage.items():
             connection.execute('INSERT INTO conversations VALUES (?,?,?,?,?)',
@@ -109,6 +117,28 @@ def convert(source: Path, destination: Path) -> dict:
         verdict = procedure.pop('result', None) if procedure else None
         work = fields.get('work')
         parents = ()
+        if publication is not None:
+            repository = fields['repository']
+            tip = remote_tips.get(repository)
+            if tip is None or publication.get('work') != work or verdict is not None:
+                raise ValueError(f"task {task_id} publication needs an independently observed remote tip and unchanged work")
+            candidate = publication['candidate']
+            validate_object_id(candidate)
+            if not store.contains(candidate, sha):
+                raise ValueError(f"task {task_id} publication candidate is not retained")
+            observed = subprocess.run(hardened_git_argv(
+                f'--git-dir={controller_git_dir(source, repository)}',
+                'merge-base', '--is-ancestor', candidate, tip,
+            ), capture_output=True, timeout=120)
+            if observed.returncode != 0:
+                raise ValueError(f"task {task_id} publication is not proven landed in its copied repository")
+            # Epoch 49 recognized either work or its rebased publication. Epoch
+            # 50 recognizes work ancestry or a Steward-Work trailer, which the
+            # old publication never wrote. Adopt the proven landed commit;
+            # the original work and result identity stay in the task's parents.
+            fields['work'] = candidate
+            report['landed_publications'][str(task_id)] = dict(
+                repository=repository, remote_tip=tip, candidate=candidate)
         if verdict is not None:
             if verdict not in {'pass', 'fail'} or not work:
                 raise ValueError(f"task {task_id} has an unrepresentable accepted verdict")
@@ -152,5 +182,10 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True, help='Quiescent copied state.db')
     parser.add_argument('--destination', type=Path, required=True, help='New directory; must not exist')
+    parser.add_argument('--remote-tip', action='append', default=[], metavar='REPOSITORY=SHA',
+                        help='Independently observed remote head for a retained legacy publication; repeat per repository')
     args=parser.parse_args()
-    print(json.dumps(convert(args.source,args.destination),sort_keys=True))
+    tips = dict(item.split('=', 1) for item in args.remote_tip)
+    if len(tips) != len(args.remote_tip):
+        parser.error('each repository may have only one observed remote tip')
+    print(json.dumps(convert(args.source,args.destination,remote_tips=tips),sort_keys=True))
