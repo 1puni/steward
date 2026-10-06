@@ -172,9 +172,11 @@ class Targets:
             if outcome == "failed":
                 reply = f"{name} is not reaching {short}.\n{message}"
             elif (was_revision, was) == (revision, "failed"):
-                reply = f"{name} recovered and is live at {short}."
+                reply = f"{name} recovered; target satisfied at {short}."
             else:
-                reply = f"{name} is live at {short}."
+                reply = f"{name}: target satisfied at {short}."
+            if outcome == "satisfied" and observed and observed.details == "no sites declared":
+                reply += f"\n{str(observed.details)[:1000]}"
             receipt = {
                 "owner": owner, "task_id": task_id, "source_key": source,
                 "target": name, "sequence": sequence, "observation": identity,

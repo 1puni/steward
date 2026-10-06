@@ -1086,3 +1086,26 @@ def test_a_held_rhythm_alerts_the_operator_without_a_model(tmp_path):
     [(key, text)] = alerts
     assert key == "held:rhythm:sleep:20"
     assert "provider failed" in text and "/rhythm run sleep" in text
+
+
+def test_driving_world_rhythm_submits_owned_task_through_live_capability(tmp_path):
+    seen = []
+    config, state, checkpoint, service, cognition, procedures = _rhythm(
+        tmp_path, EditingCognition(before_return=seen.append))
+    config.rhythms['sleep'] = config.rhythms['sleep'].model_copy(update={'drive_tasks': True})
+    procedures.run_world_rhythm(service, 'sleep', 'rhythm:sleep:20')
+    tasks = state.tasks.all()
+    assert len(tasks) == 1
+    assert tasks[0].owner == 'telegram:3'
+    assert 'Live task operations' in seen[0].prompt
+    assert 'Task mutations and Telegram cosmetics are unavailable' not in seen[0].prompt
+    assert 'final reply is delivered' not in seen[0].prompt
+    assert state.result_receipt('rhythm:sleep:20')['recorded_only']
+
+
+@pytest.mark.parametrize('change', [{'owner': None}, {'input': 'repository:app'}, {'workdir': '/tmp/work'}])
+def test_task_driving_requires_world_input_and_result_owner(change):
+    from steward_harness.config.schema import ProcedureRhythmConfig
+    with pytest.raises(ValueError, match='world rhythm with a result owner'):
+        ProcedureRhythmConfig.model_validate(dict(schedule=300, procedure='review', input='world',
+            owner='telegram:3', drive_tasks=True) | change)

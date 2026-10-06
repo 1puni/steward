@@ -163,7 +163,7 @@ def test_progress_is_never_delivered_and_live_is_delivered_once(tmp_path, monkey
         [live] = target.receipts()
         revision = live["observation"][0]
         assert live["observation"] == [revision, "satisfied"]
-        assert live["reply"] == f"production is live at {revision[:12]}."
+        assert live["reply"] == f"production: target satisfied at {revision[:12]}."
         assert live["owner"] is None and live["task_id"] is None
 
 
@@ -201,7 +201,7 @@ def test_a_persistent_failure_is_told_once_and_its_recovery_once(tmp_path, monke
         target.step("ready", at=910)
         target.step("ready", at=920)
         assert len(target.receipts()) == 3
-        assert target.receipts()[-1]["reply"].startswith("production recovered and is live at ")
+        assert target.receipts()[-1]["reply"].startswith("production recovered; target satisfied at ")
 
 
 def test_a_told_failure_survives_restart_without_being_told_again(tmp_path, monkeypatch):
@@ -255,7 +255,19 @@ def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, m
         live, failed = target.receipts()
         assert (live["owner"], live["task_id"]) == ("telegram:42", "task-1")
         # A live observation says everything; no model turn restates it.
-        assert live["reply"] == f"production is live at {revision[:12]}."
+        assert live["reply"] == f"production: target satisfied at {revision[:12]}."
         # A failure is the owner's to assess, so it carries no canned reply.
         assert (failed["owner"], failed["task_id"]) == ("telegram:42", "task-1")
         assert "reply" not in failed
+
+
+def test_empty_site_target_does_not_claim_live_application(tmp_path, monkeypatch):
+    with _harness(tmp_path) as (daemon, _clone, _calls):
+        target = _Script(daemon._targets, monkeypatch)
+        monkeypatch.setattr(daemon._targets, 'call', lambda name, operation, repository, revision:
+                            Observation(revision=revision, ready=True, details='no sites declared'))
+        target.step('ready')
+        [receipt] = target.receipts()
+        assert 'target satisfied at' in receipt['reply']
+        assert 'no sites declared' in receipt['reply']
+        assert 'live' not in receipt['reply']

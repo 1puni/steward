@@ -19,7 +19,7 @@ import time
 from http.server import BaseHTTPRequestHandler
 from threading import Thread
 
-from steward_harness.state import ConversationId, TaskAction, TaskId, TaskSpec, TaskOriginKind
+from steward_harness.state import ConversationId, TaskAction, TaskId, TaskSpec, TaskOriginKind, TaskStatus
 from steward_harness.task_store import PREFIX
 
 
@@ -33,6 +33,11 @@ text. Use a distinct key per message; retry an identical request with the same
 key after a lost receipt. A receipt confirms durable queuing, not transport
 completion. You may call during execution. Without a working tool, keep findings
 in the final reply; they will not be sent. Most runs should notify no one."""
+
+REPLY_DIRECTIVE = """Your final reply is delivered to the operator. Use it for the ordinary
+answer. The native notify operation sends an additional message; reserve it for a
+distinct progress update and do not repeat that update in your final reply.
+A notify receipt confirms durable queuing, not transport completion."""
 
 
 def queue_notification(state, *, owner, source, key, text, require_current=lambda: None):
@@ -68,8 +73,9 @@ def queue_notification(state, *, owner, source, key, text, require_current=lambd
 class TaskCalls:
     """Authority is captured by the controller, never supplied by the caller."""
 
-    def __init__(self, state, turn_id, *, cancel=lambda _execution: False, notify_owner=None):
+    def __init__(self, state, turn_id, *, cancel=lambda _execution: False, notify_owner=None, telegram_admin=None, drive_tasks=False):
         self.state = state
+        self.telegram_admin = telegram_admin
         self.cancel = cancel
         self.turn_id = str(turn_id)
         with state.connect() as connection:
@@ -79,6 +85,8 @@ class TaskCalls:
             raise ValueError("task calls require a running conversation")
         self.owner = ConversationId(row["conversation_id"])
         self.notify_owner = notify_owner if self.owner.kind == "rhythm" else str(self.owner)
+        self.drive_tasks = drive_tasks and self.owner.kind == "rhythm" and bool(self.notify_owner)
+        self.task_owner = ConversationId(self.notify_owner) if self.owner.kind == "rhythm" and self.notify_owner else self.owner
         self.operator_id = row["operator_id"]
         self.generation = state.lineage(self.owner).generation
 
@@ -88,7 +96,8 @@ class TaskCalls:
             task = self.state.tasks.get(TaskId(task_id))
         except (LookupError, PermissionError):
             raise ValueError("this conversation does not own that task") from None
-        if task.owner != str(self.owner) and not (task.owner is None and not operator_id.startswith("harness:")):
+        owner = self.notify_owner if self.owner.kind == "rhythm" else str(self.owner)
+        if task.owner != owner and not (task.owner is None and self.owner.kind != "rhythm" and not operator_id.startswith("harness:")):
             raise ValueError("this conversation does not own that task")
         return task
 
@@ -103,6 +112,7 @@ class TaskCalls:
             raise ValueError("request must be an object")
         operation = request.get("operation")
         fields = {
+            "telegram": {"operation", "action", "key", "text"},
             "notify": {"operation", "key", "text"},
             "submit": {"operation", "key", "repository", "title", "brief"},
             "list": {"operation"}, "show": {"operation", "task_id"},
@@ -113,8 +123,11 @@ class TaskCalls:
             raise ValueError("unknown operation or incorrect fields")
         if not all(isinstance(value, str) for value in request.values()):
             raise ValueError("fields must be strings")
-        if self.owner.kind == "rhythm" and operation != "notify":
-            raise ValueError("rhythms may only notify their owner")
+        if self.owner.kind == "rhythm" and operation not in {"notify", "list", "show"}:
+            if not self.drive_tasks or operation not in {"submit", "answer", "retry", "note"}:
+                raise ValueError("rhythms may only notify or inspect their owner's tasks unless drive_tasks enables submit/answer/retry/note")
+        if self.owner.kind == "rhythm" and operation in {"list", "show"} and not self.notify_owner:
+            raise ValueError("this rhythm has no task inspection owner")
         tasks = self.state.tasks
         # Observations validate against a SQLite snapshot; slow Git reads must
         # not reserve the writer needed by unrelated provider session binds.
@@ -143,6 +156,11 @@ class TaskCalls:
                         "SELECT 1 FROM turns WHERE execution_turn_id=? LIMIT 1", (self.turn_id,)).fetchone():
                     raise ValueError("mixed-input execution requires an explicit source_id")
 
+            if operation == "telegram":
+                require_current_source()
+                if self.owner.kind != "telegram" or self.telegram_admin is None:
+                    raise ValueError("Telegram administration is unavailable to this run")
+                return self.telegram_admin(str(self.owner), request)
             if operation == "notify":
                 return queue_notification(self.state, owner=self.notify_owner,
                                           source=context_id, key=request["key"], text=request["text"],
@@ -178,7 +196,9 @@ class TaskCalls:
                 if request["repository"] not in (tasks.repositories or ()):
                     raise ValueError("repository work is not authorized")
             else:
-                self._owned(request["task_id"], operator_id)
+                task = self._owned(request["task_id"], operator_id)
+                if self.owner.kind == "rhythm" and operation == "retry" and task.status is TaskStatus.CANCELLED:
+                    raise ValueError("a rhythm cannot resume cancelled work")
             # Search only accepted task first-parent histories: native work cannot
             # forge a controller receipt. No receipt database or second registry.
             try:
@@ -210,11 +230,11 @@ class TaskCalls:
                 self.state._insert_task(connection, TaskSpec(repository=request["repository"],
                     title=request["title"], brief=request["brief"]), task_id=task_id,
                     source=source, kind=TaskOriginKind.CONVERSATION, origin_ref=None,
-                    conversation_id=self.owner, provider=lineage.provider, profile=lineage.profile)
+                    conversation_id=self.task_owner, provider=lineage.provider, profile=lineage.profile)
             else:
                 task_id = TaskId(request["task_id"])
                 _, rejection = self.state._apply_task_action(
-                    self.owner, operator_id,
+                    self.task_owner, operator_id,
                     TaskAction(task_id, operation, request["text"]), source=source)
                 if rejection:
                     raise ValueError(rejection)
@@ -310,6 +330,9 @@ class TaskCallServer:
         return '''\n## Live task operations
 Use the native steward_tasks task tool during this execution. Arguments:
 - notify: operation, key, text (durably queue a message to this run's owner)
+- telegram: operation, action (info/set_photo/set_description), key, text
+  (configured chat only; text is a description, absolute photo path, or empty for info;
+   cosmetic changes must be enabled by the controller and requested by the operator)
 - submit: operation, key, repository, title, brief
 - show: operation, task_id
 - list: operation
@@ -339,10 +362,11 @@ Final TASK_PROPOSAL/TASK_ACTION lines do not execute operations.\n'''
 class TaskExecutionCalls:
     """Task-scoped calls; the native invocation supplies no owner or authority."""
 
-    def __init__(self, state, task_id, repositories):
+    def __init__(self, state, task_id, repositories, *, telegram_admin=None):
         from steward_harness.task_query import OwnershipCalls
         self.state = state
         self.task_id = task_id
+        self.telegram_admin = telegram_admin
         self.owner = state.tasks.get(task_id).owner
         self.query = OwnershipCalls(state.tasks, task_id, repositories)
         self.start_writer()
@@ -398,6 +422,15 @@ class TaskExecutionCalls:
                 "message": "Intent recorded for this execution only. Acceptance requires writer teardown and a settled checkpoint."}
 
     def __call__(self, request):
+        if isinstance(request, dict) and request.get("operation") == "telegram":
+            if (set(request) != {"operation", "action", "key", "text"}
+                    or not all(isinstance(value, str) for value in request.values())):
+                raise ValueError("telegram requires operation, action, key, text")
+            if (self.telegram_admin is None or not self.owner
+                    or ConversationId(self.owner).kind != "telegram"
+                    or self.state.tasks.cancelled(self.task_id)):
+                raise ValueError("Telegram administration is unavailable to this run")
+            return self.telegram_admin(str(self.task_id), request)
         if isinstance(request, dict) and request.get("operation") == "close":
             with self.state.tasks.lease:
                 if self.state.tasks.cancelled(self.task_id):

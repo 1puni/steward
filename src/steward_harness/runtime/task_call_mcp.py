@@ -30,10 +30,10 @@ for line in sys.stdin:
             result = {}
         elif method == 'tools/list':
             result = {'tools': [{'name': 'task',
-                'description': 'Operate on authorized Steward tasks; Notify queues text to the bound owner using a stable key. Task executions permit query (repository, text), notify (key, text), and close (key, subject, disposition; question only for ask). Successful native task completion needs no close call. Use close for explicit ask or continue; idle is optional compatibility. Close returns pending intent, accepted only after successful native completion and writer teardown. Mutations require a stable, distinct key per intent; retry identical requests with the same key. Accepted Git receipts survive parent failure.',
+                'description': 'Operate on authorized Steward tasks. Telegram: operation=telegram, action=info/set_photo/set_description, key, text (empty for info, absolute permitted image path for set_photo, description for set_description). Controller opt-in and existing operator authorization required; fixed group only. Notify queues text to the bound owner using a stable key. Task executions permit query (repository, text), notify (key, text), and close (key, subject, disposition; question only for ask). Successful native task completion needs no close call. Use close for explicit ask or continue; idle is optional compatibility. Close returns pending intent, accepted only after successful native completion and writer teardown. Mutations require a stable, distinct key per intent; retry identical requests with the same key. Accepted Git receipts survive parent failure.',
                 'inputSchema': {'type': 'object', 'required': ['operation'],
-                    'properties': {'operation': {'type': 'string', 'enum': ['submit', 'list', 'show', 'answer', 'retry', 'note', 'cancel', 'query', 'notify', 'close']},
-                        **{k: {'type': 'string'} for k in ['source_id', 'key', 'repository', 'title', 'brief', 'task_id', 'text', 'subject', 'question']},
+                    'properties': {'operation': {'type': 'string', 'enum': ['submit', 'list', 'show', 'answer', 'retry', 'note', 'cancel', 'query', 'notify', 'close', 'telegram']},
+                        **{k: {'type': 'string'} for k in ['action', 'source_id', 'key', 'repository', 'title', 'brief', 'task_id', 'text', 'subject', 'question']},
                         'disposition': {'type': 'string', 'enum': ['continue', 'idle', 'ask']}},
                     'additionalProperties': False}}]}
         elif method == 'tools/call' and message.get('params', {}).get('name') == 'task':

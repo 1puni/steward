@@ -38,6 +38,7 @@ from steward_harness.telegram.format import (
     extract_telegram_action_markers,
     format_markdown_chunks,
 )
+from steward_harness.telegram.admin import ChatAdministration
 from steward_harness.receipts import write_receipt
 
 log = logging.getLogger(__name__)
@@ -131,6 +132,7 @@ def probe_chat_access(api: TelegramAPI, config: TelegramConfig) -> None:
                 or member.get("status") not in {"administrator", "creator"}
                 or (
                     member.get("status") != "creator"
+                    and bool(set(config.agent_actions) & {"pin_reply", "pin_message"})
                     and member.get("can_pin_messages") is not True
                 )
             ):
@@ -183,6 +185,7 @@ class TelegramService:
         self.config = config
         token = self._read_token(config.token_path)
         self.api = TelegramAPI(token, base_url=config.botapi_base or "https://api.telegram.org")
+        self.admin = ChatAdministration(config, self.api, state_db.path.parent / "telegram-admin")
         self.allowed_users = frozenset(config.allowed_users)
         self.allow_group_administrators = config.allow_group_administrators
         # Administrators change rarely and are re-read per admitted sender, so
