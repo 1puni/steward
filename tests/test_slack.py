@@ -120,7 +120,11 @@ def test_observer_can_read_explicit_commands(transport, text, name, arg):
 def test_operator_turn_keeps_thread_and_author_identity(transport):
     transport.service.ingest(event(thread_ts="1234567800.000001"))
     answer_one(transport.service)
-    transport.turn.assert_called_once_with("Ev1", "T123:C123:1234567800.000001", "T123:U123", "hello")
+    args = transport.turn.call_args.args
+    assert args[:3] == ("Ev1", "T123:C123:1234567800.000001", "T123:U123")
+    assert json.loads(args[3].splitlines()[0].removeprefix("Slack sender: ")) == dict(
+        transport="slack", team="T123", user="U123", role="operator")
+    assert args[3].endswith("\n\nhello")
     assert transport.api.call.call_args.kwargs["thread_ts"] == "1234567800.000001"
 
 

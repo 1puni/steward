@@ -23,19 +23,26 @@ def task_card(task):
             f" · priority {task.priority}\nOwner: {task.owner or 'unowned'}")
 
 
-def slack_command(commands, name, arg, route):
+def slack_command(commands, name, arg, route, user=None):
     if name == "help":
         return ("Slack commands (reply in a thread to keep its conversation):\n"
                 + "\n".join(f"!{name}: {command_text(description).replace('topic', 'thread')}"
                             for name, description in BUILTIN_COMMAND_DESCRIPTIONS.items())
                 + "\n!task show <task_id> displays the brief and recent checkpoints here."
                 + "\nObservers: !help, !status, !tasks and !task show <task_id>."
-                + " Other commands and conversations require an explicit operator grant.")
+                + "\nContributors can converse, create documents and operate tasks."
+                + "\nDeployment approval: !git approvals; !git approve target|publication <name> <full-sha>."
+                + " Only configured deployment operators can approve.")
     if name == "tasks":
         return "Tasks (up to 20; use !task show <task_id>):\n\n" + (
             "\n\n".join(task_card(task) for task in commands.state.tasks.all()[:20]) or "No tasks yet.")
     if name == "task":
         return command_text(commands._task(arg, card=task_card))
+    if name == "git":
+        slack = commands.config.slack
+        actor = (f"slack:{slack.team_id}:{user}" if slack and slack.valid_route(route)
+                 and slack.users.get(user) == "operator" else None)
+        return command_text(commands._git(arg, actor=actor))
     if name in {"model", "model_family", "clear", "cancel"}:
         return command_text(commands._conversation(name, arg, route, transport="slack"))
     if name not in BUILTIN_COMMAND_MODES:

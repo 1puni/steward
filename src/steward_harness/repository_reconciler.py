@@ -24,6 +24,7 @@ from steward_harness.state import StateDatabase, TaskId
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
 from steward_harness.task_store import Task, TaskWorkConflict
+from steward_harness.deployment_approval import DeploymentApprovals
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class RepositoryReconciler:
         worktrees_root: Path,
         broker: UntrustedExecutionBroker,
         procedures=None,
+        deployment_operators=(),
     ) -> None:
         self.last_outcome: dict[str, str] = {}
         self.procedures = procedures
@@ -48,6 +50,7 @@ class RepositoryReconciler:
         self.transports = dict(transports)
         self.worktrees_root = worktrees_root.resolve()
         self.broker = broker
+        self.deployment_approvals = DeploymentApprovals(state, deployment_operators)
 
     def publish_repository(self, repository_name: str) -> TaskId | None:
         """Publish this repository's oldest unpublished candidate, if any.
@@ -147,10 +150,11 @@ class RepositoryReconciler:
             transport=transport,
             execution_broker=self.broker,
         ).prepare(task.branch, head, base)
-        # The candidate ref keeps imported objects alive only for this pass: a
-        # repair has copied them into the task store, a push onto the remote,
-        # and a later pass imports its own candidate again.
+        # Approval retains the candidate ref for exact-commit inspection. Other
+        # outcomes can release it: repair copied the objects into the task store,
+        # publication onto the remote, or a later pass imports its candidate again.
         candidate = getattr(prepared, "tested_sha", None) or getattr(prepared, "candidate", None)
+        awaiting_approval = False
         try:
             if isinstance(prepared, ValidationFailure):
                 outcome = self.state.tasks.request_repair(task.task_id, transport, head, base, prepared)
@@ -177,6 +181,12 @@ class RepositoryReconciler:
                 current = self.state.tasks.get(task.task_id)
                 if current.definition.hold or current.dispatchable:
                     return None
+                if repository.publish_requires_approval and not self.deployment_approvals.require(
+                        "publication", task.repository, prepared.tested_sha,
+                        repository.model_dump(mode="json")):
+                    self.last_outcome[task.repository] = f"{task.task_id}: awaiting operator approval for {prepared.tested_sha}"
+                    awaiting_approval = True
+                    return None
                 landed = publish(transport, prepared)
             if not landed:
                 self.last_outcome[task.repository] = f"{task.task_id}: remote moved or refused; candidate will be revalidated"
@@ -186,5 +196,5 @@ class RepositoryReconciler:
             self.last_outcome[task.repository] = f"{task.task_id}: published {prepared.tested_sha}"
             return task.task_id
         finally:
-            if candidate:
+            if candidate and not awaiting_approval:
                 transport.drop_candidate(candidate)

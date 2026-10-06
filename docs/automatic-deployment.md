@@ -55,6 +55,51 @@ satisfaction. Any number of independent procedures is allowed. Periodic reviews
 are retained as ordinary tasks, but a periodic result never authorizes another
 input. Missing capability or a review question remains visible on its task.
 
+## Operator deployment consent
+
+`deployment_operators` is an explicit list of transport identities, for example
+`["slack:T123:U123", "telegram:123456789"]`. Slack identities must have the
+`operator` role in that workspace; Telegram identities must be in `allowed_users`.
+Dynamic Telegram administrators do not receive deployment authority implicitly.
+With this list configured, every named target requires consent before its driver
+can apply a revision. Observing an already running revision remains available.
+
+For a repository whose publication triggers deployment, set
+`repositories.<name>.publish_requires_approval: true`. The publisher then stops
+after integrating and testing the candidate, before pushing it. Ordinary repository
+work and document creation continue. Contributor-enabled Slack instances must
+explicitly declare this choice for every repository; the harness cannot discover
+external CI release triggers. Keep deployment credentials, drivers and controller
+configuration outside the execution identity's writable and credential grants.
+The shared world remote must not itself be a deployment trigger.
+
+The controller retains a pending request with the full commit SHA, destination
+and policy. It queues one approval notice through the normal operator notification
+route. Use `/git approvals` to inspect pending requests, then review the exact
+candidate and approve with one of:
+
+```text
+/git approve target production <full-40-character-sha>
+/git approve publication app <full-40-character-sha>
+```
+
+Slack uses `!git`. The authenticated sender must appear in
+`deployment_operators`; a contributor, model turn or quoted operator name cannot
+approve. The controller resumes automatically and rechecks gates, holds, evidence
+and the desired revision. `/git target` and `/git reconcile` do not bypass consent.
+Approval is bound to that destination's configuration, operator allowlist and exact
+revision; a changed candidate or policy requires a fresh approval. An unchanged
+approval survives restarts and permits retries of that same revision. Approval is
+permission to attempt deployment, never evidence that deployment succeeded.
+
+Requests and approval provenance are stored in controller-owned
+`<state_db>.deployment-approvals/`, under the existing protected state directory.
+Back this up with controller state. Pending publication candidates retain their
+controller Git candidate refs so their exact commits remain available for review.
+Superseded requests and candidates remain retained for inspection; they cannot
+authorize a different revision. A host operator may archive them after confirming
+they no longer correspond to pending work.
+
 ## Git quiet periods and intervals
 
 A procedure rhythm runs only on new input. Before admission the controller

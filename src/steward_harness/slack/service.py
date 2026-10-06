@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import stat
@@ -190,8 +191,8 @@ class SlackService:
             elif parsed is not None and parsed.command is not None:
                 cmd = parsed.command
                 readonly = observer_command(cmd.name, cmd.arg)
-                if role != "operator" and not readonly:
-                    reply = "This command requires an explicitly configured operator."
+                if role == "observer" and not readonly:
+                    reply = "This command requires an explicitly configured operator or contributor."
                 elif record.get("command_started"):
                     reply = "Command interrupted before its reply was retained. Inspect its effect before issuing it again."
                 else:
@@ -199,7 +200,7 @@ class SlackService:
                         record["command_started"] = True
                         save()  # Mutating commands cannot be blindly repeated after a crash.
                     reply = self.command_handler(cmd.name, cmd.arg, record["route"], event["user"])
-            elif role != "operator":
+            elif role == "observer":
                 reply = "Observer access: use !help, !status, !tasks or !task show <task_id>."
             elif event.get("files"):
                 reply = "Inbound Slack files are not supported. Send the request as text; no turn was started."
@@ -207,8 +208,13 @@ class SlackService:
                 reply = "Send a text request or !status."
             else:
                 try:
+                    speaker = dict(transport="slack", team=self.config.team_id,
+                                   user=event["user"], role=role)
+                    if event["user"] in self.config.user_names:
+                        speaker["name"] = self.config.user_names[event["user"]]
+                    attributed = "Slack sender: " + json.dumps(speaker, ensure_ascii=True) + "\n\n" + text
                     reply = self.turn_handler(message.msg_id, record["route"],
-                                              f"{self.config.team_id}:{event['user']}", text)
+                                              f"{self.config.team_id}:{event['user']}", attributed)
                 except (RuntimeExecutionError, RuntimeUnavailable) as exc:
                     reply = f"Turn execution interrupted: {type(exc).__name__}"
             record["reply"] = reply

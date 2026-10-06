@@ -220,6 +220,7 @@ class RepositoryConfig(BaseModel):
     default_branch: str = "main"
     gates: tuple[CommandSpec, ...] = ()
     requires: tuple[str, ...] = ()
+    publish_requires_approval: bool = False
 
     @model_validator(mode="after")
     def validates_path(self) -> "RepositoryConfig":
@@ -270,7 +271,8 @@ class SlackConfig(BaseModel):
     channel_id: str
     bot_token_path: str
     app_token_path: str
-    users: dict[str, Literal["operator", "observer"]]
+    users: dict[str, Literal["operator", "contributor", "observer"]]
+    user_names: dict[str, str] = Field(default_factory=dict)
     notifications: dict[Literal["operator", "incidents"], str] = Field(default_factory=dict)
     delivery_roots: tuple[str, ...] = ()
     max_file_bytes: int = Field(default=20_000_000, ge=1, le=100_000_000)
@@ -290,6 +292,9 @@ class SlackConfig(BaseModel):
         if any(not re.fullmatch(r"[UW][A-Z0-9]+", u) or "PLACEHOLDER" in u
                for u in self.users):
             raise ValueError("Slack users must be explicit user IDs")
+        if any(user not in self.users or not name.strip() or len(name) > 80
+               or any(ord(c) < 32 for c in name) for user, name in self.user_names.items()):
+            raise ValueError("Slack user_names must name admitted users with bounded single-line labels")
         for raw in (self.bot_token_path, self.app_token_path, *self.delivery_roots):
             p = Path(raw)
             if not p.is_absolute() or p == Path("/") or ".." in p.parts:
@@ -703,6 +708,7 @@ class StewardConfig(BaseModel):
     procedures: dict[str, ProcedureConfig] = Field(default_factory=dict)
     rhythms: dict[str, ProcedureRhythmConfig] = Field(default_factory=dict)
     targets: dict[str, TargetConfig] = Field(default_factory=dict)
+    deployment_operators: tuple[str, ...] = ()
     tasks: TaskIntakeConfig = Field(default_factory=TaskIntakeConfig)
     identity: IdentityConfig
     execution: UntrustedExecutionConfig = UntrustedExecutionConfig()
@@ -718,6 +724,26 @@ class StewardConfig(BaseModel):
 
     @model_validator(mode="after")
     def validates_cross_references(self) -> "StewardConfig":
+        for actor in self.deployment_operators:
+            if actor.startswith("slack:"):
+                parts = actor.split(":")
+                admitted = (len(parts) == 3 and self.slack is not None
+                            and parts[1] == self.slack.team_id
+                            and self.slack.users.get(parts[2]) == "operator")
+            elif actor.startswith("telegram:"):
+                user = actor.removeprefix("telegram:")
+                admitted = (user.isdecimal() and self.telegram is not None
+                            and int(user) in self.telegram.allowed_users)
+            else:
+                admitted = False
+            if not admitted:
+                raise ValueError("deployment_operators must name explicitly configured transport operators")
+        contributors = self.slack and "contributor" in self.slack.users.values()
+        if (contributors or any(r.publish_requires_approval for r in self.repositories.values())) and not self.deployment_operators:
+            raise ValueError("contributors and gated publication require explicit deployment_operators")
+        if contributors and any("publish_requires_approval" not in r.model_fields_set
+                                for r in self.repositories.values()):
+            raise ValueError("with contributors, explicitly declare publish_requires_approval for every repository")
         if self.world and self.world.remote_url is not None:
             if WORLD_TRANSPORT in self.repositories:
                 raise ValueError(f"repository name {WORLD_TRANSPORT!r} is reserved for the world remote")

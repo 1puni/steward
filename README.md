@@ -280,6 +280,7 @@ protecting them.
 | `procedures` | Accepted instructions, access, and a preferred provider, model and effort that falls back through the provider order unless `fallback: false` |
 | `rhythms` | Non-overlapping interval (with optional `offset`) or quiet triggers for procedures, admitted only on new input; `input: world` keeps one obligation per captured interval, optionally only on change under `paths`, or `after` another world rhythm |
 | `targets` | Desired refs, installed drivers and required evidence |
+| `deployment_operators` | Human identities allowed to approve exact deployment revisions ([consent](docs/automatic-deployment.md#operator-deployment-consent)) |
 | `telegram`, `slack`, `desk` | Optional conversation and result transports ([Slack setup](docs/slack.md)) |
 
 Start from [the minimal config](config/steward.minimal.yaml); the

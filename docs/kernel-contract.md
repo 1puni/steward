@@ -88,6 +88,7 @@ YAML is trusted policy. Each block owns one kind of decision:
 | `procedures` | Accepted instructions, model and access settings |
 | `rhythms` | Non-overlapping interval triggers for procedures; `input: world` keeps one obligation per captured interval |
 | `targets` | Desired refs, installed drivers and required evidence |
+| `deployment_operators` | Explicit human identities that can approve an exact target or gated publication revision; [deployment consent](automatic-deployment.md#operator-deployment-consent) |
 | `telegram`, `slack`, `desk` | Optional transports: each feeds the shared inbox and receives its own replies and results; [Slack configuration and recovery](slack.md) |
 
 `controller.poll_seconds` bounds only background rechecks — admission, convergence and

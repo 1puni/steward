@@ -214,8 +214,10 @@ def test_startup_uses_shared_inbox_and_shutdown_drains_reply_before_slack_closes
             "event": {"type": "message", "channel": "C123", "user": "U123",
                       "ts": "1700000000.000001", "text": "Do the work"}})
         assert sending.wait(5), "shared inbox did not answer Slack"
+        assert len(calls) == 1
+        assert calls[0].pop("text").endswith("\n\nDo the work")
         assert calls == [{"transport": "slack", "transport_key": ROUTE,
-                          "source_event_key": "Ev123", "operator_id": "T123:U123", "text": "Do the work"}]
+                          "source_event_key": "Ev123", "operator_id": "T123:U123"}]
         stop_thread = threading.Thread(target=lambda: (daemon.stop(), stopped.set()))
         stop_thread.start()
         assert daemon._slack._stop.wait(2), "shutdown did not stop ingress first"

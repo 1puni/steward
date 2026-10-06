@@ -40,6 +40,7 @@ from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.providers import build_runtimes
 from steward_harness.procedures import Procedures, interval
 from steward_harness.targets import Targets
+from steward_harness.deployment_approval import DeploymentApprovals
 from steward_harness.state import (
     ConversationBusy,
     ConversationId,
@@ -213,7 +214,10 @@ class KernelCommands:
         if name == "rhythm":
             return self._rhythm(arg)
         if name == "git":
-            return self._git(arg)
+            actor = (f"telegram:{user_id}" if self.config.telegram
+                     and chat_id == self.config.telegram.chat_id
+                     and user_id in self.config.telegram.allowed_users else None)
+            return self._git(arg, actor=actor)
         adapter = (
             self.config.telegram.adapter_commands.get(name)
             if self.config.telegram is not None
@@ -417,9 +421,24 @@ class KernelCommands:
             return f"Queued {task}"
         return "Usage: /rhythm list | run <name>. Edit schedules in controller configuration."
 
-    def _git(self, arg: str | None) -> str:
+    def _git(self, arg: str | None, *, actor: str | None = None) -> str:
         parts = (arg or "").split()
-        usage = "Usage: /git reconcile <repo> | target <name> | retarget <task_id> <repo>"
+        usage = ("Usage: /git reconcile <repo> | target <name> | retarget <task_id> <repo>"
+                 " | approvals | approve target|publication <name> <full-sha>")
+        approvals = DeploymentApprovals(self.state, self.config.deployment_operators)
+        if parts == ["approvals"]:
+            return "\n".join(f"{r['kind']} {r['name']} {r['revision']}" for r in approvals.pending()) or "No pending deployment approvals."
+        if parts and parts[0] == "approve":
+            if len(parts) != 4:
+                return usage
+            _, kind, name, revision = parts
+            settings = {"target": self.config.targets, "publication": self.config.repositories}.get(kind, {})
+            if name not in settings:
+                return "Unknown approval destination."
+            try:
+                return approvals.approve(kind, name, revision, settings[name].model_dump(mode="json"), actor)
+            except (ValueError, Busy) as error:
+                return f"Approval refused: {error}"
         if len(parts) < 2:
             return usage
         verb, name, *rest = parts
@@ -656,6 +675,7 @@ class StewardDaemon:
             worktrees_root=worktrees_root,
             broker=self.broker,
             procedures=procedures,
+            deployment_operators=self.config.deployment_operators,
         )
         tasks = TaskRunner(
             state=state,
@@ -814,7 +834,7 @@ class StewardDaemon:
 
         self._slack = SlackService(
             self.config.slack, state=state, turn_handler=slack_turn,
-            command_handler=lambda name, arg, route, _user: slack_command(commands, name, arg, route),
+            command_handler=lambda name, arg, route, user: slack_command(commands, name, arg, route, user),
         )
         self._slack.start()
 

@@ -26,7 +26,10 @@ slack:
   app_token_path: /etc/steward/slack-app-token
   users:
     UOPERATORPLACEHOLDER: operator
+    UCONTRIBUTORPLACEHOLDER: contributor
     UOBSERVERPLACEHOLDER: observer
+  user_names:
+    UCONTRIBUTORPLACEHOLDER: Alice
   # Optional existing root messages, with timestamps quoted as strings:
   notifications:
     operator: "TPLACEHOLDER:CPLACEHOLDER:1234567890.000001"
@@ -55,7 +58,7 @@ foreign-workspace, edit, delete and other message subtypes are ignored. Authorit
 is checked again before retained input runs, so removing a grant takes effect on
 queued input as well.
 
-Operators can converse and use `!help` plus the shared builtins (`!status`,
+Operators and contributors can converse and use `!help` plus the shared builtins (`!status`,
 `!tasks`, `!task`, `!pause`, `!resume`, `!model`, `!model_family`, `!clear`,
 `!cancel`, `!rhythm`, `!git`). These are ordinary channel messages, not Slack slash
 commands. Telegram-specific adapter commands and administrative actions are not
@@ -63,6 +66,36 @@ exposed. Observers can use only `!help`, `!status`, `!tasks` and
 `!task show <id>`; their text never starts a provider turn or a state mutation.
 Task/status details are visible to channel members, so use a private channel when
 those details are private.
+
+Contributors can create documents in the shared world and request, implement, test
+and manage repository work. They use the same working capabilities as operators.
+Deployment is controlled separately: configure `deployment_operators` with the
+explicit Slack and/or Telegram identities allowed to approve an exact revision.
+The controller refuses a contributor-enabled configuration without these identities
+and an explicit `publish_requires_approval` choice on every repository. Set it to
+`true` wherever a push triggers deployment; use `false` only where publication
+does not release software. See [deployment consent](automatic-deployment.md#operator-deployment-consent).
+
+```yaml
+deployment_operators:
+  - slack:TPLACEHOLDER:UOPERATORPLACEHOLDER
+  # Optional second identity for the same human, explicitly allowed in Telegram:
+  # - telegram:123456789
+repositories:
+  app:
+    path: /var/lib/steward-agent/repos/app
+    remote_url: https://github.com/example/app.git
+    publish_requires_approval: true
+```
+
+Each ordinary Slack input carries controller-generated workspace, user ID and
+current role attribution into both the model input and retained turn. Optional
+`user_names` are readable labels for configured users; names never grant authority.
+Changing roles or promoting a contributor is an operator edit to controller
+configuration. Queued messages are checked against current grants before running.
+Telegram topics and Slack threads share the world and tasks while retaining their
+own conversation histories and result destinations; enabling Slack does not copy
+or mirror Telegram history.
 
 One shared inbox drain serializes ordinary input per full thread identity while
 allowing different threads to proceed. The Socket Mode receiver acknowledges retained control commands, then answers them
