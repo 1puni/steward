@@ -10,7 +10,7 @@ import time
 
 from steward_harness.runtime.contracts import RuntimeExecutionError
 
-NATIVE_VERSIONS = {"codex": "codex-cli 0.153.4", "claude": "2.1.281 (Claude Code)"}
+NATIVE_VERSIONS = {"codex": "codex-cli 0.160.1", "claude": "2.1.281 (Claude Code)"}
 
 # Audited against the installed Codex: the Responses request has no tools.
 CODEX_DISABLED_FEATURES = (
