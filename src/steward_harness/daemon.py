@@ -172,6 +172,10 @@ class KernelCommands:
                 for r in blocked[:10]
             )
             # Rhythms are silent unless they ask, so their silence is counted.
+            refused = self.state.refused_results(time.time() - 86_400)
+            if refused:
+                delivery += "\nRefused by Telegram (24h): " + "; ".join(
+                    f"{r['owner']}: {r['rejected']}" for r in refused[:10])
             silent = self.state.recorded_not_sent(time.time() - 86_400)
             recorded = "" if not silent else (
                 f"\nRecorded, not sent (24h): {len(silent)}: "
@@ -809,7 +813,10 @@ class StewardDaemon:
 
         def deliver_result(owner: ConversationId) -> None:
             """Report one finished task back to the transport that admitted it."""
+            sending: list[str] = []
+
             def send(text: str, source_key: str) -> None:
+                sending.append(source_key)
                 if owner.kind == "desk" and desk_events is not None:
                     desk_events.append("reply", text, source_key)
                 elif owner.kind == "telegram" and self._telegram is not None:
@@ -822,13 +829,14 @@ class StewardDaemon:
                 conversations.deliver_task_result(owner, send=send)
             except TelegramContentRejected as error:
                 # Telegram answers this reply the same way every time (a deleted
-                # topic, say): name it undeliverable instead of retrying each pass.
-                receipt = state.retain_pending_result(owner)
-                if receipt is not None:
-                    receipt["undeliverable"] = True
-                    receipt["delivery_error"] = str(error)
+                # topic, say). Settle the receipt that was refused: left pending,
+                # it would keep every later result for this owner behind it.
+                receipt = state.result_receipt(sending[-1]) if sending else {}
+                if receipt:
+                    receipt.pop("delivery_error", None)
+                    receipt.update(done=True, rejected=str(error), rejected_at=time.time())
                     state.save_result_receipt(receipt)
-                log.warning("task result for %s undeliverable: %s", owner, error)
+                log.error("task result for %s refused by Telegram: %s", owner, error)
             except (Busy, ConversationBusy, GitTransportError, TelegramAPIError,
                     OSError, subprocess.TimeoutExpired, WorldContentConflict,
                     WorldUpdatePending, subprocess.CalledProcessError) as error:
@@ -930,9 +938,6 @@ class StewardDaemon:
                 receipt.pop("delivery_error", None)
                 state.save_result_receipt(receipt)
             for owner in state.pending_task_result_conversations():
-                pending = state.pending_task_result_for(owner)
-                if pending and state.result_receipt(pending[2]).get("undeliverable"):
-                    continue  # Reported by /status; resending gets the same rejection.
                 error = route_error(owner)
                 if error:
                     receipt = state.retain_pending_result(owner)

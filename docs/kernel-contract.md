@@ -312,7 +312,10 @@ and cannot retract the delivered evidence. Checkpoints have no separate broadcas
 channel. Telegram reuses per-piece receipts across retry and restart. Preserve both
 adjacent receipt directories during upgrades. A crash between remote acceptance and
 the local receipt write can duplicate that piece: delivery is at-least-once,
-not exactly-once.
+not exactly-once. A reply Telegram refuses on its content (a deleted topic,
+unparseable markup) is never retried: an inbound message is parked, a result
+receipt is settled with `rejected`, and `/status` names refused results for a day.
+Nothing queued behind it waits.
 
 Notification calls use the existing private result receipts. Stable owner/source
 and key identify one intent; exact replay returns its receipt and changed-payload
