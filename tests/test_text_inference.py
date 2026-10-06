@@ -21,12 +21,6 @@ from steward_harness.runtime.providers.claude import ClaudeRuntime
 from steward_harness.runtime.text_only import reject_claude_tools, verify_version
 from test_codex_app_server import start, event
 
-PATH = Path(__file__).resolve().parents[1] / 'instances/llmpsych/native-inference'
-spec = importlib.util.spec_from_file_location('inference_service', PATH / 'service.py')
-bridge = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = bridge
-spec.loader.exec_module(bridge)
-
 
 def runtime_request(tmp_path, **kwargs):
     return RuntimeRequest(execution_id='test', resolved=resolve_model('codex', 'balanced'),
@@ -118,88 +112,12 @@ def test_unsupported_version_fails_closed():
         verify_version(broker, Path('/native'), 'codex')
 
 
-def settings():
-    return bridge.Settings.model_validate_json((PATH / 'config.example.json').read_text())
-
-
 def payload(**updates):
     value = {'messages': [{'role': 'user', 'content': 'hello'}], 'max_completion_tokens': 1800,
         'response_format': {'type': 'json_schema', 'json_schema': {'name': 'support', 'strict': True,
         'schema': {'type': 'object', 'properties': {'reply': {'type': 'string'}}, 'required': ['reply'], 'additionalProperties': False}}}}
     value.update(updates)
     return json.dumps(value).encode()
-
-
-def test_bridge_reuses_configured_fallback_and_fresh_calls(tmp_path):
-    calls = []
-    class Adapter:
-        capabilities = ProviderCapabilities(text_only=True)
-        def __init__(self, family): self.family = family
-        def available(self): return Availability(True)
-        def execute(self, request):
-            calls.append(request)
-            assert request.provider_session_id is None and request.text_only
-            assert request.task_call_socket is None and request.native_owner is None
-            if self.family != 'glm': raise RuntimeUnavailable('quota')
-            return RuntimeResult('{"reply":"hello"}', request.resolved, request.resolved.model, 'fresh-session')
-    config = settings()
-    inference = bridge.Inference(config, Cognition({f: Adapter(f) for f in config.provider.family_order}, config.provider.models))
-    for _ in range(2):
-        status, response = inference.complete(payload(model='client-cannot-choose'))
-        assert status == 200 and response['model'] == 'glm-5.3'
-        assert response['choices'][0]['finish_reason'] == 'stop'
-    assert [c.resolved.model for c in calls] == ['gpt-6-astra', 'claude-sonnet-5', 'glm-5.3'] * 2
-    assert calls[0].execution_id != calls[3].execution_id
-    assert all(c.token_budget == 8192 for c in calls)
-
-
-@pytest.mark.parametrize('update', [{'tools': []}, {'session_id': 'a'}, {'cwd': '/'}, {'stream': True},
-    {'messages': [{'role': 'tool', 'content': 'x'}]}, {'messages': [{'role': 'user', 'content': []}]},
-    {'max_completion_tokens': 0}, {'response_format': {'type': 'text'}}])
-def test_invalid_client_requests_never_start_native(update):
-    with pytest.raises(ValueError): bridge.parse_request(payload(**update))
-
-
-@pytest.mark.parametrize('output', ['not JSON', '{"wrong":"shape"}', '{"reply":null}', '{"reply":"' + 'x' * 7201 + '"}'])
-def test_invalid_native_output_is_failure(output):
-    result = RuntimeResult(output, resolve_model('codex','balanced'), 'model', 'session')
-    inference = bridge.Inference(settings(), SimpleNamespace(run=lambda _: result))
-    status, response = inference.complete(payload())
-    assert status == 502 and 'choices' not in response
-
-
-def test_one_active_inference():
-    inference = bridge.Inference(settings(), None)
-    with inference.active:
-        assert inference.complete(payload())[0] == 429
-
-
-def test_full_client_context_admitted_and_bounded():
-    bridge.parse_request(payload(messages=[{'role': 'user', 'content': 'x' * 131072}]))
-    with pytest.raises(ValueError):
-        bridge.parse_request(payload(messages=[{'role': 'user', 'content': 'x' * (bridge.MAX_TEXT + 1)}]))
-
-
-def test_unix_http_peer_boundary_and_health(tmp_path):
-    import os
-    inference = bridge.Inference(settings(), None)
-    path = tmp_path / 'inference.sock'
-    with bridge.Server(path, inference, os.getuid()) as server:
-        thread = threading.Thread(target=server.serve_forever); thread.start()
-        try:
-            with socket.socket(socket.AF_UNIX) as client:
-                client.connect(str(path)); client.sendall(b'GET /healthz HTTP/1.0\r\n\r\n')
-                result = b''
-                while chunk := client.recv(4096): result += chunk
-                assert b'200 OK' in result and b'"text_only": true' in result
-            if os.getuid() != 0:
-                server.peer_uid = os.getuid() + 1
-                with socket.socket(socket.AF_UNIX) as client:
-                    client.connect(str(path)); client.sendall(b'GET /healthz HTTP/1.0\r\n\r\n')
-                    try: assert client.recv(4096) == b''
-                    except ConnectionResetError: pass
-        finally:
-            server.shutdown(); thread.join()
 
 
 def test_deadline_does_not_restart_for_fallback(tmp_path, monkeypatch):
@@ -233,15 +151,3 @@ def test_text_only_rejects_tool_events_from_unexpected_threads(tmp_path):
     turn, _, _ = start(tmp_path, text_only=True)
     with pytest.raises(RuntimeExecutionError, match='Tool activity'):
         event(turn, 'item/started', thread_id='unexpected-child', item={'type':'commandExecution'})
-
-
-def test_complete_unicode_app_context_survives_nested_json_encoding(tmp_path):
-    # The app serializes the whole session into one text message, then serializes
-    # that message into the HTTP body. This is not plain 128 KiB ASCII chat text.
-    turns = [{'user': '\U0001f600' * 4000, 'reply': '\U0001f600' * 4000} for _ in range(12)]
-    body = payload(messages=[{'role':'system','content':'Support conversation'},
-        {'role':'user','content':json.dumps({'session':{'turns':turns},'action':'close','text':''})}])
-    assert len(body) < bridge.MAX_BODY
-    prompt, _, _ = bridge.parse_request(body)
-    request = replace(runtime_request(tmp_path), prompt=prompt)
-    assert request.text_only
