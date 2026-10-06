@@ -103,7 +103,7 @@ try:
             opens = [float(m.group(1)) for line in lines
                      if auth_path in line and 'O_RDONLY' in line and re.search(r'= [0-9]+$', line)
                      if (m := re.search(r'([0-9]+\.[0-9]+) openat', line))]
-            assert opens and min(opens) < first_response, 'inconclusive: both CLIs must open expired store before refresh response' 
+            assert opens and min(opens) < first_response, 'inconclusive: both CLIs must open expired store before refresh response'
         assert len(messages) == 2 and all((r['rotated_access'] for r in messages)), seen
         for seed in stores:
             stored = json.loads((seed / '.credentials.json').read_text())['claudeAiOauth']
