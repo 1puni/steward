@@ -178,9 +178,10 @@ not add up to messages.
 A target outcome returns to an existing conversation only when its desired
 revision is exactly the commit that landed that conversation's task.
 The controller retains the dated driver observation and desired SHA in an ordinary
-result receipt. A live outcome carries its plain reply ("`<target>` is live at
-`<sha>`"), because the observation already says everything the owner's model
-could. A failing outcome delivers the retained observation first, independently
+result receipt. A satisfied outcome carries its plain reply ("`<target>` reached
+`<sha>`", followed by the driver's own details when it gave any), because the
+observation already says everything the owner's model could. Satisfied means
+whatever the driver reports as ready, so the reply claims no more than that. A failing outcome delivers the retained observation first, independently
 of cognition. Optional assessment follows through the world-acceptance path, where
 the owner can act or propose an authorized follow-up. Readiness still requires external observation and exact
 evidence; the assessment does not confer deployment authority.

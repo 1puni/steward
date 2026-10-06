@@ -79,7 +79,7 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     # Retained observations arrive before any optional model assessment.
     sent = []
     assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == (
-        f"production: target satisfied at {revision[:12]}.")
+        f"production reached {revision[:12]}.\nready first time")
     assert cognition.requests == []
     def fail(*args):
         sent.append(args)
@@ -98,7 +98,7 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     assert len(cognition.requests) == 1
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
     assert {text for text, _ in sent[-2:]} == {
-        f"production recovered; target satisfied at {revision[:12]}.", "Deployment requires repair."}
+        f"production recovered and reached {revision[:12]}.\nrecovered", "Deployment requires repair."}
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed")) is None
 
 
