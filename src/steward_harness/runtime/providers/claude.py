@@ -126,7 +126,7 @@ class _ClaudeLifecycle:
         allow_empty_output: bool = False,
     ) -> None:
         self._expected_session_id = expected_session_id
-        self._provider = provider
+        self.provider = provider
         self._sensitive_event_value = sensitive_event_value
         self._allow_empty_output = allow_empty_output
         self.failure: RuntimeExecutionError | RuntimeUnavailable | None = None
@@ -142,22 +142,22 @@ class _ClaudeLifecycle:
             and self._sensitive_event_value in line
         ):
             raise RuntimeExecutionError(
-                f"{self._provider} emitted unsafe credential content",
+                f"{self.provider} emitted unsafe credential content",
                 session_id=self.session_id,
             )
         try:
             raw_event: object = json.loads(line)
         except (json.JSONDecodeError, TypeError) as error:
             raise RuntimeExecutionError(
-                f"{self._provider} emitted a malformed event stream"
+                f"{self.provider} emitted a malformed event stream"
             ) from error
 
         if not isinstance(raw_event, dict):
-            raise RuntimeExecutionError(f"{self._provider} emitted a malformed event stream")
+            raise RuntimeExecutionError(f"{self.provider} emitted a malformed event stream")
         event = cast(dict[str, Any], raw_event)
         event_type = event.get("type")
         if not isinstance(event_type, str):
-            raise RuntimeExecutionError(f"{self._provider} emitted a malformed event stream")
+            raise RuntimeExecutionError(f"{self.provider} emitted a malformed event stream")
         return event
 
     def consume_event(self, event: dict[str, Any], *, supersede: bool = True) -> str | None:
@@ -178,7 +178,7 @@ class _ClaudeLifecycle:
         session_id = self._event_session_id(event)
         if session_id != self.session_id:
             raise RuntimeExecutionError(
-                f"{self._provider} emitted a different persistent session identity",
+                f"{self.provider} emitted a different persistent session identity",
                 session_id=self.session_id,
             )
         if event_type == "error":
@@ -199,22 +199,19 @@ class _ClaudeLifecycle:
             self.failure = self._error(message) if code else None
         if event_type != "result":
             return None
-        if event.get("subtype") != "success" or event.get("is_error") is True:
-            raise self.failure or self._error(
-                "\n".join(event.get("errors") or []) or event.get("result")
-                or "reported a failed turn",
-            )
+        if (failure := self.result_failure(event)) is not None:
+            raise failure
         self.failure = None
         if event.get("terminal_reason") != "completed":
             raise RuntimeExecutionError(
-                f"{self._provider} did not finish its native command",
+                f"{self.provider} did not finish its native command",
                 session_id=self.session_id,
             )
         result = event.get("result")
         if not isinstance(result, str) or (
                 supersede and not result.strip() and not self._allow_empty_output):
             raise RuntimeExecutionError(
-                f"{self._provider} completed without an agent response",
+                f"{self.provider} completed without an agent response",
                 session_id=self.session_id,
             )
         if supersede or self._output is None:
@@ -232,10 +229,19 @@ class _ClaudeLifecycle:
             or not self._completed
         ):
             raise RuntimeExecutionError(
-                f"{self._provider} stream ended before a successful terminal result",
+                f"{self.provider} stream ended before a successful terminal result",
                 session_id=self.session_id,
             )
         return self._output, self.session_id, self.effective_model
+
+    def result_failure(self, event: Mapping[str, Any]) -> RuntimeExecutionError | RuntimeUnavailable | None:
+        """The provider's own account of a failed turn, or None for a success."""
+        if event.get("subtype") == "success" and event.get("is_error") is not True:
+            return None
+        return self.failure or self._error(
+            "\n".join(event.get("errors") or []) or event.get("result")
+            or "reported a failed turn",
+        )
 
     def _error(self, message: str) -> RuntimeExecutionError | RuntimeUnavailable:
         """Build the turn-ending error, or the refusal that tries someone else.
@@ -247,25 +253,25 @@ class _ClaudeLifecycle:
         Once a tool has run, the turn has effects in its checkout: it resumes
         here or fails, and is never replayed from scratch by someone else.
         """
-        text = f"{self._provider}: {message}"[:_MAX_RESPONSE_CHARS]
+        text = f"{self.provider}: {message}"[:_MAX_RESPONSE_CHARS]
         if _declines_turn(message) and not self._acted:
             return RuntimeUnavailable(text)
         return RuntimeExecutionError(text, session_id=self.session_id)
 
     def _accept_init(self, event: Mapping[str, Any]) -> str:
         if event.get("type") != "system" or event.get("subtype") != "init":
-            raise RuntimeExecutionError(f"{self._provider} stream did not start with system init")
+            raise RuntimeExecutionError(f"{self.provider} stream did not start with system init")
         session_id = self._event_session_id(event)
         self.session_id = session_id
         model = event.get("model")
         if not isinstance(model, str) or not model:
             raise RuntimeExecutionError(
-                f"{self._provider} init omitted its effective model",
+                f"{self.provider} init omitted its effective model",
                 session_id=session_id,
             )
         if self._expected_session_id is not None and session_id != self._expected_session_id:
             raise RuntimeExecutionError(
-                f"{self._provider} resumed a different persistent session identity",
+                f"{self.provider} resumed a different persistent session identity",
                 session_id=session_id,
             )
         self.effective_model = model
@@ -276,7 +282,7 @@ class _ClaudeLifecycle:
         validated = validated_uuid(candidate) if isinstance(candidate, str) else None
         if validated is None:
             raise RuntimeExecutionError(
-                f"{self._provider} emitted an invalid persistent session identity"
+                f"{self.provider} emitted an invalid persistent session identity"
             )
         return validated
 
@@ -370,6 +376,18 @@ class ClaudeInputStream:
             else:
                 if event.get("type") == "system" and event.get("subtype") == "task_notification":
                     self.notified = True
+                if event.get("type") == "result" and self.interrupt_id is None:
+                    # A failed turn's own words are its cause. Checked first,
+                    # a missing command identity would hide them, and with
+                    # them a refusal that should hand the turn to a fallback.
+                    if (failure := self.lifecycle.result_failure(event)) is not None:
+                        raise failure
+                    if not self.started:
+                        raise RuntimeExecutionError(
+                            f"{self.lifecycle.provider} emitted a result without command_lifecycle "
+                            "events: this Claude Code predates the native command queue; upgrade it",
+                            session_id=self.session_id,
+                        )
                 if event.get("type") == "result":
                     # user_message_uuid is optional timing metadata (it can be
                     # absent after native agent work). The serial lifecycle's
