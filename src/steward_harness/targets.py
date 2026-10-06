@@ -169,12 +169,15 @@ class Targets:
             ).encode()).hexdigest()
             at = datetime.now(timezone.utc).isoformat()
             short = (revision or "an unresolved revision")[:12]
+            # Satisfied is whatever the driver says it is; its own words say
+            # what that meant this time, so "reached" never claims more.
+            details = f"\n{observed.details[:1000]}" if observed and observed.details else ""
             if outcome == "failed":
                 reply = f"{name} is not reaching {short}.\n{message}"
             elif (was_revision, was) == (revision, "failed"):
-                reply = f"{name} recovered and is live at {short}."
+                reply = f"{name} recovered and reached {short}.{details}"
             else:
-                reply = f"{name} is live at {short}."
+                reply = f"{name} reached {short}.{details}"
             receipt = {
                 "owner": owner, "task_id": task_id, "source_key": source,
                 "target": name, "sequence": sequence, "observation": identity,

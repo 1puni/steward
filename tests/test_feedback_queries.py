@@ -114,7 +114,7 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     # Live is stated plainly; only the failure costs the owner a model turn.
     sent = []
     assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == (
-        f"production is live at {revision[:12]}.")
+        f"production reached {revision[:12]}.\nready first time")
     assert cognition.requests == []
     def fail(*args):
         sent.append(args)
@@ -128,7 +128,7 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     assert "Desired revision: " + revision in cognition.requests[-1].prompt
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
     assert len(cognition.requests) == 1
-    assert sent[-1][0] == f"production recovered and is live at {revision[:12]}."
+    assert sent[-1][0] == f"production recovered and reached {revision[:12]}.\nrecovered"
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed")) is None
 
 

@@ -968,7 +968,7 @@ def test_owned_live_target_reaches_its_owner_without_a_model_turn(tmp_path):
     state.save_result_receipt({
         "owner": "telegram:44", "task_id": "task-1", "target": "app", "sequence": 1,
         "source_key": "target_result:owned", "result_text": "Target observation",
-        "observation": ["a" * 40, "satisfied"], "reply": "app is live at aaaaaaaaaaaa.",
+        "observation": ["a" * 40, "satisfied"], "reply": "app reached aaaaaaaaaaaa.",
     })
     # The service has no cognition at all: an assessment attempt would raise.
     daemon, queued, step = _result_pass(tmp_path, config, state)
@@ -979,7 +979,7 @@ def test_owned_live_target_reaches_its_owner_without_a_model_turn(tmp_path):
     for key, work in queued:
         if key[0] == "result":
             work()
-    assert sent == [(1, 44, "app is live at aaaaaaaaaaaa.", "target_result:owned")]
+    assert sent == [(1, 44, "app reached aaaaaaaaaaaa.", "target_result:owned")]
     assert state.result_receipt("target_result:owned")["done"]
 
 
