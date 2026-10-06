@@ -406,7 +406,8 @@ push, and a push already underway may land. Work that reached the remote is
 reported as landed, not relabelled cancelled.
 
 `/pause` is a filter on what the steward takes on — new task slices, probes,
-rhythm admission, desk intake. Repository convergence and result assessment keep
+rhythm admission, desk observations. An operator's message, from Telegram or the
+desk, is still answered. Repository convergence and result assessment keep
 running, because a repository that owes a publication does not stop owing it. It
 is not a quiescence barrier; do not use it as one before an upgrade.
 

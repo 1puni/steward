@@ -121,9 +121,10 @@ There is no automatic resend. The caller must keep its durable source until
 its owning acceptance/recovery path resolves it. Callback code must return promptly.
 
 Telegram text and attributed task results route into active native
-conversations. The shared desk API supports the same mapping, but the daemon
-orders desk turns within each topic and cannot inject a second desk message while
-that lane is in cognition. The existing source turn records its owning execution and
+conversations. The conversation API supports the same mapping for desk messages,
+but the inbox drain orders each conversation's messages and only Telegram's
+ingress offers a second message to a running execution: a desk client expects one
+reply per message. The existing source turn records its owning execution and
 native delivery disposition before sending. Accepted sources complete together
 with that execution's world acceptance; replay uses its one receipt and cannot
 admit a second task. An input acknowledged by the provider but interrupted before

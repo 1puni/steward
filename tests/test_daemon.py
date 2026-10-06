@@ -12,6 +12,7 @@ from typing import cast
 import pytest
 
 from test_world_turn_checkpoint import _git_world as make_world
+from steward_harness.inbox import EventLog, Inbox, Source, settle
 from steward_harness.lease import Lease
 from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
@@ -482,15 +483,14 @@ def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monke
     state = StateDatabase(config.provider.state_db)
     task_id = _cancel_conversation_task(state, "desk", "7")
     sent = threading.Event()
-    from steward_harness.desk import DeskEvents
-    append = DeskEvents.append
+    append = EventLog.append
 
     def record(events, kind, text, msg_id=""):
         append(events, kind, text, msg_id)
         if kind == "reply":
             sent.set()
 
-    monkeypatch.setattr(DeskEvents, "append", record)
+    monkeypatch.setattr(EventLog, "append", record)
     with running(daemon) as errors:
         assert sent.wait(5), errors
 
@@ -529,12 +529,12 @@ def test_daemon_requeues_desk_ingress_when_owner_is_busy(tmp_path, busy_error) -
 
     desk = daemon._desk(cast(ConversationService, SimpleNamespace(run_turn=busy)))
     assert desk is not None
-    desk.drain()
+    assert not settle(desk, desk.inbox.claim(desk.inbox.pending()[0]))
 
     assert queued.exists()
     assert not list(inbox_dir.glob("*.failed"))
     assert not Path(config.desk.events_file).exists()
-    desk.drain()
+    assert settle(desk, desk.inbox.claim(desk.inbox.pending()[0]))
     assert attempts == ["busy", "busy"]
     assert not queued.exists()
     assert "Accepted after deferral" in Path(config.desk.events_file).read_text()
@@ -557,9 +557,57 @@ def test_a_provider_refusing_a_desk_turn_fails_the_message_not_the_controller(tm
 
     desk = daemon._desk(cast(ConversationService, SimpleNamespace(run_turn=refuse)))
     assert desk is not None
-    desk.drain()
+    assert settle(desk, desk.inbox.claim(desk.inbox.pending()[0]))
     assert list(inbox_dir.glob("*.failed"))
     assert not list(inbox_dir.glob("*.json"))
+
+
+def test_pause_holds_desk_observations_and_never_an_operator_message(tmp_path) -> None:
+    """One rule for every inbox: pause stops work the steward takes on, not answers."""
+    from steward_harness.inbox import InboxDrain
+
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "desk": {"inbox_dir": str(tmp_path / "inbox"), "events_file": str(tmp_path / "events.jsonl")},
+    })
+    state = StateDatabase(config.provider.state_db)
+    state.set_paused(True)
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml", adapters={})
+    answered = threading.Event()
+
+    def run_turn(**kwargs):
+        answered.set()
+        return SimpleNamespace(transport_reply="answered while paused", task_admission=None)
+
+    desk = daemon._desk(cast(ConversationService, SimpleNamespace(run_turn=run_turn)))
+    assert desk is not None
+    desk.inbox.observe("watch-1", "a probe reading")
+    (tmp_path / "inbox" / "2-operator.json").write_text(
+        '{"kind":"message","text":"are you there?","id":"operator-1"}')
+
+    queued = []
+    kernel = SimpleNamespace(
+        dispatch=SimpleNamespace(submit=lambda key, work: queued.append(key), reap=lambda: None),
+        owners=lambda: (), tasks=SimpleNamespace(flush_inputs=lambda: None),
+    )
+    service = object.__new__(ConversationService)
+    service._state = state
+    step = daemon._pass(state, service, kernel, SimpleNamespace(), desk)
+    step()
+    assert ("desk", "watch-1") not in queued
+
+    drain = InboxDrain([desk])
+    drain.start()
+    try:
+        assert answered.wait(5), "pause held an operator's desk message"
+    finally:
+        drain.stop()
+    assert "answered while paused" in (tmp_path / "events.jsonl").read_text()
+    assert [message.msg_id for message in desk.inbox.pending()] == ["watch-1"]
+
+    state.set_paused(False)
+    step()
+    assert ("desk", "watch-1") in queued
 
 
 # 42 is configured, 582 and 4568 are not, and 0 is General — the topic every
@@ -578,6 +626,7 @@ def test_daemon_delivers_task_truth_to_the_telegram_topic_that_admitted_it(
     class Telegram:
         def __init__(self, config, *_args, **_kwargs):
             self.config = config
+            self.source = Source(Inbox(tmp_path / "telegram-inbox"), lambda _message: None)
 
         def start(self):
             return None
@@ -1090,3 +1139,36 @@ def test_result_diagnostic_write_failure_defers_discovery(tmp_path, monkeypatch)
     step()
     assert not [key for key, _ in queued if key[0] == "result"]
     assert not state.result_receipt("target_result:external").get("done")
+
+
+def test_unadoptable_telegram_receipts_keep_only_telegram_off(tmp_path, monkeypatch, caplog) -> None:
+    """Polling from offset 0 would answer old messages again; the desk need not wait."""
+    from steward_harness.telegram.api import TelegramAPI
+
+    token = tmp_path / "token"
+    token.write_text("tok")
+    legacy = tmp_path / "state.db.telegram-receipts" / "1"
+    legacy.mkdir(parents=True)
+    (legacy / "90.json").write_text("{truncated")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    config = StewardConfig.model_validate({
+        "identity": {"name": "Steward", "slug": "test"},
+        "provider": {"state_db": str(tmp_path / "state.db"), "workdir": str(workdir),
+                     "fallback_families": []},
+        "telegram": {"token_path": str(token), "chat_id": 1, "allowed_users": [2]},
+        "desk": {"inbox_dir": str(tmp_path / "inbox"), "events_file": str(tmp_path / "events.jsonl")},
+    })
+    monkeypatch.setattr(TelegramAPI, "get_updates", lambda *a, **kw: pytest.fail("Telegram was polled"))
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml", adapters={},
+                           broker=UntrustedExecutionBroker(UntrustedExecutionConfig()))
+    with daemon._daemon_lease(), caplog.at_level("CRITICAL"):
+        try:
+            daemon._start_owned()
+            assert daemon._telegram is None
+            assert daemon._inbox is not None
+            assert [source.inbox.dir for source in daemon._inbox.sources] == [tmp_path / "inbox"]
+        finally:
+            daemon.stop()
+    assert "Telegram ingress NOT started" in caplog.text
+    assert legacy.joinpath("90.json").read_text() == "{truncated"

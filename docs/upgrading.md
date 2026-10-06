@@ -21,6 +21,21 @@ authority**: the world checkout, task proposals and actions, Telegram actions an
 delivery. Do not just delete the keys. A client that was given a read-only desk
 would gain all of that; take it off the desk inbox first.
 
+### Telegram and the desk share one inbox
+
+Telegram's retained updates move from
+`<state_db>.telegram-receipts/<chat>/<update>.json` into
+`<state_db>.telegram-inbox/<chat>/`, and the poll offset, which lived only in
+memory, is persisted there as `offset`. The first start converts this itself,
+before polling: each unfinished receipt is queued with its saved reply and
+confirmed pieces, and the offset moves past every receipt, so nothing already
+answered is answered again. Receipts are only read, and `task-results/` still
+holds result receipts. If they cannot be read, the controller logs `Telegram
+ingress NOT started` at critical level and runs without Telegram rather than
+polling from offset 0; repair the directory and restart. Rolling back after the
+new release has answered messages is not clean: the old release ignores the
+inbox and polls from offset 0. The desk inbox and its event log are unchanged.
+
 ## Identify what is running
 
 Record the running release SHA, the loaded config, the service identity and the

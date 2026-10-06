@@ -240,18 +240,19 @@ including what happens when a process dies at each boundary.
 ## One budget, no scheduler
 
 `controller.workers` (default **8**, range 1–32) is the entire scheduling policy.
-Task slices, publication, deployment, rhythms, desk messages, probes and result
+Task slices, publication, deployment, rhythms, desk observations, probes and result
 assessment all compete for the same slots, first asked, first served. No
 per-lane reservation, no fairness ordering, because both of those are a
 scheduler, and a scheduler wants a starvation story and a tuning knob that
 nothing here has needed yet.
 
-A live conversation never waits in that queue. The operator talking to their
-steward is answered on the thread that received the message, so the budget can be
-full and they still get a reply.
+A live conversation never waits in that queue. Telegram and desk messages share one
+inbox and one drain of their own, so the budget can be full and the operator still
+gets a reply.
 
 `/pause` is a filter, not a barrier. It stops new task slices, probes, rhythms and
-desk intake; repositories that owe a publication keep publishing. Do not use it
+desk observations; repositories that owe a publication keep publishing, and an
+operator's message, from Telegram or the desk, is still answered. Do not use it
 as a quiescence point before an upgrade.
 
 A days-long task holds its slot for days. Eight of them hold all eight. That is
@@ -288,7 +289,7 @@ Start from [the minimal config](config/steward.minimal.yaml); the
 | --- | --- |
 | `steward task add --config C --repository R --title T --owner telegram:N --brief-file F [--priority P]` | File a task from the host CLI ([details](docs/git-native-tasks.md#operator-cli-admission)) |
 | `/status`, `/tasks` | Daemon and backlog state |
-| `/pause`, `/resume` | Stop or resume new slices, probes, rhythms and desk intake |
+| `/pause`, `/resume` | Stop or resume new slices, probes, rhythms and desk observations |
 | `/model [fast\|balanced\|deep]` | Inspect or change this conversation's profile |
 | `/model_family [provider]` | Inspect or switch this conversation's provider |
 | `/clear` | Start a fresh conversation generation |

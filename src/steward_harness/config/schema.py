@@ -483,7 +483,11 @@ class ControllerConfig(BaseModel):
 
 
 class DeskConfig(BaseModel):
-    """Configured web desk bridge (filesystem inbox shared with the sidecar)."""
+    """The filesystem desk transport: clients write `inbox_dir`, read replies from `events_file`.
+
+    Its messages share the inbox drain with Telegram; the directory's
+    permissions are the boundary of who may speak as the desk.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
