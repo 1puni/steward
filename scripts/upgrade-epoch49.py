@@ -129,7 +129,10 @@ def convert(source: Path, destination: Path, *, remote_tips: dict[str, str] | No
             observed = subprocess.run(hardened_git_argv(
                 f'--git-dir={controller_git_dir(source, repository)}',
                 'merge-base', '--is-ancestor', candidate, tip,
-            ), capture_output=True, timeout=120)
+            ), capture_output=True, timeout=120, env={
+                **{k: v for k, v in os.environ.items() if not k.startswith('GIT_')},
+                'GIT_NO_LAZY_FETCH': '1', 'GIT_OPTIONAL_LOCKS': '0',
+            })
             if observed.returncode != 0:
                 raise ValueError(f"task {task_id} publication is not proven landed in its copied repository")
             # Epoch 49 recognized either work or its rebased publication. Epoch
