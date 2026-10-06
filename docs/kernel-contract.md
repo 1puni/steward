@@ -560,9 +560,10 @@ isolated probe cannot establish the health of a deployed steward.
 
 ### Telegram cosmetics and delivery
 
-An operator conversation's final reply is delivered automatically. `notify` is
-an additional message, reserved for a distinct update. Automatic result
-assessment and world rhythms retain their finals and use explicit notifications.
+Every run has one voice to its owner. An operator conversation's final reply is
+delivered, and an ordinary task's result is its report, so neither is offered
+`notify`. Automatic result assessment, world rhythms and rhythm tasks record their
+finals instead, and speak only through explicit notifications.
 
 The native task tool supports `operation: telegram` with string fields `action`,
 `key`, and `text`. `info` requires empty text and returns only the configured

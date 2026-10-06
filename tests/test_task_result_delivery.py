@@ -460,4 +460,19 @@ def test_automatic_assessment_keeps_recorded_only_final_instruction(tmp_path):
     service.assess_task_result(owner)
     prompt = cognition.requests[-1].prompt
     assert 'Final replies from automatic runs are recorded only' in prompt
-    assert 'Your final reply is delivered to the operator' not in prompt
+
+
+def test_a_task_reports_once_its_result_is_its_only_voice(tmp_path):
+    """An ordinary task cannot notify: "Task done" with its findings is the one report."""
+    from steward_harness.task_calls import TaskExecutionCalls
+    service, facts, cognition, owner, task_id = admitted(tmp_path)
+    with pytest.raises(ValueError, match="result is its report"):
+        TaskExecutionCalls(service._state, task_id, {"app"})(dict(
+            operation="notify", key="progress", text="Relayed the comparison."))
+    assert service._state.pending_result_receipts() == []
+
+
+def test_a_rhythm_task_whose_result_is_recorded_may_notify(tmp_path):
+    service, facts, cognition, owner, task_id = completed_review(tmp_path, notify=True)
+    sent = [r["reply"] for r in service._state.pending_result_receipts()]
+    assert sent == ["The receipt regressed and needs repair."]

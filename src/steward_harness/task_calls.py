@@ -34,10 +34,6 @@ key after a lost receipt. A receipt confirms durable queuing, not transport
 completion. You may call during execution. Without a working tool, keep findings
 in the final reply; they will not be sent. Most runs should notify no one."""
 
-REPLY_DIRECTIVE = """Your final reply is delivered to the operator. Use it for the ordinary
-answer. The native notify operation sends an additional message; reserve it for a
-distinct progress update and do not repeat that update in your final reply.
-A notify receipt confirms durable queuing, not transport completion."""
 
 
 def queue_notification(state, *, owner, source, key, text, require_current=lambda: None):
@@ -73,8 +69,12 @@ def queue_notification(state, *, owner, source, key, text, require_current=lambd
 class TaskCalls:
     """Authority is captured by the controller, never supplied by the caller."""
 
-    def __init__(self, state, turn_id, *, cancel=lambda _execution: False, notify_owner=None, telegram_admin=None, drive_tasks=False):
+    def __init__(self, state, turn_id, *, cancel=lambda _execution: False, notify_owner=None,
+                 telegram_admin=None, drive_tasks=False, reply_delivered=False):
         self.state = state
+        # One voice per run: a run whose final reply is delivered has no second
+        # channel to its owner. Only a run whose reply is recorded may notify.
+        self.notifies = not reply_delivered
         self.telegram_admin = telegram_admin
         self.cancel = cancel
         self.turn_id = str(turn_id)
@@ -119,6 +119,8 @@ class TaskCalls:
             **{kind: {"operation", "key", "task_id", "text"}
                for kind in ("answer", "retry", "note", "cancel")},
         }
+        if not self.notifies:
+            fields.pop("notify")
         if not isinstance(operation, str) or operation not in fields or set(request) - {"source_id"} != fields[operation]:
             raise ValueError("unknown operation or incorrect fields")
         if not all(isinstance(value, str) for value in request.values()):
@@ -249,6 +251,7 @@ class TaskCallServer:
 
     def __init__(self, calls):
         self._invocation = None
+        self._notifies = calls.notifies
         def authorized(connection):
             if self._invocation is None:
                 return False
@@ -327,9 +330,11 @@ class TaskCallServer:
 
     @property
     def prompt(self):
+        notify = ("- notify: operation, key, text (durably queue a message to this run's owner)\n"
+                  if self._notifies else "")
         return '''\n## Live task operations
 Use the native steward_tasks task tool during this execution. Arguments:
-- notify: operation, key, text (durably queue a message to this run's owner)
+''' + notify + '''\
 - telegram: operation, action (info/set_photo/set_description), key, text
   (configured chat only; text is a description, absolute photo path, or empty for info;
    cosmetic changes must be enabled by the controller and requested by the operator)
@@ -367,7 +372,11 @@ class TaskExecutionCalls:
         self.state = state
         self.task_id = task_id
         self.telegram_admin = telegram_admin
-        self.owner = state.tasks.get(task_id).owner
+        task = state.tasks.get(task_id)
+        self.owner = task.owner
+        # A task's result is its report. Only a rhythm's task, whose finished
+        # result is recorded rather than sent, speaks to its owner by notify.
+        self.notifies = bool(task.procedure and task.procedure.event.startswith("rhythm:"))
         self.query = OwnershipCalls(state.tasks, task_id, repositories)
         self.start_writer()
 
@@ -443,6 +452,8 @@ class TaskExecutionCalls:
                     raise
         if not isinstance(request, dict) or request.get("operation") != "notify":
             return self.query(request)
+        if not self.notifies:
+            raise ValueError("this task's result is its report to its owner; it cannot notify")
         if set(request) != {"operation", "key", "text"}:
             raise ValueError("notify requires operation, key, text")
         with self.state.connect(write=True), self.state.tasks.lease:

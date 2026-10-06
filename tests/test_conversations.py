@@ -487,10 +487,10 @@ def test_desk_policy_selected_before_first_native_call_and_retains_lineage(tmp_p
     assert (operator.provider, operator.profile) == ("codex", "balanced")
 
 
-def test_operator_final_delivery_instruction(tmp_path):
+def test_operator_turn_is_not_told_its_reply_is_recorded_only(tmp_path):
     cognition = FakeCognition([_reply('One answer.')])
     service = _service(tmp_path, cognition)
     result = _turn(service, 'delivery')
-    assert 'Your final reply is delivered to the operator' in cognition.requests[-1].prompt
     assert 'they will not be sent' not in cognition.requests[-1].prompt
+    assert '- notify:' not in cognition.requests[-1].prompt
     assert result.transport_reply == 'One answer.'
