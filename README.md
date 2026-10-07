@@ -246,9 +246,10 @@ per-lane reservation, no fairness ordering, because both of those are a
 scheduler, and a scheduler wants a starvation story and a tuning knob that
 nothing here has needed yet.
 
-Retained results have one separate transport worker. They reach their owner without
-waiting for assessment or a free cognition slot; assessment may follow and add
-judgment. See the [delivery latency contract](docs/kernel-contract.md#task-results).
+Work outcomes enter their owning conversation for assessment. The steward decides
+what deserves a human message using the existing native notification tool.
+Explicitly queued notifications have one separate transport worker and do not wait
+for a free cognition slot. See the [delivery latency contract](docs/kernel-contract.md#task-results).
 
 A live conversation never waits in that queue. Telegram and desk messages share one
 inbox and one drain of their own, so the budget can be full and the operator still

@@ -170,8 +170,7 @@ protected procedure binding or configured publication/target requirements.
 
 Every rhythm explicitly declares `owner`. A configured `telegram:<topic>` or
 `desk:<conversation>` retains that protected result owner in each accepted task.
-Reportable completion, questions and failures enter the retained-result transport
-path independently of cognition. Later optional assessment in the owner's native
+Reportable completion, questions and failures enter retained-result assessment in the owner's native
 conversation can commit world knowledge and propose useful follow-up tasks within
 configured repository authority. Assessment cannot grant itself new
 repository access. Durable delivery receipts prevent a transport retry from
@@ -526,7 +525,7 @@ message can be told apart from a run that never happened. The controller also lo
 A procedure rhythm's full final narration is its evidence commit. Notification
 calls queue their own receipts without an assessment turn; they neither replace
 nor depend on that narration. Questions, failures and explicitly requested runs
-keep their outcome-report route. Already prepared delivery receipts replay their
+keep their owner-assessment route. Already prepared delivery receipts replay their
 frozen messages through upgrades. An automatic assessment's final reply is also
 recorded only; any additional message requires its own notification call.
 A refused task operation in an automatic turn is retained and logged.

@@ -853,6 +853,8 @@ class StewardDaemon:
         def assessments() -> Iterator[Owner]:
             for owner in dict.fromkeys(ConversationId(r["owner"])
                                       for r in state.pending_result_assessments()):
+                if route_error(owner):
+                    continue
                 yield ("assessment", owner), lambda owner=owner: assess_result(owner)
 
         def probes() -> Iterator[Owner]:

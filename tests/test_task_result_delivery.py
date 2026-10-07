@@ -16,14 +16,23 @@ def admitted(tmp_path):
     return service, facts, cognition, first.conversation_id, TaskId(submit.receipts[0]['task_id'])
 
 
+def notify(text, key='update'):
+    return _task_reply(dict(operation='notify', key=key, text=text), text='Recorded.')
+
+
+def assess_and_deliver(service, owner, send=lambda *_: None):
+    service.assess_task_result(owner)
+    return service.deliver_task_result(owner, send=send)
+
+
 def test_two_questions_then_publication_each_return_once(tmp_path):
     service, facts, cognition, owner, task_id = admitted(tmp_path)
     state = service._state
     for question in ('Which source?', 'Which destination?'):
         close_task_slice(state, task_id, 'ask', detail=question)
-        cognition.replies.append(_reply(''))
+        cognition.replies.append(notify(question))
         assert state.pending_task_result_conversations() == (owner,)
-        assert question in service.deliver_task_result(owner, send=lambda *_: None)
+        assert assess_and_deliver(service, owner) == question
         assert service.deliver_task_result(owner, send=lambda *_: None) is None
         state.tasks.set_priority(task_id, 10)
         assert service.deliver_task_result(owner, send=lambda *_: None) is None
@@ -32,13 +41,13 @@ def test_two_questions_then_publication_each_return_once(tmp_path):
     # Closing an idle slice is not publication. Do not consume its result early.
     assert service.deliver_task_result(owner, send=lambda *_: None) is None
     facts.land(state, task_id)
-    cognition.replies.append(_reply(''))
-    assert 'Task done:' in service.deliver_task_result(owner, send=lambda *_: None)
+    cognition.replies.append(notify('The receipt is fixed.'))
+    assert assess_and_deliver(service, owner) == 'The receipt is fixed.'
     restarted = _service(tmp_path, cognition)
     restarted._state.tasks.transports = {"app": facts}
     assert restarted.deliver_task_result(owner, send=lambda *_: None) is None
     assert state.pending_task_result_conversations() == ()
-    assert len(cognition.requests) == 1
+    assert len(cognition.requests) == 4
 
 
 def test_identical_failure_after_retry_is_a_new_result(tmp_path):
@@ -46,11 +55,11 @@ def test_identical_failure_after_retry_is_a_new_result(tmp_path):
     state = service._state
     for _ in range(2):
         state.tasks.hold(task_id, "blocked", 'Repository unavailable')
-        cognition.replies.append(_reply(''))
-        assert 'Repository unavailable' in service.deliver_task_result(owner, send=lambda *_: None)
+        cognition.replies.append(notify('Repository unavailable'))
+        assert assess_and_deliver(service, owner) == 'Repository unavailable'
         assert service.deliver_task_result(owner, send=lambda *_: None) is None
         state.tasks.retry(task_id)
-    assert len(cognition.requests) == 1
+    assert len(cognition.requests) == 3
 
 
 def test_question_receipt_does_not_suppress_later_completion(tmp_path):
@@ -59,38 +68,41 @@ def test_question_receipt_does_not_suppress_later_completion(tmp_path):
     close_task_slice(state, task_id, 'ask', detail='Which source?')
     cognition.replies.append(_reply('The question is retained.'))
     _turn(service, f"task_result:{task_id}:{state.tasks.get(task_id).outcome}:waiting", 'Task waiting: Which source?', operator_id='harness:task-result')
-    assert 'Which source?' in service.deliver_task_result(owner, send=lambda *_: None)
+    assert assess_and_deliver(service, owner) is None
     state.tasks.answer(task_id, 'The configured source.')
     close_task_slice(state, task_id, 'idle')
     facts.land(state, task_id)
-    cognition.replies.append(_reply(''))
-    assert 'Task done:' in service.deliver_task_result(owner, send=lambda *_: None)
+    cognition.replies.append(notify('The receipt is fixed.'))
+    assert assess_and_deliver(service, owner) == 'The receipt is fixed.'
 
 
 def test_send_failure_then_restart_preserves_selected_outcome(tmp_path):
     service, facts, cognition, owner, task_id = admitted(tmp_path)
     close_task_slice(service._state, task_id, 'ask', detail='Which source?')
+    cognition.replies.append(notify('Choose the source.'))
     attempts = []
     def fail(text, key):
         attempts.append((text, key))
         raise OSError('transport unavailable')
     with pytest.raises(OSError):
-        service.deliver_task_result(owner, send=fail)
+        assess_and_deliver(service, owner, send=fail)
     service._state.tasks.answer(task_id, 'Configured source.')
     restarted = _service(tmp_path, cognition)
     restarted._state.tasks.transports = {"app": facts}
     sent = []
-    assert 'Which source?' in restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
+    assert restarted.deliver_task_result(owner, send=lambda *args: sent.append(args)) == 'Choose the source.'
     assert sent == attempts
-    assert len(cognition.requests) == 1
+    assert len(cognition.requests) == 2
     restarted.assess_task_result(owner)
-    assert len(cognition.requests) == 1, "stale question must not start an assessment"
+    assert len(cognition.requests) == 2, "accepted assessment is not repeated"
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate')) is None
 
 
 def test_crash_after_send_before_receipt_is_at_least_once(tmp_path, monkeypatch):
     service, facts, cognition, owner, task_id = admitted(tmp_path)
     close_task_slice(service._state, task_id, 'ask', detail='Which source?')
+    cognition.replies.append(notify('Choose the source.'))
+    service.assess_task_result(owner)
     original = service._state.save_result_receipt
     def crash(receipt):
         if receipt.get('done'):
@@ -105,7 +117,7 @@ def test_crash_after_send_before_receipt_is_at_least_once(tmp_path, monkeypatch)
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
     assert len(sent) == 2 and sent[0] == sent[1]
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate')) is None
-    assert len(cognition.requests) == 1
+    assert len(cognition.requests) == 2
 
 
 @pytest.mark.parametrize("old_reply", ["", "A material finding."])
@@ -223,12 +235,13 @@ def test_callable_notification_retries_without_assessment(tmp_path):
 
 
 @pytest.mark.parametrize("event,disposition", [("manual:review", "idle"), ("rhythm:light:1", "ask")])
-def test_explicit_review_and_scheduled_question_still_deliver_evidence(tmp_path, event, disposition):
+def test_explicit_review_and_scheduled_question_send_only_owner_notification(tmp_path, event, disposition):
     service, facts, cognition, owner, task_id = completed_review(tmp_path, event=event, disposition=disposition)
-    cognition.replies.append(_reply(""))
+    cognition.replies.append(notify("The operator needs to choose a source."))
     sent = []
-    service.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert len(sent) == 1 and "full retained evidence" in sent[0][0]
+    assess_and_deliver(service, owner, send=lambda *args: sent.append(args))
+    assert len(sent) == 1 and sent[0][0] == "The operator needs to choose a source."
+    assert "full retained evidence" in cognition.requests[-1].prompt
 
 
 def test_notification_crash_after_send_keeps_at_least_once_semantics(tmp_path, monkeypatch):
@@ -255,19 +268,28 @@ def test_assessment_narration_never_sends_again(tmp_path, narration):
     sent = []
     service.deliver_task_result(owner, send=lambda *args: sent.append(args))
     service.assess_task_result(owner)
-    assert len(sent) == 1 and "full retained evidence" in sent[0][0]
-    assert "already been delivered" in cognition.requests[-1].prompt
+    assert sent == []
+    assert "has not been sent" in cognition.requests[-1].prompt
     assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("second send")) is None
 
 
-def test_assessment_failure_does_not_send_again(tmp_path):
+@pytest.mark.parametrize("error", [RuntimeUnavailable("no capacity"), RuntimeExecutionError("provider stopped")])
+def test_assessment_failure_sends_one_diagnostic_and_remains_pending(tmp_path, error):
     service, facts, cognition, owner, task_id = completed_review(tmp_path, event="explicit:review")
-    cognition.replies.append(RuntimeUnavailable("no capacity"))
+    cognition.replies.append(error)
     sent = []
     service.deliver_task_result(owner, send=lambda *args: sent.append(args))
     service.assess_task_result(owner)
+    service.deliver_task_result(owner, send=lambda *args: sent.append(args))
     assert len(sent) == 1
+    assert "requires operator recovery" in sent[0][0]
+    assert "full retained evidence" not in sent[0][0]
+    [pending] = service._state.pending_result_receipts()
+    assert pending['assessment_error'] == str(error) and not pending.get('done')
+    assert 'full retained evidence' in pending['result_text']
     assert not service._state.pending_result_assessments()
+    service.assess_task_result(owner)
+    assert len(cognition.requests) == 2
     assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate')) is None
 
 
@@ -321,8 +343,8 @@ def test_a_settled_backlog_is_not_rewalked_on_every_pass(tmp_path):
     state = service._state
     close_task_slice(state, task_id, 'idle')
     facts.land(state, task_id)
-    cognition.replies.append(_reply('SILENT'))
-    assert 'Task done:' in service.deliver_task_result(owner, send=lambda *_: None)
+    cognition.replies.append(_reply(''))
+    assert assess_and_deliver(service, owner) is None
     assert state.pending_task_result_conversations() == ()
 
     store, walks = state.tasks, []
@@ -355,27 +377,27 @@ def _day_after(state, task_id, days=1):
     return datetime.fromisoformat(state.tasks.get(task_id).updated_at).timestamp() + days * 86_400 + 60
 
 
-def test_open_ask_is_named_again_once_a_day_without_a_model_turn(tmp_path):
+def test_open_ask_is_assessed_once_a_day_and_owner_decides_what_to_send(tmp_path):
     # gg, 2026-09-25: the light rhythm's grant ask reached its owner once and
     # then sat for three days where only desk turns mentioned it.
     service, facts, cognition, owner, task_id = admitted(tmp_path)
     state = service._state
     close_task_slice(state, task_id, 'ask', detail='May light read the repository clones?')
-    cognition.replies.append(_reply(''))
-    assert 'May light read' in service.deliver_task_result(owner, send=lambda *_: None)
+    cognition.replies.append(notify('May light read the repository clones?'))
+    assert 'May light read' in assess_and_deliver(service, owner)
     assert state.remind_open_tasks(now=_day_after(state, task_id, 0) - 120) == 0
     requests = len(cognition.requests)
 
     assert state.remind_open_tasks(now=_day_after(state, task_id)) == 1
     assert state.remind_open_tasks(now=_day_after(state, task_id)) == 0, "one digest per day"
+    cognition.replies.append(notify('The read-only repository access decision is still open.'))
     sent = []
-    service.deliver_task_result(owner, send=lambda text, key: sent.append((text, key)))
+    assess_and_deliver(service, owner, send=lambda text, key: sent.append((text, key)))
     [(text, key)] = sent
-    assert key.startswith(f"task_open:{owner}:")
-    assert "Waiting on you for 1 day: Fix the receipt" in text
-    assert "May light read the repository clones?" in text
-    assert f"/task answer {task_id}" in text and f"/task cancel {task_id}" in text
-    assert len(cognition.requests) == requests, "a reminder is not assessed by a model"
+    assert key.startswith('notify:')
+    assert text == 'The read-only repository access decision is still open.'
+    assert "Waiting on you for 1 day: Fix the receipt" in cognition.requests[-1].prompt
+    assert len(cognition.requests) == requests + 1
 
     assert state.remind_open_tasks(now=_day_after(state, task_id, 2)) == 1
     state.tasks.answer(task_id, 'Yes, read-only.')
@@ -391,11 +413,12 @@ def test_blocked_task_owned_off_telegram_goes_to_the_operator_route(tmp_path):
     assert state.remind_open_tasks(now=_day_after(state, task_id, 3)) == 1
     [receipt] = [r for r in state.pending_result_receipts() if r["source_key"].startswith("task_open:")]
     assert receipt["owner"] is None and receipt["source_key"].startswith("task_open:operator:")
-    assert "Blocked for 3 days" in receipt["reply"] and "No space left on device" in receipt["reply"]
-    assert f"/task retry {task_id}" in receipt["reply"]
+    assert "reply" not in receipt
+    assert "Blocked for 3 days" in receipt["result_text"] and "No space left on device" in receipt["result_text"]
+    assert f"/task retry {task_id}" in receipt["result_text"]
 
 
-def test_result_delivers_while_owner_busy_and_after_clear_without_duplicate(tmp_path):
+def test_result_waits_for_busy_owner_and_after_clear_is_assessed_without_duplicate(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     service, facts, cognition, owner, task_id = admitted(tmp_path)
@@ -412,7 +435,10 @@ def test_result_delivers_while_owner_busy_and_after_clear_without_duplicate(tmp_
         try:
             assert entered.wait(1)
             service.deliver_task_result(owner, send=lambda *args: sent.append(args))
-            assert len(sent) == 1 and not running.done()
+            assert sent == [] and not running.done()
+            from steward_harness.state import ConversationBusy
+            with pytest.raises(ConversationBusy):
+                service.assess_task_result(owner)
             service._state.bind_conversation_provider(owner, 'codex', None)
             assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('clear replay')) is None
         finally:
@@ -420,11 +446,13 @@ def test_result_delivers_while_owner_busy_and_after_clear_without_duplicate(tmp_
         from steward_harness.state import ConversationBusy
         with pytest.raises(ConversationBusy, match='lineage changed'):
             running.result()
-    cognition.replies.append(_reply('Later judgment.'))
+    cognition.replies.append(notify('Later judgment.'))
     service.assess_task_result(owner)
     service.assess_task_result(owner)
     assert len(cognition.requests) == 3
-    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('late assessment')) is None
+    assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == 'Later judgment.'
+    assert len(sent) == 1
+    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate')) is None
 
 
 def test_reassigned_task_delivers_to_current_owner_and_skips_old_assessment(tmp_path):
@@ -436,6 +464,7 @@ def test_reassigned_task_delivers_to_current_owner_and_skips_old_assessment(tmp_
                                message='Assign current owner')
     assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('wrong owner')) is None
     service.deliver_task_result(other, send=lambda *_: None)
+    service._state.retain_pending_result(other)
     service._state.tasks.change(task_id, lambda d: d.model_copy(update={'owner': str(owner)}),
                                message='Reassign after delivery')
     service.assess_task_result(other)
@@ -447,7 +476,8 @@ def test_unprepared_legacy_rhythm_receipt_does_not_send_final_markers(tmp_path):
     service, facts, cognition, owner, task_id = completed_review(tmp_path)
     service._state.save_result_receipt(dict(owner=str(owner), task_id=str(task_id),
         source_key="legacy:done", result_text=FLAGGED, done=False))
-    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("legacy marker sent")) == ""
+    service.assess_task_result(owner)
+    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("legacy marker sent")) is None
     assert not service._state.pending_result_assessments()
     assert len(cognition.requests) == 1
 
@@ -476,3 +506,90 @@ def test_a_rhythm_task_whose_result_is_recorded_may_notify(tmp_path):
     service, facts, cognition, owner, task_id = completed_review(tmp_path, notify=True)
     sent = [r["reply"] for r in service._state.pending_result_receipts()]
     assert sent == ["The receipt regressed and needs repair."]
+
+
+def test_owner_answers_worker_question_through_native_tool_without_message(tmp_path):
+    service, _, cognition, owner, task_id = admitted(tmp_path)
+    close_task_slice(service._state, task_id, 'ask', detail='Which source?')
+    cognition.replies.append(_task_reply(dict(operation='answer', key='known-source',
+        task_id=str(task_id), text='Use the configured source.')))
+    assert assess_and_deliver(service, owner) is None
+    assert service._state.tasks.get(task_id).status.value == 'queued'
+    assert service._state.pending_result_receipts() == []
+
+
+def test_offered_native_input_does_not_settle_result_until_execution_accepted(tmp_path):
+    from steward_harness.state import ConversationBusy
+    from steward_harness.runtime.contracts import RuntimeInputResult
+    service, _, cognition, owner, task_id = admitted(tmp_path)
+    close_task_slice(service._state, task_id, 'ask', detail='Which source?')
+    offered = []
+    def running(request):
+        request.on_session_started('codex', 'session-1')
+        def receive(source):
+            offered.append(source)
+            request.on_input_result(RuntimeInputResult(source.source_id, 'accepted'))
+        request.on_input_ready(receive)
+        with pytest.raises(ConversationBusy, match='awaiting execution acceptance'):
+            service.assess_task_result(owner)
+        [receipt] = service._state.pending_result_receipts()
+        assert not receipt.get('done') and 'reply' not in receipt
+        assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('raw result')) is None
+        return _reply('The owning execution supplies the answer.')
+    cognition.replies.append(running)
+    execution = _turn(service, 'ongoing-owner')
+    assert execution.reply_text == 'The owning execution supplies the answer.'
+    service.assess_task_result(owner)
+    assert service._state.pending_result_receipts() == []
+    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate execution reply')) is None
+    assert len(offered) == 1 and len(cognition.requests) == 2
+
+
+def test_unowned_target_observations_assessed_in_sequence_without_inventing_task(tmp_path):
+    from steward_harness.state import ConversationId
+    cognition = FakeCognition([notify('The deployment needs attention.'), notify('The deployment recovered.')])
+    service = _service(tmp_path, cognition)
+    owner = ConversationId('telegram:42')
+    # Reverse insertion order must not reverse the failure/recovery story.
+    for sequence, outcome in [(2, 'satisfied'), (1, 'failed')]:
+        service._state.save_result_receipt(dict(owner=str(owner), task_id=None,
+            target='production', sequence=sequence, source_key=f'target_result:{sequence}',
+            result_text=f'Driver observation: {outcome}', observation=['a' * 40, outcome]))
+    sent = []
+    service.assess_task_result(owner)
+    service.assess_task_result(owner)
+    for expected in ['The deployment needs attention.', 'The deployment recovered.']:
+        assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == expected
+    assert 'Driver observation: failed' in cognition.requests[0].prompt
+    assert 'Driver observation: satisfied' in cognition.requests[1].prompt
+    assert service._state.tasks.all() == []
+    assert len(sent) == 2 and not service._state.pending_result_receipts()
+
+
+def test_queued_notifications_send_in_acceptance_order_not_source_hash_order(tmp_path):
+    from steward_harness.state import ConversationId
+    service = _service(tmp_path, FakeCognition([]))
+    owner = ConversationId('telegram:42')
+    for key, at, message in [('notify:a', 20, 'Recovered'), ('notify:z', 10, 'Failed')]:
+        service._state.save_result_receipt(dict(owner=str(owner), task_id=None,
+            source_key=key, recorded_at=at, result_text=message, reply=message))
+    sent = []
+    for _ in range(2):
+        service.deliver_task_result(owner, send=lambda text, key: sent.append(text))
+    assert sent == ['Failed', 'Recovered']
+
+
+def test_upgrade_drains_frozen_target_predecessor_before_new_owner_notification(tmp_path):
+    from steward_harness.state import ConversationId
+    cognition = FakeCognition([notify('The deployment recovered.')])
+    service = _service(tmp_path, cognition)
+    owner = ConversationId('telegram:42')
+    for sequence, outcome in [(1, 'failed'), (2, 'satisfied')]:
+        receipt = dict(owner=str(owner), task_id=None, target='production', sequence=sequence,
+            source_key=f'target_result:{sequence}', result_text=f'Driver observation: {outcome}')
+        if sequence == 1:
+            receipt['reply'] = 'Legacy frozen failure.'
+        service._state.save_result_receipt(receipt)
+    service.assess_task_result(owner)
+    assert service.deliver_task_result(owner, send=lambda *_: None) == 'Legacy frozen failure.'
+    assert service.deliver_task_result(owner, send=lambda *_: None) == 'The deployment recovered.'
