@@ -1108,3 +1108,80 @@ def test_task_driving_requires_world_input_and_result_owner(change):
     with pytest.raises(ValueError, match='world rhythm with a result owner'):
         ProcedureRhythmConfig.model_validate(dict(schedule=300, procedure='review', input='world',
             owner='telegram:3', drive_tasks=True) | change)
+
+
+def test_conversation_sources_wake_capture_and_followthrough_without_task_authority(tmp_path):
+    rhythms = {
+        "staging": CHAIN["sleep"] | {"paths": ["episodes/"], "sources": ["tg_"]},
+        "chaos": CHAIN["rem"] | {"after": "staging"},
+    }
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:20")
+    procedures.run_world_rhythm(service, "chaos", "rhythm:chaos:20")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
+
+    # Telegram's owner has already admitted the task; no episode was written.
+    service.run_turn(transport="telegram", transport_key="3", source_event_key="tg_101",
+                     operator_id="operator", text="Do the work and keep its existing owner.")
+    task, = state.tasks.all()
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("staging", "rhythm:staging:21")]
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:21")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("chaos", "rhythm:chaos:21")]
+    procedures.run_world_rhythm(service, "chaos", "rhythm:chaos:21")
+    # EditingCognition attempts a native submit every time. Both rhythms are
+    # refused, leaving the Telegram owner's one task intact.
+    assert [t.task_id for t in state.tasks.all()] == [task.task_id]
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == []
+    assert list(Procedures(config, state, {}, world=checkpoint.world).due_world_rhythms(
+        now=NOW + 2 * DAY)) == []
+    _world_commit(checkpoint.world.root, "episodes/new-voice.md")
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == [("staging", "rhythm:staging:22")]
+
+
+def test_source_gate_reads_trailers_not_quoted_requests_or_model_outputs(tmp_path):
+    rhythms = {"staging": CHAIN["sleep"] | {"sources": ["tg_"]}}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:20")
+    world = checkpoint.world
+    for index, source in enumerate(("rhythm:chaos:20", "task_result:task-one:done", "target_result:release")):
+        world.finish(f"evt-{index}", "Quoted request\n\nSteward-Source: tg_999",
+                     "A reply about tg_999", base=world.input_cursor(), source=source)
+    _world_commit(world.root, "notes/unrelated.md")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
+    # An empty tree diff still contains an accepted conversation exchange.
+    world.finish("evt-message", "Please remember this.", "Understood.",
+                 base=world.input_cursor(), source="tg_102")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("staging", "rhythm:staging:21")]
+    assert world.changed("0" * 40, (), ("tg_",))
+
+
+@pytest.mark.parametrize("sources", [[""], [" tg_"], ["tg_\n"], ["tg_ bad"]])
+def test_source_gate_refuses_ambiguous_prefixes(tmp_path, sources):
+    config = _config(tmp_path, tmp_path / "world").model_dump()
+    config["rhythms"]["sleep"]["sources"] = sources
+    with pytest.raises(ValueError, match="source prefixes"):
+        StewardConfig.model_validate(config)
+
+
+def test_source_gate_is_only_for_world_input(tmp_path):
+    from steward_harness.config.schema import ProcedureRhythmConfig
+    with pytest.raises(ValueError, match="sources apply only to world"):
+        ProcedureRhythmConfig(schedule=300, procedure="review",
+                             input="repositories/app/main", owner=None, sources=["tg_"])
+
+
+def test_source_arriving_during_capture_remains_unseen_after_acceptance(tmp_path):
+    pending = []
+    def concurrent_input(_request):
+        if pending:
+            world = pending.pop()
+            world.finish("evt-late", "A later request", "Recorded", base=world.input_cursor(),
+                         source="tg_201")
+    rhythms = {"staging": CHAIN["sleep"] | {"sources": ["tg_"]}}
+    config, state, checkpoint, service, cognition, procedures = _chain(
+        tmp_path, EditingCognition(before_return=concurrent_input), rhythms=rhythms)
+    pending.append(checkpoint.world)
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:20")
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("staging", "rhythm:staging:21")]
+    procedures.run_world_rhythm(service, "staging", "rhythm:staging:21")
+    assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == []

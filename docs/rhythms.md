@@ -366,8 +366,8 @@ interval an hour later, so the same rhythm fires on the first poll after 01:00
 UTC. The offset must be shorter than the interval, and it works the same way
 for a procedure rhythm's interval.
 
-A world rhythm without `paths` runs every interval. With `paths`, a model call
-needs new input there, as it does for a procedure rhythm:
+A world rhythm without `paths` or `sources` runs every interval. With either
+filter, a model call needs matching new input:
 
 ```yaml
 rhythms:
@@ -376,6 +376,7 @@ rhythms:
     procedure: staging
     input: world
     paths: [episodes/]
+    sources: [tg_]
     owner: null
 ```
 
@@ -388,6 +389,22 @@ starts from the candidate rather than the turn's base, so whatever the rhythm
 wrote under its own paths is on both sides and never makes it fire again, while
 anything another turn wrote after its base still counts. With no accepted run
 yet, it runs. Paths are relative to the world root.
+
+`sources` adds literal prefixes of the final `Steward-Source` Git trailer.
+The example also wakes for accepted Telegram exchanges (`tg_` is that
+transport's source prefix), including exchanges that change no files. These
+prefixes are instance configuration, not a transport registry. Source matching
+and path matching are alternatives: either admits the pass. With only `sources`,
+unrelated file edits do not count. The same accepted candidate bounds the Git
+history range; reading an already captured source never wakes another pass.
+Text quoted inside a turn does not count as its trailer. Unreadable history
+admits inspection rather than silently losing input, as with the path guard.
+Sources apply only to world rhythms; they add no tools, task-driving authority
+or notification owner access. A procedure must still distinguish a request from
+work already performed by the conversation that received it.
+
+Older releases reject the new configuration field. Rollback must restore their
+matching configuration as well as code. No persisted task schema changes.
 
 Only something new to read counts: a file added or modified under the paths.
 A deletion, a move out of the paths and a move within them are not input, so
