@@ -134,3 +134,81 @@ def test_daemon_wires_published_world_into_telegram(tmp_path, published_world, m
     reply = daemon._telegram.turn_handler("event", 1, 42, 1, "history?", ())
     daemon._telegram.send_reply(1, 42, reply)
     assert f"/commit/{sha}" in sent[0]
+
+
+@pytest.fixture
+def ssh_configuration(tmp_path, monkeypatch):
+    config = tmp_path / "ssh_config"
+    config.write_text("")
+    run = subprocess.run
+    queries = []
+    def configured_run(argv, **kwargs):
+        if argv[0] == "ssh":
+            queries.append(argv)
+            # Exercise the real parser without developer credentials/config.
+            argv = [argv[0], "-F", str(config), *argv[1:]]
+        return run(argv, **kwargs)
+    monkeypatch.setattr(subprocess, "run", configured_run)
+    return config, queries
+
+
+@pytest.mark.parametrize("remote", [
+    "git@github-example-org-world:example/org-world.git",
+    "ssh://git@github-example-org-world/example/org-world.git",
+])
+def test_configured_ssh_alias_reaches_renderer_and_service(
+    tmp_path, published_world, monkeypatch, remote, ssh_configuration,
+):
+    _original, source, sha = published_world
+    world = ControllerGitTransport(tmp_path / "state.db", "alias", remote, "main")
+    git(world.git_dir, "fetch", str(source), f"HEAD:{world.remote_ref}")
+    config, queries = ssh_configuration
+    config.write_text("Host github-example-org-world\n  HostName github.com\n  User git\n")
+    url = f"https://github.com/example/org-world/commit/{sha}"
+    assert turn_reference_entities(world, TURN)[TURN][1] == url
+    service = _service(tmp_path)
+    service._world_transport = world
+    sent = []
+    monkeypatch.setattr(service.api, "send_message", lambda _chat, text, **kw: sent.append(text) or 1)
+    service.send_result(1, 42, f"See {TURN}", "alias-notification")
+    assert f'href="{url}"' in sent[0]
+    assert "Preserve the originals · 2020-03-04 10:11 +0200" in sent[0]
+    assert len(queries) == 2 and all("-G" in query for query in queries)
+
+
+@pytest.mark.parametrize("hostname", [None, "gitlab.com", "github.com.example.test"])
+def test_alias_name_alone_does_not_establish_github_identity(published_world, ssh_configuration, hostname):
+    world, _source, _sha = published_world
+    world.remote_url = "git@github-example-org-world:example/org-world.git"
+    config, queries = ssh_configuration
+    if hostname:
+        config.write_text(f"Host github-example-org-world\n  HostName {hostname}\n")
+    assert turn_reference_entities(world, TURN) == {}
+    assert len(queries) == 1
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("ssh unavailable"), subprocess.TimeoutExpired("ssh", 5)])
+def test_ssh_alias_query_failure_keeps_delivery_literal(tmp_path, published_world, monkeypatch, error):
+    world, _source, _sha = published_world
+    world.remote_url = "git@github-example-org-world:example/org-world.git"
+    run = subprocess.run
+    def failing_query(argv, **kwargs):
+        if argv[0] == "ssh":
+            raise error
+        return run(argv, **kwargs)
+    monkeypatch.setattr(subprocess, "run", failing_query)
+    service = _service(tmp_path)
+    service._world_transport = world
+    sent = []
+    monkeypatch.setattr(service.api, "send_message", lambda _chat, text, **kw: sent.append(text) or 1)
+    service.send_reply(1, 42, f"See {TURN}")
+    assert sent == [f"See {TURN}"]
+
+
+def test_canonical_remote_never_evaluates_ssh_config(published_world, ssh_configuration):
+    world, _source, _sha = published_world
+    _config, queries = ssh_configuration
+    assert TURN in turn_reference_entities(world, TURN)
+    world.remote_url = "git@github.com:example/world.git"
+    assert TURN in turn_reference_entities(world, TURN)
+    assert queries == []
