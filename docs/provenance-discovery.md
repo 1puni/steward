@@ -25,6 +25,57 @@ An assistant answer to one task is evidence of that answer, not a standing
 operator grant to other tasks. The speaker and the scope travel with every
 decision that gets reused.
 
+## Human-readable citations
+
+`steward cite` turns a turn ID, task ID or commit hash into an ordinary Markdown
+link. It reads the owning repository locally and never writes, fetches or calls a
+model. Choose the repository explicitly when crossing worlds:
+
+```sh
+steward cite turn_example --repo /path/to/world
+steward cite a1b2c3d --repo /path/to/world --label "V's original direction"
+steward cite task-example --repo /path/to/tasks.git --web-url https://github.com/org/tasks
+steward cite --history 20 --repo /path/to/world
+steward cite turn_example --repo /path/to/world --json
+```
+
+Python callers can use `steward_harness.citations.cite(reference, repo=...,
+label=...)`; `GitCitations` reuses one in-memory history read for a batch. No
+index is stored. The CLI resolves the entire batch before printing, so a missing
+reference cannot silently produce a partial success.
+
+Turns resolve through exact `Steward-Turn` trailers in the history reachable
+from `HEAD` (or `--revision`). Older commits without trailers can resolve through
+their exact `steward: checkpoint turn_...` or `steward: turn turn_...` subject.
+Multiple matching commits are ambiguous: cite the
+exact commit instead. Hashes resolve to full commit IDs. Tasks resolve through
+`refs/heads/tasks/<id>` to the title in that revision's `task.md`. A task citation
+is a snapshot, not a moving link to current status. An absent task ref is not
+inferred from a turn mentioning the task. These are recorded exchanges and task
+accounts, not links to an unobserved model thought.
+
+Links use the GitHub repository URL from `origin`, with `--web-url` available
+for a local store or another remote. Other hosts are not currently supported.
+The reader does not establish remote publication or grant access: the cited
+commit must have been published to that private or public repository. A task
+store's URL must belong to that store, not its product repository.
+
+Labels show the subject/title and the original Git **author timestamp**, with
+its timezone offset. This is the commit's recorded date, not a claim about the
+source message's exact time. JSON retains the full hash, original subject, author
+timestamp and committer timestamp separately. Legacy `steward: turn ...`
+subjects receive a display label excerpted from the retained reply (or a neutral
+"Recorded turn" label when no reply is retained in the message); that label
+is a present-day rendering, not a retroactively authored summary. `--label`
+lets a writer choose wording that fits the surrounding prose.
+
+Backfill current documents by replacing resolvable bare references with these
+links in an ordinary new commit. Keep missing references visible for later
+investigation. Do not amend or rebase published world history to improve its
+subjects: even with preserved author dates, new hashes would invalidate old
+citations and acceptance receipts. `--history` gives old commits readable labels
+without changing their messages or keeping a second history in Git notes.
+
 ## Observed source and retained findings
 
 Before an organisation rhythm thinks, the controller refreshes
