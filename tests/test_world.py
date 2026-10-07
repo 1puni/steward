@@ -61,6 +61,7 @@ def test_a_turn_is_one_commit_whose_message_is_the_exchange(tmp_path: Path) -> N
     message = subprocess.run(["git", "log", "-1", "--format=%B"], cwd=tmp_path,
                              check=True, capture_output=True, text=True).stdout
     assert "Input:\nthe request" in message and "Reply:\nthe answer" in message
+    assert message.splitlines()[0] == "the answer"
     assert world.trailers("HEAD") == {
         "Steward-Turn": "evt-a", "Steward-Base": base, "Steward-Source": "telegram:1:2"}
 

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
+import subprocess
 import sys
 import threading
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 
 import yaml
@@ -18,6 +21,7 @@ from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.providers import build_runtimes
 from steward_harness.state import ConversationId, TaskSpec
 from steward_harness.task_store import GitTaskStore
+from steward_harness.citations import GitCitations
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
@@ -131,6 +135,25 @@ def _cmd_task_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_cite(args: argparse.Namespace) -> int:
+    try:
+        if bool(args.references) == (args.history is not None):
+            raise ValueError("give references or --history COUNT")
+        if args.label is not None and (len(args.references) != 1 or args.history is not None):
+            raise ValueError("--label needs exactly one reference")
+        reader = GitCitations(args.repo, web_url=args.web_url, revision=args.revision)
+        items = (reader.history(args.history) if args.history is not None
+                 else [reader.resolve(reference) for reference in args.references])
+        if args.json:
+            print(json.dumps([asdict(item) for item in items], ensure_ascii=False, indent=2))
+        else:
+            print("\n".join(item.markdown(args.label) for item in items))
+    except (OSError, ValueError, subprocess.TimeoutExpired, yaml.YAMLError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="steward", description="Autonomous project steward kernel"
@@ -142,6 +165,15 @@ def main(argv: list[str] | None = None) -> int:
 
     run_p = subparsers.add_parser("run", help="Run the steward kernel")
     run_p.add_argument("--config", required=True)
+
+    cite_p = subparsers.add_parser("cite", help="Link a turn, task or commit without rewriting history")
+    cite_p.add_argument("references", nargs="*")
+    cite_p.add_argument("--repo", default=".", help="Owning Git repository (or task store)")
+    cite_p.add_argument("--web-url", help="GitHub repository URL; defaults to origin")
+    cite_p.add_argument("--revision", default="HEAD", help="History containing the turn (default: HEAD)")
+    cite_p.add_argument("--label", help="Contextual label for one citation")
+    cite_p.add_argument("--history", type=int, metavar="COUNT", help="Render recent history with readable labels")
+    cite_p.add_argument("--json", action="store_true", help="Include exact hashes, original subjects and timestamps")
 
     task_p = subparsers.add_parser("task", help="Manage accepted tasks")
     task_commands = task_p.add_subparsers(dest="task_command", required=True)
@@ -166,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run(args)
     if args.command == "task":
         return _cmd_task_add(args)
+    if args.command == "cite":
+        return _cmd_cite(args)
     return 0
 
 

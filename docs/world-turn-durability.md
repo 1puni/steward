@@ -55,7 +55,11 @@ Interrupted native edits and Git operations still belong to their session.
 ## Preparation and application
 
 Capture stages the current files and commits them with the attributed exchange
-as the message. The world records what is remembered, not what was asked: operator
+as the message. Its subject is a bounded excerpt of the reply's first nonempty
+line, with simple Markdown decoration removed. The exchange and identity trailers
+remain intact; no extra model call or response protocol supplies a title.
+Historical subjects are rendered readably by [citations](provenance-discovery.md#human-readable-citations),
+without rewriting their commits. The world records what is remembered, not what was asked: operator
 text is recorded verbatim, while a harness-authored prompt is recorded in its short
 form. The provider still receives the whole prompt. A resumed unprepared attempt amends its own earlier closing
 commit (same `Steward-Turn`) rather than adding a second; once a candidate is

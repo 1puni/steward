@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from steward_harness.git import ISOLATED_GIT_ENV, agent_git, run_agent_git, steward_commit_argv
 from steward_harness.turn_id import validate_turn_id
+from steward_harness.citations import readable_subject
 
 if TYPE_CHECKING:
     from steward_harness.runtime.execution import UntrustedExecutionBroker
@@ -107,7 +108,7 @@ class GitWorld:
             raise ValueError("Git-world checkpoints do not permit content filters")
         self._git("add", "--all")
         amend = self.trailers("HEAD").get(TURN_TRAILER) == event_id
-        message = (f"steward: turn {event_id}\n\nInput:\n{user_text.strip()}\n\n"
+        message = (f"{readable_subject(reply_text)}\n\nInput:\n{user_text.strip()}\n\n"
                    f"Reply:\n{reply_text.strip() or '(none)'}\n\n"
                    f"{TURN_TRAILER}: {event_id}\n{BASE_TRAILER}: {base}\n{SOURCE_TRAILER}: {source}\n")
         self._git(*steward_commit_argv(
