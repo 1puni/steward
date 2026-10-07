@@ -706,7 +706,7 @@ class StewardDaemon:
                 observation_max_age=max(60, self.config.controller.poll_seconds * 3),
             )
             self._health.start()
-        self._start_telegram(state, conversations, commands)
+        self._start_telegram(state, conversations, commands, checkpoint.transport if checkpoint else None)
         sources = [source for source in (
             self._telegram.source if self._telegram is not None else None, desk,
         ) if source is not None]
@@ -736,6 +736,7 @@ class StewardDaemon:
         state: StateDatabase,
         conversations: ConversationService,
         commands: KernelCommands,
+        world: ControllerGitTransport | None = None,
     ) -> None:
         """Attach the Telegram ingress, if one is configured, to the shared kernel."""
         telegram = self.config.telegram
@@ -770,6 +771,7 @@ class StewardDaemon:
             command_handler=commands,
             ongoing_topics=conversations.native_telegram_topics,
             native_turn_handler=lambda *args: telegram_turn(*args, ongoing_only=True),
+            world_transport=world,
         )
         self._telegram = service
         try:

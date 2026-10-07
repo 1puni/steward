@@ -24,6 +24,8 @@ _SAFE_LINK_SCHEMES = {"http", "https", "tg"}
 _ESCAPABLE_MARKDOWN_CHARACTERS = frozenset(string.punctuation)
 _CODE_ENTITY = re.compile(r"(<code>.*?</code>)", re.DOTALL)
 TASK_REFERENCE = re.compile(r"(?<![\w/:?=&.\-])[a-z0-9][a-z0-9-]*(?![\w/\-]|\.[A-Za-z0-9])")
+# Native turn IDs have a fixed shape; do not guess at hashes or prose slugs.
+TURN_REFERENCE = re.compile(r"(?<![\w/:?=&#%.\-])turn_[0-9a-f]{32}(?![\w/\-]|\.[A-Za-z0-9])")
 
 
 def _find_unescaped(text: str, needle: str, start: int) -> int:
@@ -114,6 +116,7 @@ def _format_inline(text: str, references: dict | None = None) -> str:
             if end >= 0:
                 code = text[cursor + run : end].replace("\n", " ")
                 output.append(_reference_html(references[code]) if references and code in references
+                              and not TURN_REFERENCE.fullmatch(code)
                               else f"<code>{html.escape(code, quote=False)}</code>")
                 cursor = end + run
                 continue
@@ -140,6 +143,12 @@ def _format_inline(text: str, references: dict | None = None) -> str:
                         )
                         cursor = target_end + 1
                         continue
+            if references and label_end >= 0:
+                # Preserve labels in reference-style links too, even though
+                # this renderer leaves that Markdown form as literal text.
+                output.append(_format_inline(text[cursor:label_end + 1]))
+                cursor = label_end + 1
+                continue
 
         if text[cursor] == "<":
             autolink_end = text.find(">", cursor + 1)
@@ -176,7 +185,7 @@ def _format_inline(text: str, references: dict | None = None) -> str:
             continue
 
         if references:
-            match = TASK_REFERENCE.match(text, cursor)
+            match = TURN_REFERENCE.match(text, cursor) or TASK_REFERENCE.match(text, cursor)
             if match and match[0] in references:
                 output.append(_reference_html(references[match[0]]))
                 cursor += len(match[0])
@@ -253,7 +262,8 @@ def sanitize_markdown_for_telegram(text: str, *, references: dict | None = None)
                 + ending
             )
         else:
-            output.append(_format_inline(body, references) + ending)
+            # Indented code is left in its existing literal presentation.
+            output.append(_format_inline(body, None if body.startswith(("    ", "\t")) else references) + ending)
         cursor += 1
 
     return "".join(output)

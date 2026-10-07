@@ -125,3 +125,31 @@ def test_reference_labels_are_escaped_and_unsafe_targets_cannot_become_links():
         "task-reference", references={"task-reference": ("<script>", "javascript:alert(1)")}
     )
     assert formatted == "<code>&lt;script&gt;</code>"
+
+
+def test_turn_links_preserve_explicit_links_code_paths_and_unknown_references():
+    raw, unknown = "turn_" + "a" * 32, "turn_" + "b" * 32
+    url = "https://github.com/example/world/commit/" + "c" * 40
+    references = {raw: ("Original <decision> · 2020-03-04 +0200", url)}
+    source = (
+        f"{raw}. **{raw}** {unknown}\n`{raw}`\n`steward cite {raw}`\n"
+        f"```text\n{raw}\n```\n[{raw}](https://example.test/explicit)\n"
+        f"<https://example.test/{raw}>\n/turns/{raw} {raw}.md é{raw} {raw}extra\n"
+        f"https://example.test/#{raw}\n[{raw}][source]\n    {raw}\n\t{raw}"
+    )
+    rendered = sanitize_markdown_for_telegram(source, references=references)
+    assert rendered.count(f'href="{url}"') == 2
+    assert "Original &lt;decision&gt;" in rendered
+    assert unknown in rendered
+    assert f"<code>{raw}</code>" in rendered
+    assert f"<code>steward cite {raw}</code>" in rendered
+    assert f'<pre><code class="language-text">{raw}</code></pre>' in rendered
+    assert f'<a href="https://example.test/explicit">{raw}</a>' in rendered
+    assert f'<a href="https://example.test/{raw}">https://example.test/{raw}</a>' in rendered
+    assert f"/turns/{raw} {raw}.md é{raw} {raw}extra" in rendered
+    assert f"https://example.test/#{raw}" in rendered
+    assert f"[{raw}][source]" in rendered
+    assert f"    {raw}\n\t{raw}" in rendered
+    chunks = format_markdown_chunks(source, max_units=45, references=references)
+    assert "".join(_visible_text(chunk) for chunk in chunks) == _visible_text(rendered)
+    assert all(len(_visible_text(chunk).encode("utf-16-le")) // 2 <= 45 for chunk in chunks)

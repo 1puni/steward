@@ -35,13 +35,30 @@ date. Exact identifiers remain in commands, code, quoted evidence and provenance
 fields. Current task status can use an existing task-card link; a Git task citation
 instead names an immutable snapshot.
 
-This is model-facing guidance, not a transport rewrite or a guarantee that every
+This writing convention is model-facing guidance, not a guarantee that every
 response contains a citation. The author resolves references in the owning
 repository and checks publication before linking. Unresolved or unpublished
 references stay explicit, including a current turn that has no accepted commit
 yet. If the utility is unavailable in an execution environment, ordinary
 `git log`, `git show` and the owning remote remain the discovery path. The harness
 does not fetch or alter evidence merely to format a response.
+
+Telegram also resolves bare native turn IDs (`turn_` followed by 32 lowercase
+hex digits) at its existing reference-rendering boundary. Replies and retained
+notifications in the configured chat receive links labeled with the subject and
+original author date. Resolution uses only the configured world's controller-owned
+Git store, pinned to its last observed published branch tip. No agent checkout,
+network lookup or new index participates. Explicit links, inline and fenced code,
+indented code, paths and unresolved or ambiguous references retain their text.
+Formatted chunks are retained before delivery, so retries cannot acquire different
+labels or destinations after history changes.
+
+Without a configured published GitHub world, automatic turn links are unavailable.
+The last observed tip can lag a newly published turn; that turn stays literal until
+a later message can resolve it. Existing retained messages are not retroactively
+reformatted. Bare commit hashes, non-native turn IDs, other repositories, desk
+output and document files remain the author's responsibility through the shared
+guidance and utility; Telegram does not guess their owning repository.
 
 `steward cite` turns a turn ID, task ID or commit hash into an ordinary Markdown
 link. It reads the owning repository locally and never writes, fetches or calls a

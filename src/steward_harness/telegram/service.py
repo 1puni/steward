@@ -21,6 +21,8 @@ from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnav
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.inbox import DEFERRALS, Inbox, InboundMessage, Source, settle
 from steward_harness.state import StateDatabase
+from steward_harness.git_transport import ControllerGitTransport
+from steward_harness.telegram.references import turn_reference_entities
 from steward_harness.telegram.tasks import reference_entities
 from steward_harness.telegram.api import TelegramAPI, TelegramAPIError
 from steward_harness.telegram.commands import (
@@ -181,6 +183,7 @@ class TelegramService:
         command_handler: Callable[[str, str | None, int, int, int], str],
         ongoing_topics: Callable[[], tuple[int, ...]] = lambda: (),
         native_turn_handler: Callable[[str, int, int, int, str, tuple[Path, ...]], str] | None = None,
+        world_transport: ControllerGitTransport | None = None,
     ) -> None:
         self.config = config
         token = self._read_token(config.token_path)
@@ -214,6 +217,7 @@ class TelegramService:
         self._stop = threading.Event()
         self._execution_broker = execution_broker
         self._state = state_db
+        self._world_transport = world_transport
         if config.inbound_media_dir:
             self._inbound_media_dir = Path(config.inbound_media_dir).resolve()
         else:
@@ -797,11 +801,14 @@ class TelegramService:
         retained = getattr(self._delivery_context, "path", None) is not None
         chunks = self._delivery_context.receipt.get("formatted_chunks") if retained else None
         if chunks is None:
-            chunks = format_markdown_chunks(
-                clean_text, references=reference_entities(
+            references = None
+            if chat_id == self.config.chat_id:
+                references = reference_entities(
                     self._state.tasks, clean_text, self.config.task_app_url, self.config.chat_id,
                 )
-                if chat_id == self.config.chat_id else None,
+                references.update(turn_reference_entities(self._world_transport, clean_text))
+            chunks = format_markdown_chunks(
+                clean_text, references=references,
             )
             if retained:
                 # Piece indexes must keep referring to the same text if a task
