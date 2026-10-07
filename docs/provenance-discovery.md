@@ -27,6 +27,22 @@ decision that gets reused.
 
 ## Human-readable citations
 
+Shared conversation and task prompts make readable evidence links the default
+writing convention for replies, notifications and documents. This includes
+Telegram, desk, world rhythms, repository tasks and read-only procedures; no
+instance-specific opt-in is needed. Labels use the task title, subject or original
+date. Exact identifiers remain in commands, code, quoted evidence and provenance
+fields. Current task status can use an existing task-card link; a Git task citation
+instead names an immutable snapshot.
+
+This is model-facing guidance, not a transport rewrite or a guarantee that every
+response contains a citation. The author resolves references in the owning
+repository and checks publication before linking. Unresolved or unpublished
+references stay explicit, including a current turn that has no accepted commit
+yet. If the utility is unavailable in an execution environment, ordinary
+`git log`, `git show` and the owning remote remain the discovery path. The harness
+does not fetch or alter evidence merely to format a response.
+
 `steward cite` turns a turn ID, task ID or commit hash into an ordinary Markdown
 link. It reads the owning repository locally and never writes, fetches or calls a
 model. Choose the repository explicitly when crossing worlds:

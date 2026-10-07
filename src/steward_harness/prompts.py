@@ -5,6 +5,23 @@ from __future__ import annotations
 from steward_harness.task_calls import NOTIFY_DIRECTIVE
 
 
+READABLE_REFERENCES = """\
+## References for people
+In replies, notifications and documents, cite evidence with Markdown links labeled
+by its task title, subject or original date. Keep exact IDs in commands, code,
+quoted evidence and provenance fields.
+Use `steward cite REF --repo /path/to/owning/repository` when available to resolve
+turn IDs, commit hashes or accepted task refs; `--label` supplies a contextual label.
+Choose the repository that owns the evidence. Task snapshots belong to their task
+store, not the product repository. Use existing task-card links for current status.
+The utility reads local Git; it does not prove publication. Link only to an observed
+published destination. If the utility is unavailable, inspect git log/git show and
+the owning remote. If a reference is missing, ambiguous, inaccessible or unpublished,
+retain its exact identifier and explain the limitation instead of inventing a link.
+The current turn may not yet have an accepted commit. Preserve original dates and
+history; improve labels in new writing without amending old commits."""
+
+
 REPOSITORY_KNOWLEDGE_DIRECTIVE = """\
 ## Durable repository knowledge
 This repository is the canonical owner of its project-local knowledge. Inspect its files
@@ -150,7 +167,8 @@ def build_turn_prompt(
     return "\n\n".join(
         section for section in (
             "\n".join(interface),
-            _event_block(event_id), orientation, f"## Request\n{text.strip()}",
+            _event_block(event_id), orientation, READABLE_REFERENCES,
+            f"## Request\n{text.strip()}",
         ) if section
     )
 
@@ -180,6 +198,7 @@ def build_task_prompt(
             f"## Brief\n{brief.strip()}",
         ) if part),
         _operator_context_block(operator_context),
+        READABLE_REFERENCES,
         "Earlier slices' findings are the messages of this branch's commits. "
         "Inspect this retained branch and any existing provider-session context, "
         "preserve completed work, and finish only what remains of the accepted task.",
