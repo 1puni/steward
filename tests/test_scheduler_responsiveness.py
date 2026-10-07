@@ -22,7 +22,7 @@ from steward_harness.state import StateDatabase, TaskSpec
 from steward_harness.repository_reconciler import RepositoryReconciler
 from steward_harness.task_runner import TaskRunner
 from steward_harness.lease import Busy
-from test_daemon import _cancel_conversation_task
+from test_daemon import _cancel_conversation_task, _notify_cancelled_result
 from world_fixtures import ReadingAdapter
 
 
@@ -62,7 +62,7 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
     def respond(request):
         if "Harness task result" in request.prompt:
             advance("task-results")
-            return ""
+            return _notify_cancelled_result(request)
         advance("desk")
         return "Desk completed."
 
@@ -88,7 +88,7 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
 
     def record(events, kind, text, msg_id=""):
         append(events, kind, text, msg_id)
-        if "Task cancelled" in text:
+        if "The requested work was cancelled." in text:
             delivered.set()
 
     monkeypatch.setattr(EventLog, "append", record)
@@ -125,6 +125,8 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
                 assert event.wait(5), f"{name} waited behind {blocked}"
         if blocked != "task-results":
             assert delivered.wait(5), "the result did not reach its transport"
+        else:
+            assert not delivered.is_set(), "raw evidence bypassed the owning assessment"
         assert not progressed[blocked].is_set()
         with pytest.raises(Busy):
             with daemon._daemon_lease():
@@ -136,7 +138,11 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
     assert not owner.is_alive()
     if failures:
         raise failures[0]
-    assert delivered.is_set()
+    # Shutdown drains the blocked assessment; its explicit notification may
+    # await the next transport pass, but must be delivered or durably queued.
+    assert delivered.is_set() or any(
+        r.get("reply") == "The requested work was cancelled."
+        for r in state.pending_result_receipts())
 
 
 def test_real_observations_admit_work_while_a_task_owns_execution(tmp_path, monkeypatch):
