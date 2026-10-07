@@ -139,6 +139,15 @@ old database, adjacent files, task history, turn and source identities, and nati
 lineage; and writes `epoch50-conversion.json`, which must say `complete: true`
 before the result is deployable.
 
+Legacy tasks may retain a rebased publication whose original work commit is not
+an ancestor of the published branch. For each such repository, observe its actual
+remote head independently and pass `--remote-tip REPOSITORY=FULL_SHA` (repeat for
+multiple repositories). The converter stays offline: the copied controller Git
+store must contain that head and prove the retained publication is its ancestor.
+It then adopts that published commit as the task's work, retaining the original
+work, task history and result identity. Missing evidence or an unlanded candidate
+is refused; resolve that publication on the old release before converting it.
+
 ## Callable notifications and task closure
 
 Drain active executions through the existing release path before switching code;

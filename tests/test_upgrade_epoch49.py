@@ -11,6 +11,7 @@ import yaml
 
 from steward_harness.state import ConversationId, StateDatabase, TaskId, TaskSpec, TurnId
 from steward_harness.task_store import GitTaskStore, PREFIX, ProcedureRun
+from steward_harness.git_transport import ControllerGitTransport
 
 spec = importlib.util.spec_from_file_location('upgrade_epoch49', Path(__file__).parents[1] / 'scripts/upgrade-epoch49.py')
 upgrade = importlib.util.module_from_spec(spec)
@@ -118,3 +119,64 @@ def test_root_conversion_preserves_shared_directory_and_file_owners(tmp_path):
     for original in (shared,note):
         copied=destination/original.relative_to(source.parent)
         assert (copied.stat().st_uid,copied.stat().st_gid,copied.stat().st_mode)==(original.stat().st_uid,original.stat().st_gid,original.stat().st_mode)
+
+
+def published_legacy(tmp_path):
+    source, *_ = legacy(tmp_path)
+    store = GitTaskStore(source.parent / 'state.db.tasks.git', create=False)
+    task_id, _ = store.create(TaskSpec('app', 'Published work', 'An already completed request.'),
+                              owner='telegram:7')
+    old, definition, body = store.read(task_id)
+    tree = store.git('mktree', input_text='')
+    base = store.git('commit-tree', tree, input_text='Original base\n')
+    work = store.git('commit-tree', tree, '-p', base, input_text='Native findings\n\nDisposition: idle\n')
+    candidate = store.git('commit-tree', tree, '-p', base, input_text='Integrated outcome\n')
+    outcome = store._commit(task_id, old, definition.model_copy(update={'work': work}),
+                            body, 'checkpoint idle', parents=(work,))
+    fields = definition.model_dump(mode='json', exclude_none=True)
+    fields.update(work=work, publication=dict(work=work, base=base, candidate=candidate))
+    blob = store.git('hash-object', '-w', '--stdin', input_text='---\n' + yaml.safe_dump(fields) + '---\n\n' + body + '\n')
+    document = store.git('mktree', input_text=f'100644 blob {blob}\ttask.md\n')
+    prepared = store.git('commit-tree', document, '-p', outcome, '-p', candidate,
+                          input_text='retain gated publication candidate\n')
+    store.git('update-ref', PREFIX + str(task_id), prepared, outcome)
+    transport = ControllerGitTransport(source, 'app', str(store.path), 'main', allow_local=True)
+    transport._run('fetch', str(store.path), f'{candidate}:refs/steward/remote/main')
+    key = f'task_result:{task_id}:{outcome}:done'
+    receipts = source.with_name('state.db.task-results'); receipts.mkdir()
+    (receipts / (hashlib.sha256(key.encode()).hexdigest() + '.json')).write_text(
+        json.dumps(dict(source_key=key, owner='telegram:7', task_id=str(task_id), done=True)))
+    return source, task_id, work, candidate, outcome, key
+
+
+def test_rebased_publication_stays_done_without_republishing_or_redelivering(tmp_path):
+    source, task_id, work, candidate, outcome, key = published_legacy(tmp_path)
+    destination = tmp_path / 'converted'
+    result = upgrade.convert(source, destination, remote_tips={'app': candidate})
+    state = StateDatabase(destination / 'state.db')
+    transport = ControllerGitTransport(state.path, 'app', str(source.parent / 'state.db.tasks.git'),
+                                       'main', allow_local=True, create=False)
+    assert not transport._contains(work, candidate)
+    state.tasks.transports['app'] = transport
+    task = state.tasks.get(task_id)
+    assert task.status.value == 'done' and not task.dispatchable and not task.publishable
+    assert task.work_sha == candidate and task.outcome == outcome
+    assert state.tasks.contains(work, task.revision)
+    assert state.result_receipt(key)['done']
+    assert state.pending_task_result_for(ConversationId('telegram:7')) is None
+    assert result['landed_publications'] == 1
+
+
+@pytest.mark.parametrize('evidence', ['absent', 'unlanded', 'unknown-object'])
+def test_publication_without_observed_landing_is_refused_and_source_preserved(tmp_path, evidence):
+    source, task_id, work, candidate, *_ = published_legacy(tmp_path)
+    original = hashlib.sha256(source.read_bytes()).hexdigest()
+    store = GitTaskStore(source.parent / 'state.db.tasks.git', create=False)
+    original_ref = store.refs()[PREFIX + str(task_id)]
+    tips = {} if evidence == 'absent' else {'app': work if evidence == 'unlanded' else 'f' * 40}
+    destination = tmp_path / 'converted'
+    with pytest.raises(ValueError, match='publication'):
+        upgrade.convert(source, destination, remote_tips=tips)
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == original
+    assert store.refs()[PREFIX + str(task_id)] == original_ref
+    assert not (destination / 'epoch50-conversion.json').exists()
