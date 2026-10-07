@@ -12,6 +12,8 @@ from steward_harness.runtime.contracts import (
     resolve_model,
 )
 from steward_harness.runtime.providers.claude import ClaudeRuntime, _ClaudeLifecycle
+from steward_harness.cognition import Cognition
+from test_cognition import FakeAdapter, _request as cognition_request
 from test_runtime_lifecycle import _SESSION, _controller, _init, _request, _result
 
 
@@ -140,7 +142,7 @@ def test_runtime_reports_native_failure_through_real_process(
     detail = (
         'API Error: 429 {"error":{"code":"1308","message":"Usage exhausted"}}'
         if provider == "glm"
-        else "You've hit your usage limit"
+        else "You've hit your session limit · resets 4pm (UTC)"
     )
     events = [_init(), json.dumps(assistant(detail, "rate_limit"))]
     if terminal == "result":
@@ -164,22 +166,59 @@ def test_runtime_reports_native_failure_through_real_process(
         if provider == "glm"
         else ClaudeRuntime(executable, controller=_controller(), native_home=tmp_path)
     )
-    with pytest.raises(RuntimeExecutionError) as caught:
+    expected = RuntimeExecutionError if provider == "glm" else RuntimeUnavailable
+    with pytest.raises(expected) as caught:
         runtime.execute(
             replace(_request(tmp_path), resolved=resolve_model(provider, "balanced"))
         )
     assert detail in str(caught.value)
-    assert caught.value.session_id == _SESSION
+    if provider == "glm":
+        assert caught.value.session_id == _SESSION
 
 
-def test_an_expired_sign_in_is_a_refusal_not_a_failed_turn():
-    """Claude's dead OAuth session must reach the configured fallback.
+@pytest.mark.parametrize("acted", [False, True])
+def test_claude_session_limit_reaches_glm_only_before_tools_run(tmp_path, acted):
+    events = [_init()]
+    if acted:
+        events.append(json.dumps({
+            "type": "assistant", "session_id": _SESSION,
+            "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {}}]},
+        }))
+    events.extend([
+        json.dumps(assistant("You've hit your session limit · resets 4pm (UTC)", "rate_limit")),
+        json.dumps(failed()),
+    ])
+    executable = tmp_path / "claude"
+    executable.write_text(
+        "#!" + sys.executable + "\nimport sys\nsys.stdin.readline()\nprint("
+        + repr("\n".join(events)) + ", flush=True)\n"
+    )
+    executable.chmod(0o755)
+    claude = ClaudeRuntime(executable, controller=_controller(), native_home=tmp_path)
+    glm = FakeAdapter("glm")
+    cognition = Cognition({"claude": claude, "glm": glm})
+    request = cognition_request(tmp_path, provider_order=("claude", "glm"))
+    if acted:
+        with pytest.raises(RuntimeExecutionError, match="session limit") as caught:
+            cognition.run(request)
+        assert caught.value.session_id == _SESSION
+        assert not glm.requests
+    else:
+        result = cognition.run(request)
+        assert result.resolved.provider == "glm"
+        assert len(glm.requests) == 1
+        assert glm.requests[0].provider_session_id is None
+        assert glm.requests[0].prompt == request.prompt
 
-    A downstream instance saw exactly this text and the turn ended there,
-    with a working GLM credential configured behind it and never asked.
-    """
+
+@pytest.mark.parametrize("message", [
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "You've hit your session limit · resets 4pm (UTC)",
+    "You've hit your usage limit",
+])
+def test_an_expired_sign_in_or_quota_is_a_refusal_not_a_failed_turn(message):
+    """A native refusal before tool use must reach the configured fallback."""
     parser = lifecycle()
-    message = "Failed to authenticate: OAuth session expired and could not be refreshed"
     with pytest.raises(RuntimeUnavailable) as caught:
         parser.consume_event(failed(errors=[message]))
     assert str(caught.value) == "Claude: " + message
