@@ -178,12 +178,11 @@ not add up to messages.
 A target outcome returns to an existing conversation only when its desired
 revision is exactly the commit that landed that conversation's task.
 The controller retains the dated driver observation and desired SHA in an ordinary
-result receipt. A satisfied outcome carries its plain reply ("`<target>` reached
-`<sha>`", followed by the driver's own details when it gave any), because the
-observation already says everything the owner's model could. Satisfied means
-whatever the driver reports as ready, so the reply claims no more than that. A failing outcome delivers the retained observation first, independently
-of cognition. Optional assessment follows through the world-acceptance path, where
-the owner can act or propose an authorized follow-up. Readiness still requires external observation and exact
+result receipt. Satisfied and failing outcomes both enter owner assessment; neither
+prefills a chat reply. The owner relates the observed state to the original intent
+and explicitly notifies when useful, or completes quietly. Satisfied means only
+what the driver reports as ready. The owner can act or propose an authorized
+follow-up. Readiness still requires external observation and exact
 evidence; the assessment does not confer deployment authority.
 
 Driver prose and error text vary between polls and are not new outcomes.
@@ -195,12 +194,11 @@ completion remains publication, independently of deployment.
 The recipient rule deliberately excludes historical ancestor candidates and tasks
 without an owner/publication. Coalesced or skipped intermediate candidates do not
 each receive task feedback. An outcome without an exact task recipient is
-retained in the same receipt store with no task ID and a plain report: live,
-recovered, or not reaching the revision with the driver's reason.
+retained in the same receipt store with no task ID and the driver's evidence.
 The delivery lane assigns the configured `incidents` or `operator` Telegram
 topic, or the operator desk route. Without a configured route it remains pending
-and `/status` explains the delivery problem. No synthetic task or model assessment
-is needed to report an external target's state. Ref-resolution failures likewise
+and `/status` explains the delivery problem. That real operator conversation assesses
+the observation without a synthetic task. Ref-resolution failures likewise
 remain visible without pretending that a desired SHA was established.
 
 Result delivery eligibility is derived before dispatch. An invalid configured

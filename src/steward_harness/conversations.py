@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal, cast
 
-from steward_harness.task_calls import TaskCalls, TaskCallServer
+from steward_harness.task_calls import TaskCalls, TaskCallServer, queue_notification
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import ProcedureConfig
 from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
@@ -501,20 +501,11 @@ class ConversationService:
     def deliver_task_result(
         self, conversation_id: ConversationId, *, send: Callable[[str, str], None],
     ) -> str | None:
-        """Send retained evidence without acquiring a conversation or cognition slot."""
-        receipt = self._state.retain_pending_result(conversation_id)
+        """Send explicit frozen messages without a conversation or cognition slot."""
+        receipt = next((r for r in self._state.pending_result_receipts()
+                        if r.get("owner") == str(conversation_id) and "reply" in r), None)
         if receipt is None:
             return None
-        if "reply" not in receipt:
-            # A legacy receipt without a frozen message is not a send decision
-            # for a quiet automatic task. Only explicit notify receipts carry one.
-            quiet = bool(receipt.get("task_id") and receipt["source_key"].endswith(":done")
-                         and self._state.tasks.get(
-                TaskId(receipt["task_id"])).quiet)
-            receipt["reply"] = "" if quiet else receipt["result_text"]
-            # Freeze the delivery decision before attempting external transport.
-            receipt["assess"] = bool(receipt.get("task_id")) and not quiet
-            self._state.save_result_receipt(receipt)
         if receipt["reply"]:
             send(receipt["reply"], receipt["source_key"])
         receipt.pop("delivery_error", None)
@@ -523,46 +514,61 @@ class ConversationService:
         return receipt["reply"]
 
     def assess_task_result(self, conversation_id: ConversationId) -> None:
-        """Optional judgment after delivery; final prose creates no second send."""
+        """Give retained evidence to its owner; only an explicit notify sends chat."""
         receipt = next((r for r in self._state.pending_result_assessments()
                         if r["owner"] == str(conversation_id)), None)
         if receipt is None:
             return
-        task = self._state.tasks.get(TaskId(receipt["task_id"]))
-        current_source = f"task_result:{task.task_id}:{task.outcome}:{task.status.value}"
-        if task.owner != str(conversation_id) or (
-            receipt["source_key"].startswith("task_result:")
-            and receipt["source_key"] != current_source
-        ):
-            receipt["assessment_done"] = True
-            receipt["assessment_skipped"] = "task outcome or owner changed"
+        # Retain the exact selected outcome before cognition or task steering.
+        self._state.save_result_receipt(receipt)
+        task_id = TaskId(receipt["task_id"]) if receipt.get("task_id") else None
+        task = self._state.tasks.get(task_id) if task_id else None
+        legacy = bool(receipt.get("done"))
+        if task and (task.owner != str(conversation_id) or (
+            task.quiet and receipt["source_key"].endswith(":done")
+        ) or (legacy and receipt["source_key"].startswith("task_result:") and
+              receipt["source_key"] != f"task_result:{task.task_id}:{task.outcome}:{task.status.value}")):
+            receipt.update(done=True, assessment_done=True,
+                           assessment_skipped="task outcome or owner changed")
             self._state.save_result_receipt(receipt)
             return
         try:
             self._assess_task_result(
-                conversation_id, TaskId(receipt["task_id"]),
-                receipt["result_text"], receipt["source_key"],
+                conversation_id, task_id, receipt["result_text"], receipt["source_key"],
+                already_delivered=legacy,
             )
         except (RuntimeExecutionError, RuntimeUnavailable) as error:
+            # A failed turn is not accepted silence. Keep its obligation and
+            # original evidence, and use the existing independent send route.
             receipt["assessment_error"] = str(error)
-        # Busy/world-acceptance failures propagate and remain pending. Accepted
-        # world turns replay their own receipt if this write is interrupted.
-        receipt["assessment_done"] = True
+            receipt["delivery_error"] = f"Result assessment interrupted: {error}"
+            queue_notification(self._state, owner=conversation_id, source=receipt["source_key"],
+                               key="assessment-error", text=(
+                "Assessment of a retained work outcome paused and requires operator recovery. "
+                "Check /status for the diagnostic, inspect the retained evidence, then ask me "
+                "to continue in a new conversation turn."))
+            self._state.save_result_receipt(receipt)
+            return
+        # Busy, unsettled native input and world-acceptance failures remain
+        # pending. Only an accepted execution settles this observation; its
+        # native notify calls carry any independent transport obligation.
+        receipt.update(done=True, assessment_done=True)
+        receipt.pop("delivery_error", None)
         self._state.save_result_receipt(receipt)
 
     def _assess_task_result(
-        self, conversation_id: ConversationId, task_id: TaskId,
-        result_text: str, source_event_key: str,
+        self, conversation_id: ConversationId, task_id: TaskId | None,
+        result_text: str, source_event_key: str, *, already_delivered: bool = False,
     ) -> str:
-        task = self._state.tasks.get(task_id)
-        target_result = source_event_key.startswith("target_result:")
+        task = self._state.tasks.get(task_id) if task_id else None
         self._state.open_conversation(conversation_id,
                                       provider=self._state.tasks.default_provider,
                                       profile=self._state.tasks.default_profile)
         conversation = self._state.get_conversation(conversation_id)
         prior = self._state.turn_for_source(conversation_id, source_event_key)
         text = prior.input_text if prior is not None else build_result_assessment_request(
-            task.brief, result_text,
+            task.brief if task else "Observe the configured target or outstanding work.", result_text,
+            already_delivered=already_delivered,
         )
         result = self.run_turn(
             transport=conversation.transport,
@@ -577,7 +583,7 @@ class ConversationService:
             # findings — is either a constant or already committed on the
             # task's own branch, so an episode carrying it records the
             # harness's own instructions as though they were an observation.
-            episode_input=(result_text if target_result else
+            episode_input=(result_text if task is None or source_event_key.startswith("target_result:") else
                            f"Harness task result for {task_id} in {task.repository}."),
         )
         return result.reply_text

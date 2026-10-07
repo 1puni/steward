@@ -177,7 +177,8 @@ Manual runs are explicit new requests. Every rhythm explicitly names a configure
 result owner or `null` for retained evidence only. Completed rhythm findings
 remain evidence. Deliberate notification calls queue delivery receipts directly,
 independently of final narration or assessment. Questions and failures retain
-ordinary result delivery. A checkpoint itself does not broadcast to Telegram.
+ordinary owner assessment, which may act or explicitly notify. A checkpoint itself
+does not broadcast to Telegram.
 
 Read-only access constrains mutations; it does not turn every procedure into a
 full-tree audit. Scheduled and explicit procedure runs follow their accepted
