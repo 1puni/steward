@@ -48,6 +48,9 @@ _PRIVILEGED_ENVIRONMENT_NAMES = frozenset(
         "SSH_AGENT_PID",
         "SSH_AUTH_SOCK",
         "TELEGRAM_BOT_TOKEN",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SLACK_TOKEN",
     }
 )
 _PRIVILEGED_ENVIRONMENT_PREFIXES = ("AWS_", "AZURE_", "ARM_", "KUBE_")
@@ -217,6 +220,7 @@ class RepositoryConfig(BaseModel):
     default_branch: str = "main"
     gates: tuple[CommandSpec, ...] = ()
     requires: tuple[str, ...] = ()
+    publish_requires_approval: bool = False
 
     @model_validator(mode="after")
     def validates_path(self) -> "RepositoryConfig":
@@ -258,6 +262,50 @@ class TelegramAdapterCommandConfig(BaseModel):
     def validates_controller_executable(self) -> "TelegramAdapterCommandConfig":
         if self.authority == "controller":
             _require_bounded_absolute("controller adapter executable", self.command.argv[0])
+        return self
+
+
+class SlackConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    team_id: str
+    channel_id: str
+    bot_token_path: str
+    app_token_path: str
+    users: dict[str, Literal["operator", "contributor", "observer"]]
+    user_names: dict[str, str] = Field(default_factory=dict)
+    notifications: dict[Literal["operator", "incidents"], str] = Field(default_factory=dict)
+    delivery_roots: tuple[str, ...] = ()
+    max_file_bytes: int = Field(default=20_000_000, ge=1, le=100_000_000)
+
+    def valid_route(self, route):
+        prefix = f"{self.team_id}:{self.channel_id}:"
+        return route.startswith(prefix) and bool(re.fullmatch(r"[0-9]{1,20}\.[0-9]{6}", route[len(prefix):]))
+
+    @model_validator(mode="after")
+    def validate_boundary(self):
+        for value, pattern in [(self.team_id, r"T[A-Z0-9]+"),
+                               (self.channel_id, r"[CG][A-Z0-9]+")]:
+            if not re.fullmatch(pattern, value) or "PLACEHOLDER" in value:
+                raise ValueError("replace Slack workspace/channel placeholders with IDs")
+        if not self.users or "operator" not in self.users.values():
+            raise ValueError("at least one explicit Slack operator is required")
+        if any(not re.fullmatch(r"[UW][A-Z0-9]+", u) or "PLACEHOLDER" in u
+               for u in self.users):
+            raise ValueError("Slack users must be explicit user IDs")
+        if any(user not in self.users or not name.strip() or len(name) > 80
+               or any(ord(c) < 32 for c in name) for user, name in self.user_names.items()):
+            raise ValueError("Slack user_names must name admitted users with bounded single-line labels")
+        for raw in (self.bot_token_path, self.app_token_path, *self.delivery_roots):
+            p = Path(raw)
+            if not p.is_absolute() or p == Path("/") or ".." in p.parts:
+                raise ValueError("Slack paths must be bounded absolute paths")
+        if any(Path(token).is_relative_to(Path(root))
+               for token in (self.bot_token_path, self.app_token_path) for root in self.delivery_roots):
+            raise ValueError("Slack tokens must be outside delivery roots")
+        if self.bot_token_path == self.app_token_path:
+            raise ValueError("Slack token references must be distinct")
+        if any(not self.valid_route(route) for route in self.notifications.values()):
+            raise ValueError("Slack notifications must name a thread in the configured workspace/channel")
         return self
 
 
@@ -660,6 +708,7 @@ class StewardConfig(BaseModel):
     procedures: dict[str, ProcedureConfig] = Field(default_factory=dict)
     rhythms: dict[str, ProcedureRhythmConfig] = Field(default_factory=dict)
     targets: dict[str, TargetConfig] = Field(default_factory=dict)
+    deployment_operators: tuple[str, ...] = ()
     tasks: TaskIntakeConfig = Field(default_factory=TaskIntakeConfig)
     identity: IdentityConfig
     execution: UntrustedExecutionConfig = UntrustedExecutionConfig()
@@ -667,6 +716,7 @@ class StewardConfig(BaseModel):
     incident_policy: IncidentPolicy = IncidentPolicy()
     provider: ProviderConfig = ProviderConfig()
     telegram: TelegramConfig | None = None
+    slack: SlackConfig | None = None
     world: WorldConfig | None = None
     desk: DeskConfig | None = None
     repositories: dict[str, RepositoryConfig] = Field(default_factory=dict)
@@ -674,6 +724,26 @@ class StewardConfig(BaseModel):
 
     @model_validator(mode="after")
     def validates_cross_references(self) -> "StewardConfig":
+        for actor in self.deployment_operators:
+            if actor.startswith("slack:"):
+                parts = actor.split(":")
+                admitted = (len(parts) == 3 and self.slack is not None
+                            and parts[1] == self.slack.team_id
+                            and self.slack.users.get(parts[2]) == "operator")
+            elif actor.startswith("telegram:"):
+                user = actor.removeprefix("telegram:")
+                admitted = (user.isdecimal() and self.telegram is not None
+                            and int(user) in self.telegram.allowed_users)
+            else:
+                admitted = False
+            if not admitted:
+                raise ValueError("deployment_operators must name explicitly configured transport operators")
+        contributors = self.slack and "contributor" in self.slack.users.values()
+        if (contributors or any(r.publish_requires_approval for r in self.repositories.values())) and not self.deployment_operators:
+            raise ValueError("contributors and gated publication require explicit deployment_operators")
+        if contributors and any("publish_requires_approval" not in r.model_fields_set
+                                for r in self.repositories.values()):
+            raise ValueError("with contributors, explicitly declare publish_requires_approval for every repository")
         if self.world and self.world.remote_url is not None:
             if WORLD_TRANSPORT in self.repositories:
                 raise ValueError(f"repository name {WORLD_TRANSPORT!r} is reserved for the world remote")
@@ -739,8 +809,11 @@ class StewardConfig(BaseModel):
                 if kind == "telegram":
                     if not self.telegram or reference not in {str(t) for t in self.telegram.topics.values()}:
                         raise ValueError("rhythm owner must name a configured Telegram topic")
+                elif kind == "slack":
+                    if self.slack is None or not self.slack.valid_route(reference):
+                        raise ValueError("rhythm owner must name a configured Slack thread")
                 elif kind != "desk" or not self.desk or not reference.strip():
-                    raise ValueError("rhythm owner must name an enabled desk or Telegram conversation")
+                    raise ValueError("rhythm owner must name an enabled desk, Telegram or Slack conversation")
         for name, rhythm in self.rhythms.items():
             chain = [name]
             while (predecessor := self.rhythms[chain[-1]].after) is not None:
@@ -813,10 +886,8 @@ class StewardConfig(BaseModel):
 
     def _validate_controller_paths(self) -> None:
         """Keep controller authority outside model-writable filesystem roots."""
-        if self.execution.user is None:
-            return
         telegram = self.telegram
-        if telegram is not None and telegram.inbound_media_dir is None:
+        if self.execution.user is not None and telegram is not None and telegram.inbound_media_dir is None:
             raise ValueError(
                 "split-identity Telegram requires an explicit inbound_media_dir"
             )
@@ -837,6 +908,9 @@ class StewardConfig(BaseModel):
             writable_roots.add(_absolute_path(world.root))
 
         private_files = {"provider.state_db": _absolute_path(self.provider.state_db)}
+        if self.slack is not None:
+            for field in ("bot_token_path", "app_token_path"):
+                private_files["slack." + field] = _absolute_path(getattr(self.slack, field))
         if telegram is not None:
             private_files["telegram.token_path"] = _absolute_path(
                 telegram.token_path
@@ -848,6 +922,19 @@ class StewardConfig(BaseModel):
         if world is not None and world.lock_dir is not None:
             private_files["world.lock_dir"] = _absolute_path(world.lock_dir)
 
+        delivery_roots = [Path(root).resolve() for transport in (telegram, self.slack)
+                          if transport is not None for root in transport.delivery_roots]
+        # A controller upload bypasses the execution UID's file permissions.
+        # Neither transport may expose the other's tokens or retained state.
+        private_delivery_paths = {**private_files, "controller state directory": Path(self.provider.state_db).parent}
+        for label, path in private_delivery_paths.items():
+            private = path.resolve()
+            if any(private.is_relative_to(root) or root.is_relative_to(private)
+                   for root in delivery_roots):
+                raise ValueError(f"controller-owned {label} must be outside delivery roots")
+
+        if self.execution.user is None:
+            return
         for label, path in private_files.items():
             for root in writable_roots:
                 if path == root or root in path.parents:
@@ -868,5 +955,6 @@ class StewardConfig(BaseModel):
         return (
             self.execution.user is not None
             or self.telegram is not None
+            or self.slack is not None
             or bool(self.repositories)
         )

@@ -114,7 +114,7 @@ def _cmd_task_add(args: argparse.Namespace) -> int:
             raise ValueError(f"unknown repository: {args.repository}")
         owner = ConversationId(args.owner)
         if owner.owner_kind != "conversation" or not owner.reference.strip():
-            raise ValueError("task reply owner must be a telegram or desk conversation")
+            raise ValueError("task reply owner must be a telegram, slack or desk conversation")
         spec = TaskSpec(
             args.repository, args.title.strip(),
             Path(args.brief_file).read_text(encoding="utf-8").strip(), args.priority,

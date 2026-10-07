@@ -44,6 +44,7 @@ def test_shutdown_keeps_telegram_open_until_kernel_results_and_inbound_answers_d
     events = []
     daemon = object.__new__(StewardDaemon)
     daemon._stop = threading.Event()
+    daemon._slack = None
     daemon._telegram = SimpleNamespace(
         request_stop=lambda: events.append('stop intake'),
         stop=lambda: events.append('drain ingress and close transport'),

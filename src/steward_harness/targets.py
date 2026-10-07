@@ -15,6 +15,7 @@ from steward_harness.procedures import resolve_input
 from steward_harness.git_transport import GitTransportError
 from steward_harness.git import redact_command_output
 from steward_harness.lease import Lease, Busy
+from steward_harness.deployment_approval import DeploymentApprovals
 
 
 # Re-confirming a deployment that cannot have changed is not free. Observation
@@ -234,6 +235,10 @@ class Targets:
                 return report("satisfied", f"{name}: satisfied at {revision}")
             if resolve_input(target.ref, self.transports)[1] != revision:
                 return report("ref-moved", f"{name}: desired ref moved; evidence must be re-evaluated")
+            if self.config.deployment_operators and not DeploymentApprovals(
+                    self.state, self.config.deployment_operators).require(
+                        "target", name, revision, target.model_dump(mode="json")):
+                return report("awaiting-approval", f"{name}: awaiting operator approval for {revision}")
             self.call(name, "apply", repository, revision)
             observed = self.call(name, "observe", repository, revision)
             if observed.blocked:

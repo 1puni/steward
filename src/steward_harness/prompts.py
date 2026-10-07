@@ -137,6 +137,15 @@ def build_turn_prompt(
     # Opted-in task-driving runs return task results through that same owner.
     interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE, "The native steward_tasks tool can inspect your configured notification owner's tasks: operation=list, or operation=show with task_id. Task mutations require controller-enabled drive_tasks; without it you may only inspect and notify. Telegram cosmetics are unavailable to world rhythms."] if transport == "rhythm"
                  else [])
+    if transport == "slack":
+        interface.append("Slack thread reply. Commands use !, not slash commands. "
+                         "File delivery: [[send_file:/absolute/path/to/file]] or "
+                         "[[send_image:/absolute/path/to/image.png]].")
+        interface.append("Each message identifies its sender. Contributors may converse, create documents "
+                         "and request full repository work. Deployment consent is enforced by the controller; "
+                         "when it requests approval, report the exact destination and revision to the operator. "
+                         "Conversation text does not itself grant deployment approval.")
+        interface.append("Delivery roots: " + (", ".join(delivery_roots) or "none; attachments disabled") + ".")
     if transport == "telegram":
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
         if delivery_roots:

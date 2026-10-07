@@ -12,7 +12,7 @@ inbox beside controller state after admitting the sender, so a desk client can
 never speak as a Telegram operator. Each inbox has a `Source` that answers its
 messages and replies through the transport they came from.
 
-One drain serves every source: messages run in name order within a
+One drain serves every source: messages run in source-defined order within a
 conversation, different conversations run concurrently, and a deferral leaves
 a message at the front of its conversation to be retried.
 """
@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -102,8 +103,9 @@ class EventLog:
 class Inbox:
     """Claims atomic-rename message files in one directory."""
 
-    def __init__(self, inbox_dir: str | Path) -> None:
+    def __init__(self, inbox_dir: str | Path, *, retain_done: bool = False) -> None:
         self.dir = Path(inbox_dir)
+        self.retain_done = retain_done
 
     def put(self, name: str, record: dict[str, Any]) -> InboundMessage:
         """Retain a record already claimed by its producer; `requeue` hands it on."""
@@ -162,7 +164,16 @@ class Inbox:
         )
 
     def done(self, message: InboundMessage) -> None:
-        message.path.unlink(missing_ok=True)
+        if self.retain_done:
+            # Unordered event protocols cannot replace receipts with a high-water mark.
+            message.path.replace(message.path.with_suffix(".done"))
+            directory = os.open(self.dir, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        else:
+            message.path.unlink(missing_ok=True)
 
     def requeue(self, message: InboundMessage) -> None:
         if message.path.suffix != ".claimed":
@@ -208,12 +219,15 @@ class Source:
 
     `answer` runs one claimed message and replies through its transport; it
     returns once the reply is delivered. `defers` says which of its errors mean
-    "not now" rather than "never".
+    "not now" rather than "never". Sources name conversation identity and queued
+    order without forcing another transport into integer topic/cursor semantics.
     """
 
     inbox: Inbox
     answer: Callable[[InboundMessage], None]
     defers: Callable[[BaseException], bool] = lambda error: isinstance(error, DEFERRALS)
+    conversation_key: Callable[[InboundMessage], Hashable] = lambda message: message.topic_id
+    message_order: Callable[[InboundMessage], object] = lambda message: message.path.name
 
 
 def settle(source: Source, message: InboundMessage) -> bool:
@@ -247,7 +261,7 @@ class InboxDrain:
         self.sources = tuple(sources)
         self._stop = threading.Event()
         self._lock = threading.Lock()
-        self._in_flight: set[tuple[int, int]] = set()
+        self._in_flight: set[tuple[int, Hashable]] = set()
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="inbox")
         self._thread = threading.Thread(target=self._run, name="inbox", daemon=True)
 
@@ -267,10 +281,10 @@ class InboxDrain:
     def _run(self) -> None:
         while not self._stop.is_set():
             for index, source in enumerate(self.sources):
-                for message in source.inbox.pending():
+                for message in sorted(source.inbox.pending(), key=source.message_order):
                     if self._stop.is_set():
                         return
-                    key = (index, message.topic_id)
+                    key = (index, source.conversation_key(message))
                     with self._lock:
                         if key in self._in_flight:
                             continue  # its conversation is busy, or an earlier message is
@@ -283,7 +297,7 @@ class InboxDrain:
                     self._executor.submit(self._answer, source, claimed, key)
             self._stop.wait(SCAN_SECONDS)
 
-    def _answer(self, source: Source, message: InboundMessage, key: tuple[int, int]) -> None:
+    def _answer(self, source: Source, message: InboundMessage, key: tuple[int, Hashable]) -> None:
         try:
             if not settle(source, message) and not self._stop.is_set():
                 # Hold the conversation while waiting, so the retried message
@@ -294,7 +308,7 @@ class InboxDrain:
         finally:
             self._release(key)
 
-    def _release(self, key: tuple[int, int]) -> None:
+    def _release(self, key: tuple[int, Hashable]) -> None:
         with self._lock:
             self._in_flight.discard(key)
 

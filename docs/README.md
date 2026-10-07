@@ -22,6 +22,7 @@ block is in the [kernel contract](kernel-contract.md#configuration).
 | [Controller and agent identities](execution-boundary.md) | Host provisioning, and the boundary that has to be enforced rather than promised |
 | [Watching a live steward](watching-a-steward.md) | Why a failing steward looks idle, how a monitor avoids lying quietly, and what each number measures |
 | [Topic evidence export](topic-evidence-export.md) | Bounded metadata-only operator handoff for a Telegram routing investigation |
+| [Slack conversations](slack.md) | Socket Mode setup, operator/observer grants, thread identity, attachment policy and delivery recovery |
 | [Task board](task-mini-app.md) | The read-only Mini App: where each displayed fact comes from, and why no write crosses the socket |
 | [Upgrading](upgrading.md) | Carrying a running steward's obligations across a new version, rehearsed before performed |
 

@@ -24,7 +24,7 @@ wander, sleep, wake up, and propose changes. The harness keeps the keys.
 | Exact-revision gates: the commit that was tested is the commit that is pushed | A CI system: gates are your repository's own test and build commands |
 | Target drivers that observe what a destination actually serves | A deployment platform: your release system still deploys, and Steward checks that it did |
 | A separate Unix identity for everything the model runs, with credentials kept by the controller | A sandbox product: the boundary is OS permissions, or it isn't there |
-| Operated from Telegram and the host CLI | A dashboard: the task board browses and changes nothing |
+| Operated from Telegram, Slack and the host CLI | A dashboard: the task board browses and changes nothing |
 
 ## What is this?
 
@@ -159,7 +159,7 @@ Everything else should justify its existence.
   consolidation, a security pass. Each run is an ordinary task with its exact
   inputs captured.
 - **Surfaces.** Telegram for talking to it, with forum topics per conversation. A
-  filesystem desk inbox for a web front end. A read-only task board as a Telegram
+  [Slack thread conversations](docs/slack.md), a filesystem desk inbox for a web front end. A read-only task board as a Telegram
   Mini App. A host CLI for filing work.
 - **Gated publication.** One integrated, single-parent commit per task, rebased
   onto the observed base, run through your repository's own gates and required
@@ -250,7 +250,7 @@ Retained results have one separate transport worker. They reach their owner with
 waiting for assessment or a free cognition slot; assessment may follow and add
 judgment. See the [delivery latency contract](docs/kernel-contract.md#task-results).
 
-A live conversation never waits in that queue. Telegram and desk messages share one
+A live conversation never waits in that queue. Telegram, Slack and desk messages share one
 inbox and one drain of their own, so the budget can be full and the operator still
 gets a reply.
 
@@ -280,7 +280,8 @@ protecting them.
 | `procedures` | Accepted instructions, access, and a preferred provider, model and effort that falls back through the provider order unless `fallback: false` |
 | `rhythms` | Non-overlapping interval (with optional `offset`) or quiet triggers for procedures, admitted only on new input; `input: world` keeps one obligation per captured interval, optionally only on change under `paths`, or `after` another world rhythm |
 | `targets` | Desired refs, installed drivers and required evidence |
-| `telegram`, `desk` | Optional conversation and result transports |
+| `deployment_operators` | Human identities allowed to approve exact deployment revisions ([consent](docs/automatic-deployment.md#operator-deployment-consent)) |
+| `telegram`, `slack`, `desk` | Optional conversation and result transports ([Slack setup](docs/slack.md)) |
 
 Start from [the minimal config](config/steward.minimal.yaml); the
 [full example](config/steward.example.yaml) shows every block. Providers need

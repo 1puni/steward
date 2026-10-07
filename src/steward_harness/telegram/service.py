@@ -183,6 +183,9 @@ class TelegramService:
         native_turn_handler: Callable[[str, int, int, int, str, tuple[Path, ...]], str] | None = None,
     ) -> None:
         self.config = config
+        # The trusted destination of a root cannot change when its writable
+        # pathname is replaced with a symlink after controller startup.
+        self._delivery_roots = tuple(Path(root).resolve() for root in config.delivery_roots)
         token = self._read_token(config.token_path)
         self.api = TelegramAPI(token, base_url=config.botapi_base or "https://api.telegram.org")
         self.admin = ChatAdministration(config, self.api, state_db.path.parent / "telegram-admin")
@@ -996,8 +999,7 @@ class TelegramService:
             raise TelegramAPIError(f"could not resolve delivery artifact: {exc}") from exc
         if not artifact.is_file():
             raise TelegramAPIError(f"delivery artifact is not a file: {artifact}")
-        roots = [Path(root).resolve() for root in self.config.delivery_roots]
-        if not any(artifact.is_relative_to(root) for root in roots):
+        if not any(artifact.is_relative_to(root) for root in self._delivery_roots):
             raise TelegramAPIError("delivery artifact is outside configured delivery_roots")
         return artifact
 

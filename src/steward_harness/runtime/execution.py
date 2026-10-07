@@ -144,6 +144,11 @@ class UntrustedExecutionBroker:
         for name, target in config.targets.items():
             protected_paths[f"target {name!r} driver"] = Path(target.driver)
             protected_paths[f"target {name!r} driver directory"] = Path(target.driver).parent
+        if config.slack is not None:
+            for field in ("bot_token_path", "app_token_path"):
+                path = Path(getattr(config.slack, field))
+                private_files["Slack " + field] = path
+                protected_paths["Slack " + field + " directory"] = path.parent
         telegram = config.telegram
         if telegram is not None:
             token_path = Path(telegram.token_path)

@@ -34,7 +34,7 @@ from steward_harness.state import (
 )
 
 
-Transport = Literal["telegram", "desk", "rhythm"]
+Transport = Literal["telegram", "slack", "desk", "rhythm"]
 
 
 _TASK_MARKER = "TASK_PROPOSAL:"
@@ -88,6 +88,7 @@ class ConversationService:
         desk_profile: ProviderProfile | None = None,
         telegram_actions: tuple[str, ...] = (),
         delivery_roots: tuple[str, ...] = (),
+        slack_delivery_roots: tuple[str, ...] = (),
         telegram_admin=None,
     ) -> None:
         if not provider_order or len(set(provider_order)) != len(provider_order):
@@ -115,6 +116,7 @@ class ConversationService:
         self._telegram_admin = telegram_admin
         self._telegram_actions = telegram_actions
         self._delivery_roots = delivery_roots
+        self._slack_delivery_roots = slack_delivery_roots
 
     def native_telegram_topics(self) -> tuple[int, ...]:
         """Topics with a real provider input handle, never an additional writer."""
@@ -243,7 +245,7 @@ class ConversationService:
                 orientation=orientation,
                 event_id=event_id,
                 telegram_actions=self._telegram_actions,
-                delivery_roots=self._delivery_roots,
+                delivery_roots=(self._slack_delivery_roots if transport == "slack" else self._delivery_roots),
             )
 
         accepted = self._execute_turn(
@@ -517,6 +519,8 @@ class ConversationService:
             self._state.save_result_receipt(receipt)
         if receipt["reply"]:
             send(receipt["reply"], receipt["source_key"])
+            # The transport may have retained per-piece delivery evidence.
+            receipt = self._state.result_receipt(receipt["source_key"]) or receipt
         receipt.pop("delivery_error", None)
         receipt["done"] = True
         self._state.save_result_receipt(receipt)
