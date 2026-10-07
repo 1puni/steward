@@ -58,16 +58,29 @@ class GitWorld:
         """Return the exact committed Git-world input boundary."""
         return self._git("rev-parse", "HEAD")
 
-    def changed(self, since: str, paths: tuple[str, ...]) -> bool:
-        """Was content added or modified under any of `paths` since `since`?
+    def changed(self, since: str, paths: tuple[str, ...], sources: tuple[str, ...] = ()) -> bool:
+        """New path content OR a matching accepted turn source since `since`?
 
         Something new to read is the only change that counts. A deletion, a
         move out of the paths and a move within them (archiving an episode
         into a subdirectory) leave nothing new there, so they are not input.
         A revision Git can no longer read, or a Git that cannot answer, counts
         as changed: an unanswerable cursor admits the run rather than silencing it.
+        Source prefixes inspect trailers, not exchange text, and can match a
+        turn whose tree did not change. Neither filter grants action authority.
         """
         try:
+            if sources:
+                turns = run_agent_git(
+                    self.execution_broker, "log", f"{since}..HEAD",
+                    f"--format=%(trailers:key={SOURCE_TRAILER},valueonly)", "--",
+                    cwd=self.root, timeout=30, extra_env=ISOLATED_GIT_ENV,
+                )
+                if turns.returncode != 0 or any(
+                        source.startswith(sources) for source in turns.stdout.splitlines()):
+                    return True
+            if not paths:
+                return False
             names = run_agent_git(
                 self.execution_broker, "diff", "--find-renames", "--diff-filter=AMT",
                 "--name-only", "-z", since, "HEAD", "--", *paths,

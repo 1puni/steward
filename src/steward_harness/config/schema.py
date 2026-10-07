@@ -626,9 +626,17 @@ class ProcedureRhythmConfig(BaseModel):
     # its last accepted run is its input; for an organisation (`workdir`)
     # rhythm, the prefixes of its activity keys, such as `repositories/app/main`.
     paths: tuple[str, ...] = ()
+    # World turn source prefixes, matched against accepted Git trailers. OR
+    # with paths: a conversation may change no file. This selects input only.
+    sources: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validates_workdir(self):
+        if self.sources and (self.input != "world" or self.workdir is not None):
+            raise ValueError("rhythm sources apply only to world rhythms")
+        if any(not source.strip() or source != source.strip()
+               or any(char.isspace() for char in source) for source in self.sources):
+            raise ValueError("rhythm source prefixes must be nonempty and contain no whitespace")
         if self.drive_tasks and (self.input != "world" or self.workdir is not None or not self.owner):
             raise ValueError("drive_tasks requires a world rhythm with a result owner")
         if self.workdir is not None:

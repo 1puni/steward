@@ -123,7 +123,7 @@ def world_rhythm_observation(rhythms, name, now, *, run=None, latest=None,
                  observed_at=now, due_at=start, interval_end=start + root.schedule,
                  schedule=({'after': rhythm.after} if rhythm.after else
                            {'interval': rhythm.schedule, 'offset': rhythm.offset}),
-                 paths=list(rhythm.paths or []), eligible=False,
+                 paths=list(rhythm.paths or []), sources=list(rhythm.sources), eligible=False,
                  obligation=("accepted" if run and run.state == "completed"
                              else "open" if run or before else "uncaptured"),
                  turn_id=str(run.turn_id) if run else None)
@@ -146,9 +146,9 @@ def world_rhythm_observation(rhythms, name, now, *, run=None, latest=None,
         value['eligible'] = run.state == "completed"  # Never replay uncertain native work.
     elif rhythm.after and (before is None or before.state != "completed"):
         progress = "predecessor_held" if before and before.state == "interrupted" else "awaiting_predecessor"
-    elif rhythm.paths and changed is None:
+    elif (rhythm.paths or rhythm.sources) and changed is None:
         progress = "input_unobserved"
-    elif rhythm.paths and not changed:
+    elif (rhythm.paths or rhythm.sources) and not changed:
         progress = "awaiting_input"
     else:
         progress = "overdue" if now > start else "due"
@@ -372,9 +372,9 @@ class Procedures:
             before = predecessors.get(index, [None])[-1]
             receipt = bool(self.state.result_receipt(key))
             changed = None
-            if (rhythm.paths and prior is None and not receipt
+            if ((rhythm.paths or rhythm.sources) and prior is None and not receipt
                     and (not rhythm.after or (before and before.state == "completed"))):
-                changed = self._world_changed(name, rhythm.paths)
+                changed = self._world_changed(name, rhythm.paths, rhythm.sources)
             claim = claims.get(str(prior.turn_id)) if prior else None
             observations[name] = world_rhythm_observation(
                 self.config.rhythms, name, now, run=prior,
@@ -400,15 +400,15 @@ class Procedures:
         if due is not None and not self.state.paused():
             self.run_world_rhythm(conversations, *due)
 
-    def _world_changed(self, name, paths):
-        """Did the world change under `paths` since this rhythm's last accepted run?
+    def _world_changed(self, name, paths, sources=()):
+        """Did paths or turn sources change since this rhythm's last accepted run?
 
         The cursor is that run's own candidate, not its base: what it wrote is
         in both sides of the comparison, so its writes never retrigger it,
         while anything another turn wrote since its base still counts.
         """
         last = self.state.last_world_candidate(ConversationId(f"rhythm:{name}"))
-        return last is None or self.world.changed(last, paths)
+        return last is None or self.world.changed(last, paths, sources)
 
     def _world_rhythm_lease(self):
         # Commands and the automatic dispatcher share this exclusion boundary.
