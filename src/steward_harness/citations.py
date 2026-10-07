@@ -40,10 +40,14 @@ class Citation:
     title: str
     url: str
 
+    @property
+    def label(self) -> str:
+        date = datetime.fromisoformat(self.authored_at)
+        return f"{self.title} · {date:%Y-%m-%d %H:%M %z}"
+
     def markdown(self, label: str | None = None) -> str:
         if label is None:
-            date = datetime.fromisoformat(self.authored_at)
-            label = f"{self.title} · {date:%Y-%m-%d %H:%M %z}"
+            label = self.label
         label = html.escape(" ".join(label.split()), quote=False)
         label = re.sub(r"([\\`*_{\[\]}])", r"\\\1", label)
         return f"[{label}]({self.url})"

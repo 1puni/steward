@@ -27,6 +27,48 @@ decision that gets reused.
 
 ## Human-readable citations
 
+Shared conversation and task prompts make readable evidence links the default
+writing convention for replies, notifications and documents. This includes
+Telegram, desk, world rhythms, repository tasks and read-only procedures; no
+instance-specific opt-in is needed. Labels use the task title, subject or original
+date. Exact identifiers remain in commands, code, quoted evidence and provenance
+fields. Current task status can use an existing task-card link; a Git task citation
+instead names an immutable snapshot.
+
+This writing convention is model-facing guidance, not a guarantee that every
+response contains a citation. The author resolves references in the owning
+repository and checks publication before linking. Unresolved or unpublished
+references stay explicit, including a current turn that has no accepted commit
+yet. If the utility is unavailable in an execution environment, ordinary
+`git log`, `git show` and the owning remote remain the discovery path. The harness
+does not fetch or alter evidence merely to format a response.
+
+Telegram also resolves bare native turn IDs (`turn_` followed by 32 lowercase
+hex digits) at its existing reference-rendering boundary. Replies and retained
+notifications in the configured chat receive links labeled with the subject and
+original author date. Resolution uses only the configured world's controller-owned
+Git store, pinned to its last observed published branch tip. No agent checkout
+is inspected and no Git fetch or new index is introduced. Explicit links, inline
+and fenced code, indented code, paths and unresolved or ambiguous references retain their text.
+Formatted chunks are retained before delivery, so retries cannot acquire different
+labels or destinations after history changes.
+
+For an operator-configured SSH alias, Telegram queries the controller's effective
+OpenSSH configuration with `ssh -G`, disabling hostname canonicalisation. It
+constructs a GitHub web URL only when the resulting `hostname` is exactly
+`github.com`; an alias's spelling is never evidence of its host. This opens no
+SSH session, but evaluates trusted SSH configuration, including any `Match exec`
+rules. A missing mapping, query failure or unsupported host leaves the reference
+literal. Ordinary `GitCitations`/CLI reads do not evaluate SSH configuration for
+repository-supplied remotes; use `--web-url` explicitly for those aliases.
+
+Without a configured published GitHub world, automatic turn links are unavailable.
+The last observed tip can lag a newly published turn; that turn stays literal until
+a later message can resolve it. Existing retained messages are not retroactively
+reformatted. Bare commit hashes, non-native turn IDs, other repositories, desk
+output and document files remain the author's responsibility through the shared
+guidance and utility; Telegram does not guess their owning repository.
+
 `steward cite` turns a turn ID, task ID or commit hash into an ordinary Markdown
 link. It reads the owning repository locally and never writes, fetches or calls a
 model. Choose the repository explicitly when crossing worlds:

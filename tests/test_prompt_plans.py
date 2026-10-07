@@ -1,5 +1,7 @@
 """Current conversation interface, observations, and task boundary coverage."""
 
+import pytest
+
 from steward_harness.prompts import build_task_prompt, build_turn_prompt
 
 
@@ -78,3 +80,35 @@ def test_only_a_world_rhythm_is_told_its_history_is_git() -> None:
     assert "The world is Git." in rhythm and "TASK_PROPOSAL:" not in rhythm
     for transport in ("telegram", "desk"):
         assert "The world is Git." not in build_turn_prompt("hi", transport=transport)
+
+
+@pytest.mark.parametrize("transport", ["telegram", "desk", "rhythm"])
+@pytest.mark.parametrize("orientation", [None, "Worldless read-only workspace"])
+def test_readable_references_are_shared_across_conversation_paths(transport, orientation):
+    prompt = build_turn_prompt(
+        "Inspect turn_missing; do not invent its destination.",
+        orientation=orientation, event_id="turn_current", transport=transport,
+    )
+    assert prompt.count("## References for people") == 1
+    assert "steward cite REF --repo" in prompt
+    assert "does not prove publication" in prompt
+    assert "retain its exact identifier" in prompt
+    assert "Turn id: turn_current" in prompt
+    assert prompt.endswith("## Request\nInspect turn_missing; do not invent its destination.")
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_reference_guidance_keeps_task_authority_and_machine_inputs(read_only):
+    prompt = build_task_prompt(
+        title="Investigate history", brief="Inspect abc1234.", repository="app",
+        procedure_scope="", event_id="turn_task", read_only=read_only,
+    )
+    assert prompt.count("## References for people") == 1
+    assert "Task snapshots belong to their task" in prompt
+    assert "Keep exact IDs in commands" in prompt
+    assert "Turn id: turn_task" in prompt
+    assert "Inspect abc1234." in prompt
+    if read_only:
+        assert "Do not stage or commit" in prompt
+    else:
+        assert "Do not push or deploy" in prompt
