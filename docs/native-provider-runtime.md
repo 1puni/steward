@@ -58,10 +58,12 @@ remain independent of this native-runtime factory.
 launch prerequisites. Claude/Codex availability checks the executable; GLM also
 checks local credential availability. These checks do not authenticate a native
 turn, refresh OAuth, or prove retained history can resume. Configured fallback
-skips unregistered, incapable or locally unavailable adapters. Once an adapter
-executes, authentication and rate-limit failures retain the failed operation;
-they do not automatically start the same work on another provider. Native hooks
-or earlier activity can precede such failures. The sole missing-session retry
+skips unregistered, incapable or locally unavailable adapters. A native refusal
+classified as provider unavailability also advances the configured sequence.
+Claude's expired-login and session/usage-limit refusals qualify before any tool
+use is observed. After a tool-use event, the adapter retains the failed operation
+and session instead of replaying work through another provider. Ordinary failures
+remain terminal. The sole missing-session retry
 uses the same provider and current input under its existing provenance fence.
 
 ## Anthropic-compatible endpoint routing

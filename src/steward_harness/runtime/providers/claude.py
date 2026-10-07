@@ -93,10 +93,9 @@ _ANTHROPIC_SELECTORS = (
 def _declines_turn(message: str) -> bool:
     """Whether Claude is declining this turn rather than failing at it.
 
-    An expired or revoked sign-in says nothing about the work: the same prompt
-    succeeds on any other configured provider now, and on this one as soon as
-    somebody logs in. It arrives as an ordinary turn error, so wording is the
-    only thing separating it from a real failure — and that reading belongs
+    An expired sign-in or exhausted quota says nothing about the work: another
+    configured provider can take it now. It arrives as an ordinary turn error,
+    so wording separates it from a real failure — and that reading belongs
     here, in the adapter that owns the wire format, not in the lifecycle,
     which must never learn a provider's name.
 
@@ -117,6 +116,8 @@ def _declines_turn(message: str) -> bool:
             "invalid_refresh_token",
             "token_expired",
             "log out and sign in",
+            "you've hit your session limit",
+            "you've hit your usage limit",
         )
     )
 
