@@ -281,6 +281,22 @@ def test_owner_home_refuses_retargeting_and_preserves_state_after_failure(setup,
     assert (first.home / 'sessions').is_dir() and not (first.home / 'sessions').is_symlink()
 
 
+def test_owner_home_keeps_codex_reinstalled_system_skills(setup):
+    system = setup[2] / 'skills/.system'
+    system.mkdir()
+    (system / '.codex-system-skills.marker').write_text('old codex')
+    with mapped(setup, native_owner='one') as first:
+        installed = first.home / 'skills/.system'
+        assert installed.is_symlink()
+        # Codex replaces a stale system skill set with its own directory.
+        installed.unlink()
+        installed.mkdir()
+        (installed / '.codex-system-skills.marker').write_text('new codex')
+    with mapped(setup, native_owner='one') as again:
+        assert (again.home / 'skills/.system/.codex-system-skills.marker').read_text() == 'new codex'
+    assert (system / '.codex-system-skills.marker').read_text() == 'old codex'
+
+
 def test_owner_home_does_not_link_instance_runtime_state_or_other_owners(setup):
     source = setup[2]
     (source / 'cache').mkdir()

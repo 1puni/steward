@@ -105,6 +105,10 @@ try:
     if (source / 'skills').is_dir():
         for entry in (source / 'skills').iterdir():
             destination = skills / entry.name
+            if entry.name == '.system' and destination.is_dir() and not destination.is_symlink():
+                # Codex reinstalls its bundled system skills as a real directory
+                # whenever its version marker differs. That copy is provider-owned.
+                continue
             if entry.name in bundled_skills and destination.is_dir() and not destination.is_symlink():
                 # Preserve a previously installed default before an instance
                 # override. Never erase provider edits or partially written files.
