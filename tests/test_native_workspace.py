@@ -65,6 +65,43 @@ def test_original_records_write_directly_and_survive_private_cleanup(setup):
         assert Path(resumed.resume).read_text() == 'native original\n'
 
 
+def test_provider_system_skills_remain_private_and_survive_resume(setup):
+    seed = setup[2] / 'skills/.system'
+    seed.mkdir()
+    (seed / 'SKILL.md').write_text('seed system skills')
+    with mapped(setup, native_owner='one') as first:
+        system = first.home / 'skills/.system'
+        assert not system.exists()
+        system.mkdir()
+        (system / 'SKILL.md').write_text('provider installed skills')
+    with mapped(setup, native_owner='one') as resumed:
+        assert resumed.home == first.home
+        assert not system.is_symlink()
+        assert (system / 'SKILL.md').read_text() == 'provider installed skills'
+        assert (resumed.home / 'skills/workflow.md').is_symlink()
+    assert (seed / 'SKILL.md').read_text() == 'seed system skills'
+
+
+def test_legacy_system_skill_link_is_detached_without_changing_seed(setup):
+    seed = setup[2] / 'skills/.system'
+    seed.mkdir()
+    with mapped(setup, native_owner='one') as first:
+        system = first.home / 'skills/.system'
+        system.symlink_to(seed, target_is_directory=True)
+    with mapped(setup, native_owner='one'):
+        assert not system.is_symlink()
+        assert not system.exists()
+    assert seed.is_dir()
+
+
+def test_system_skill_link_to_another_directory_is_rejected(setup, tmp_path):
+    with mapped(setup, native_owner='one') as first:
+        (first.home / 'skills/.system').symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(RuntimeExecutionError, match='native home link changed'):
+        with mapped(setup, native_owner='one'):
+            pytest.fail('must not accept an unexpected system skills link')
+
+
 def test_two_active_workspaces_never_retarget_each_others_native_writes(setup, tmp_path):
     other = tmp_path / 'other'
     other.mkdir()
@@ -279,22 +316,6 @@ def test_owner_home_refuses_retargeting_and_preserves_state_after_failure(setup,
             pytest.fail('must not retarget an existing owner home')
     assert (first.home / 'jobs.sqlite').read_text() == 'must survive'
     assert (first.home / 'sessions').is_dir() and not (first.home / 'sessions').is_symlink()
-
-
-def test_owner_home_keeps_codex_reinstalled_system_skills(setup):
-    system = setup[2] / 'skills/.system'
-    system.mkdir()
-    (system / '.codex-system-skills.marker').write_text('old codex')
-    with mapped(setup, native_owner='one') as first:
-        installed = first.home / 'skills/.system'
-        assert installed.is_symlink()
-        # Codex replaces a stale system skill set with its own directory.
-        installed.unlink()
-        installed.mkdir()
-        (installed / '.codex-system-skills.marker').write_text('new codex')
-    with mapped(setup, native_owner='one') as again:
-        assert (again.home / 'skills/.system/.codex-system-skills.marker').read_text() == 'new codex'
-    assert (system / '.codex-system-skills.marker').read_text() == 'old codex'
 
 
 def test_owner_home_does_not_link_instance_runtime_state_or_other_owners(setup):

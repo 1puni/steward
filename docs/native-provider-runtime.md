@@ -303,6 +303,13 @@ rechecked before any application or dependent task admission.
 
 ## Bundled native skills
 
+Codex owns `skills/.system` inside each native launch home. Its CLI installs
+and replaces this directory during initialization, so the harness leaves it
+private rather than linking it to the instance's system skills. Preparation
+detaches an existing link to the instance's `.system` directory and preserves
+provider-installed directories across turns. Other instance skills retain
+their checked links.
+
 The package ships `skills/commit/SKILL.md` and `skills/git-reconciler/SKILL.md`.
 Writable native launches expose them through `<launch-home>/skills/`, using
 both providers' existing native skill discovery. Instance-provided skills remain
