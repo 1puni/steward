@@ -102,13 +102,18 @@ try:
     skills.mkdir(exist_ok=True)
     descriptor = os.open(skills, flags)
     os.close(descriptor)
+    system_skills = skills / '.system'
+    if system_skills.is_symlink():
+        if pathlib.Path(os.readlink(system_skills)) != source / 'skills' / '.system':
+            raise ValueError('native home link changed: ' + str(system_skills))
+        system_skills.unlink()
     if (source / 'skills').is_dir():
         for entry in (source / 'skills').iterdir():
-            destination = skills / entry.name
-            if entry.name == '.system' and destination.is_dir() and not destination.is_symlink():
-                # Codex reinstalls its bundled system skills as a real directory
-                # whenever its version marker differs. That copy is provider-owned.
+            # Codex installs and replaces its bundled system skills itself.
+            # Keep that mutable directory private to each native home.
+            if entry.name == '.system':
                 continue
+            destination = skills / entry.name
             if entry.name in bundled_skills and destination.is_dir() and not destination.is_symlink():
                 # Preserve a previously installed default before an instance
                 # override. Never erase provider edits or partially written files.
