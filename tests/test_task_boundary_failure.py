@@ -114,3 +114,25 @@ def test_failed_hold_write_propagates_without_claiming_a_block(caplog):
     with pytest.raises(OSError, match='accepted metadata unavailable'):
         runner._run_owned('task', 'revision')
     assert 'blocked hold could not be recorded' in caplog.text
+
+
+def test_deferred_storage_leaves_the_task_queued_without_ending_the_controller(tmp_path, caplog):
+    from steward_harness.runtime.contracts import NativeStorageDeferred
+
+    task = SimpleNamespace(repository='repo', dispatchable=True, revision='accepted-revision')
+    tasks = SimpleNamespace(get=Mock(return_value=task), locks_root=tmp_path, hold=Mock(),
+                            finish_slice=Mock())
+    runner = object.__new__(TaskRunner)
+    runner.state = SimpleNamespace(tasks=tasks)
+    runner.repositories = {'repo': object()}
+    runner.transports = {'repo': object()}
+    runner._run_owned = Mock(side_effect=NativeStorageDeferred('native evidence storage reserve reached'))
+
+    assert runner.prepare('task') == 'task'
+    assert 'storage reserve reached' in caplog.text
+    tasks.hold.assert_not_called()
+    tasks.finish_slice.assert_not_called()
+    # The lock was released: the next pass can take the task again.
+    runner._run_owned = Mock(return_value='task')
+    assert runner.prepare('task') == 'task'
+    runner._run_owned.assert_called_once()
