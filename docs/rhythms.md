@@ -439,14 +439,22 @@ keeps a short-interval inbox from continually jumping ahead of due hourly or
 nightly work. Selection is recomputed when the worker starts, so time spent in
 the shared queue cannot capture an expired, previously unseen bucket. Existing
 obligations survive that rollover. There is no catch-up queue or second
-scheduling cursor. A rhythm can still miss an uncaptured interval if the shared
+scheduling cursor. Earliest start orders the queue but does not block it: when
+the chosen rhythm defers on something of its own (a candidate its world refuses,
+a busy conversation), the same pass offers the slot to the next eligible rhythm.
+Only a held world lease, which every rhythm would meet, ends the pass. From
+2026-10-07 one Staging candidate, refused by a stray edit in the live world,
+otherwise silenced Sleep, News and Finance for five days. A rhythm can still miss an uncaptured interval if the shared
 worker budget or world writer remains occupied through its end. Manual
 continuation admission takes the same world-rhythm lease as automatic execution;
 a busy owner defers the request without creating another source.
 
 Failures before cognition, including an unreadable policy file, are retained as
 interrupted attempts and hold the interval just like provider failures. Ordinary
-world/conversation lease deferrals remain eligible for retry. A completed turn
+world/conversation lease deferrals remain eligible for retry. A transient blocker
+clears in minutes; a rhythm whose attempt is still deferring an hour after it
+started is told to the operator once per alert period, with the deferral's own
+reason (for a refused application, the colliding paths). A completed turn
 without its result receipt is eligible for replay to finish that receipt, not a
 second model invocation.
 

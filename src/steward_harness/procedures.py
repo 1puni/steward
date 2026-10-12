@@ -396,9 +396,31 @@ class Procedures:
 
     def advance_world_rhythm(self, conversations):
         # Resolve at execution, not enqueue: backpressure may span intervals.
-        due = next(iter(self.due_world_rhythms()), None)
-        if due is not None and not self.state.paused():
-            self.run_world_rhythm(conversations, *due)
+        # Still one world writer, oldest first; a rhythm that cannot proceed
+        # yields to the next due one instead of silencing every rhythm behind
+        # it. From 2026-10-07 one Staging candidate, refused by a stray world
+        # edit, held Sleep, News and Finance for five days.
+        if self.state.paused():
+            return
+        for name, key in self.due_world_rhythms():
+            if self.run_world_rhythm(conversations, name, key) in {"ran", "busy"}:
+                return
+
+    # A transient blocker (a held lease, a world moving underneath) clears in
+    # minutes. One still standing after this long will not clear by waiting.
+    _DEFERRAL_TOLERANCE = 3600
+
+    def _deferral_outlived(self, name, key, prior, error):
+        """Count a repeated deferral the way an error is counted: tell the operator."""
+        if prior is None:
+            return
+        age = time.time() - datetime.fromisoformat(prior.started_at).timestamp()
+        if age > self._DEFERRAL_TOLERANCE:
+            self.alert(f"rhythm-deferred:{name}",
+                       f"⚠️ The {name} rhythm ({key}) has waited {int(age // 60)} minutes "
+                       f"on a blocker that is not clearing: {str(error)[-600:]}\n"
+                       "Its work is retained and other rhythms keep running; "
+                       "it is accepted on the first pass after the cause is removed.")
 
     def _world_changed(self, name, paths, sources=()):
         """Did paths or turn sources change since this rhythm's last accepted run?
@@ -455,6 +477,7 @@ class Procedures:
                 return self._run_world_rhythm(conversations, name, key)
         except Busy as error:
             log.info("world rhythm %s deferred: %s", key, error)
+            return "busy"
 
     def _run_world_rhythm(self, conversations, name, key):
         rhythm = self.config.rhythms[name]
@@ -490,7 +513,9 @@ class Procedures:
             )
         except (Busy, ConversationBusy, WorldContentConflict, WorldUpdatePending) as error:
             log.info("world rhythm %s deferred: %s", key, error)
-            return
+            self._deferral_outlived(name, key, prior, error)
+            # A held lease stops every rhythm alike; anything else is this one's own.
+            return "busy" if isinstance(error, Busy) else None
         except (RuntimeExecutionError, RuntimeUnavailable, OSError, ValueError) as error:
             # Keep a visible hold even when preparation failed before a source
             # could be created. Other rhythms can still use the world owner.
@@ -501,7 +526,7 @@ class Procedures:
             log.error("world rhythm %s held: %s", key, error)
             self.alert(f"held:{key}", f"⚠️ The {name} rhythm is held ({key}): {str(error)[-600:]}\n"
                        f"Once the cause is fixed, `/rhythm run {name}` continues it.")
-            return
+            return "ran"
         recorded = result.reply_text.strip()
         if recorded:
             log.info("world rhythm %s: reply recorded, not delivered", key)
@@ -513,3 +538,4 @@ class Procedures:
                                   and str(result.turn_id) not in self.state.notification_sources()),
             "recorded_at": time.time(),
         })
+        return "ran"
