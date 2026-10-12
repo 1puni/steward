@@ -383,7 +383,14 @@ class TaskRunner:
             task = self.state.tasks.get(task_id)
             if not task.dispatchable:
                 return task_id
-            return self._run_owned(task_id, task.revision)
+            try:
+                return self._run_owned(task_id, task.revision)
+            except Busy as error:
+                # Deferred, not failed: native storage at its reserve, or a
+                # lease someone else holds. The task stays queued for a later
+                # pass, as a busy repository does; it must not end the process.
+                log.warning("task %s deferred: %s", task_id, error)
+                return task_id
         finally:
             lock.release()
 
