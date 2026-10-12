@@ -6,11 +6,13 @@ from dataclasses import replace
 import hashlib
 import json
 import logging
+import os
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from steward_harness.git import git_operation_paths, agent_git
+from steward_harness.git import ISOLATED_GIT_ENV, git_operation_paths, agent_git, hardened_git_argv
 from steward_harness.kernel import repository_lease
 from steward_harness.state import ConversationId, TaskId
 from steward_harness.task_lock import task_lock
@@ -256,3 +258,46 @@ def _retire(broker, family, home: Path, target, quiet_seconds: int) -> None:
         log.warning("native home %s could not be removed: %s", home, removed.stderr.strip()[-300:])
     else:
         log.info("retired native home %s: %d records held at %s", home, verdict["records"], commit[:12])
+
+
+# The only Git maintenance the steward runs: harness and execution Git have
+# auto-maintenance off, because it detaches and the invocation's unit kills it.
+# Here it runs in the foreground with its own deadline. Git's thresholds are
+# restored explicitly, since `-c` overrides the environment that turned them off.
+GIT_MAINTENANCE_SECONDS = 1800
+_GC = ("-c", "gc.auto=6700", "-c", "gc.autoPackLimit=50", "-c", "gc.autoDetach=false",
+       "gc", "--auto", "--quiet")
+# A lock older than two deadlines outlived the run that took it, and Git never
+# expires gc.pid.lock on its own: while it stands, no gc runs at all.
+_STALE_LOCK_MINUTES = 2 * GIT_MAINTENANCE_SECONDS // 60
+
+
+def maintain_git(broker, agent_roots, controller_git_dirs) -> None:
+    """Pack each repository when Git's own thresholds say so, one at a time."""
+    for root in agent_roots:
+        try:
+            git_dir = agent_git(broker, "rev-parse", "--absolute-git-dir", cwd=root, timeout=60)
+            # Agent-owned: removed as the execution identity, never as root.
+            removed = broker.run(
+                ["find", git_dir, "-maxdepth", "1", "-name", "gc.pid.lock",
+                 "-mmin", f"+{_STALE_LOCK_MINUTES}", "-print", "-delete"],
+                cwd=root, timeout=60,
+            ).stdout.strip()
+            if removed:
+                log.warning("removed stale Git maintenance lock %s", removed)
+            agent_git(broker, *_GC, cwd=root, timeout=GIT_MAINTENANCE_SECONDS)
+        except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired,
+                subprocess.CalledProcessError) as error:
+            log.warning("Git maintenance deferred for %s: %s", root, error)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | ISOLATED_GIT_ENV
+    for git_dir in controller_git_dirs:
+        lock = Path(git_dir) / "gc.pid.lock"
+        try:
+            if lock.exists() and time.time() - lock.stat().st_mtime > _STALE_LOCK_MINUTES * 60:
+                lock.unlink()
+                log.warning("removed stale Git maintenance lock %s", lock)
+            subprocess.run(hardened_git_argv(f"--git-dir={git_dir}", *_GC), env=env,
+                           capture_output=True, check=True, timeout=GIT_MAINTENANCE_SECONDS,
+                           umask=0o077)
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+            log.warning("Git maintenance deferred for %s: %s", git_dir, error)

@@ -13,7 +13,7 @@ from typing import cast
 from itertools import chain
 from pathlib import Path
 
-from steward_harness.retention import prune_tasks, prune_world_sessions, retire_native_homes
+from steward_harness.retention import maintain_git, prune_tasks, prune_world_sessions, retire_native_homes
 from steward_harness.repository_reconciler import RepositoryReconciler
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import (
@@ -992,6 +992,12 @@ class StewardDaemon:
                 state, self.broker, self.config.provider.native_homes,
                 self.config.world.root if self.config.world else None,
                 {name: repository.path for name, repository in self.config.repositories.items()},
+            )
+            maintain_git(
+                self.broker,
+                [repository.path for repository in self.config.repositories.values()]
+                + ([self.config.world.root] if self.config.world else []),
+                [state.tasks.path, *(transport.git_dir for transport in state.tasks.transports.values())],
             )
 
         def step() -> None:

@@ -169,6 +169,12 @@ def hardened_git_argv(*args: str) -> list[str]:
         "core.fsmonitor=false",
         "-c",
         "log.showSignature=false",
+        # Auto-maintenance detaches, and an invocation's unit kills what it
+        # leaves running; `retention.maintain_git` runs it instead.
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
         *args,
     ]
 

@@ -21,6 +21,15 @@ from steward_harness.git import controller_git_dir, hardened_git_argv
 if TYPE_CHECKING:
     from steward_harness.config.schema import StewardConfig
 
+# Environment-scoped Git configuration; an explicit `git -c` still overrides it.
+GIT_AUTO_MAINTENANCE_OFF = {
+    "GIT_CONFIG_COUNT": "2",
+    "GIT_CONFIG_KEY_0": "gc.auto",
+    "GIT_CONFIG_VALUE_0": "0",
+    "GIT_CONFIG_KEY_1": "maintenance.auto",
+    "GIT_CONFIG_VALUE_1": "false",
+}
+
 _PROVIDER_ENVIRONMENT = frozenset(
     {
         "ANTHROPIC_API_KEY",
@@ -586,6 +595,10 @@ class UntrustedExecutionBroker:
         # Derive it from the actual identity, never an inherited USER value.
         environment.update({"LOGNAME": user, "USER": user})
         environment.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+        # Git's detached auto-maintenance outlives the command that starts it,
+        # and the invocation's unit kills it, which can strand a gc.pid.lock
+        # that disables gc for good. Retention runs maintenance instead.
+        environment.update(GIT_AUTO_MAINTENANCE_OFF)
         return environment
 
     def _provider_environment(self, source: Mapping[str, str]) -> dict[str, str]:
