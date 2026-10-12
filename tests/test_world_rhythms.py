@@ -323,7 +323,7 @@ def test_the_pass_starts_one_world_rhythm_at_a_time_in_configured_order(tmp_path
     daemon._procedures = procedures
     ran = []
     run = procedures.run_world_rhythm
-    procedures.run_world_rhythm = lambda service, name, key: (ran.append(name), run(service, name, key))
+    procedures.run_world_rhythm = lambda service, name, key: (ran.append(name), run(service, name, key))[1]
     queued = []
     kernel = SimpleNamespace(
         dispatch=SimpleNamespace(submit=lambda key, work: queued.append((key, work)),
@@ -937,6 +937,47 @@ def test_captured_candidate_deferred_by_world_contention_is_accepted_without_res
     assert cognition.calls == 1
     assert state.result_receipt("rhythm:sleep:20")
 
+
+
+def test_a_rhythm_its_world_refuses_yields_to_the_next_and_then_alerts(tmp_path, monkeypatch):
+    # 2026-10-07: Staging wrote into the live world itself instead of its own
+    # checkout. Every later application touching that path was refused, and
+    # because only the oldest due rhythm ever ran, Sleep, News and Finance
+    # stayed silent for five days with nothing telling the operator.
+    from datetime import datetime
+    stray = []
+
+    def write_outside_checkout(request):
+        if not stray:
+            (request.cwd / "staging.md").write_text("Staged in the checkout.\n")
+            (checkpoint.world.root / "staging.md").write_text("Staged in the live world.\n")
+            stray.append(True)
+
+    hourly = {"schedule": 3600, "procedure": "sleep", "input": "world", "owner": None}
+    rhythms = {"sleep": CHAIN["sleep"] | {"owner": None}, "staging": hourly}
+    config, state, checkpoint, service, cognition, procedures = _chain(
+        tmp_path, EditingCognition(write_outside_checkout), rhythms=rhythms)
+    alerts = []
+    procedures.alert = lambda key, text: alerts.append((key, text))
+    monkeypatch.setattr("steward_harness.procedures.time.time", lambda: NOW)
+
+    procedures.advance_world_rhythm(service)
+    assert procedures.world_rhythm_observations(now=NOW)["sleep"]["progress"] == "acceptance_pending"
+    procedures.advance_world_rhythm(service)
+    assert cognition.calls == 2
+    assert state.result_receipt(f"rhythm:staging:{NOW // 3600}")
+    assert not state.result_receipt("rhythm:sleep:20") and not alerts
+
+    [prior] = state.rhythm_turns(ConversationId("rhythm:sleep"))
+    later = datetime.fromisoformat(prior.started_at).timestamp() + 2 * 3600
+    monkeypatch.setattr("steward_harness.procedures.time.time", lambda: later)
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    [(key, text)] = alerts
+    assert key == "rhythm-deferred:sleep" and "staging.md" in text
+
+    (checkpoint.world.root / "staging.md").unlink()
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert state.result_receipt("rhythm:sleep:20") and cognition.calls == 2
 
 def test_policy_captured_after_admission_failure_survives_later_failures(tmp_path):
     from pathlib import Path
