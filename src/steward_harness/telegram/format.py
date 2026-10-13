@@ -387,8 +387,24 @@ def extract_telegram_action_markers(text: str) -> tuple[str, list[TelegramAction
             actions.append(action)
         return ""
 
-    clean_text = pattern.sub(_replace, text).strip()
+    clean_text = _outside_code(pattern, text, _replace).strip()
     return clean_text, actions
+
+
+# Fenced blocks first, then inline spans: a marker a reply quotes as code is
+# being talked about, not asked for.
+_QUOTED_CODE = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
+
+
+def _outside_code(pattern: re.Pattern[str], text: str, replace) -> str:
+    quoted = [match.span() for match in _QUOTED_CODE.finditer(text)]
+
+    def _unless_quoted(match: re.Match[str]) -> str:
+        if any(start <= match.start() < end for start, end in quoted):
+            return match.group(0)
+        return replace(match)
+
+    return pattern.sub(_unless_quoted, text)
 
 
 def extract_artifact_markers(text: str) -> tuple[str, list[OutboundArtifact]]:
@@ -407,5 +423,5 @@ def extract_artifact_markers(text: str) -> tuple[str, list[OutboundArtifact]]:
         artifacts.append(OutboundArtifact(kind=kind, path=raw_path.strip()))
         return ""
 
-    clean_text = pattern.sub(_replace, text).strip()
+    clean_text = _outside_code(pattern, text, _replace).strip()
     return clean_text, artifacts
