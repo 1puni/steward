@@ -864,6 +864,10 @@ class TelegramService:
             if (getattr(self._delivery_context, "path", None) is not None
                     and f"artifact:{index}" in self._delivery_context.receipt.get("pieces", {})):
                 continue
+            # Until the send itself, a failure is the reply's own content: a
+            # path that does not resolve, or a file over the cap, fails the
+            # same way on every retry, and retrying holds the conversation.
+            permanent = True
             try:
                 path = self._resolve_delivery_artifact(artifact.path)
                 size = path.stat().st_size
@@ -873,6 +877,7 @@ class TelegramService:
                         f"{path.name} is {size // (1024 * 1024)}MB; "
                         f"configured Telegram cap is {self.config.media_max_mb}MB"
                     )
+                permanent = False
                 if artifact.kind is ArtifactKind.IMAGE:
                     send = lambda p=path: self.api.send_photo(
                         chat_id, p, topic_id=topic_id
@@ -887,10 +892,9 @@ class TelegramService:
                 log.error("Failed to send %s %s after retries: %s", label, artifact.path, exc)
                 detail = f"{label} {artifact.path}: {exc}"
                 failures.append(detail)
-                # Already quarantined below, so this path is not the one
-                # that floods the log on a permanent rejection; leave its
-                # delivery classified as retryable, as before.
-                all_permanent = False
+                # A failed send stays retryable: it is quarantined below, so
+                # it is not the path that floods the log.
+                all_permanent = all_permanent and permanent
                 record = self._quarantine(str(exc), chat_id=chat_id, topic_id=topic_id,
                                          kind=artifact.kind.value, path=artifact.path)
                 artifact_failures.append((artifact, str(exc), record))

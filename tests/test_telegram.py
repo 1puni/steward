@@ -22,6 +22,7 @@ from steward_harness.telegram import api as api_module
 from steward_harness.telegram import service as service_module
 from steward_harness.telegram.api import TelegramAPI, TelegramAPIError
 from steward_harness.telegram.service import (
+    TelegramContentRejected,
     TelegramDeliveryError,
     TelegramService,
     probe_chat_access,
@@ -1648,6 +1649,56 @@ def test_send_reply_rejects_artifact_outside_configured_roots(
         service.send_reply(1, 0, f"[[send_document:{outside}]]")
 
     assert uploads == []
+
+
+def test_a_missing_attachment_settles_instead_of_holding_the_conversation(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Crosstrees retried one reply every second for ten hours on 2026-10-12."""
+    service = _service(tmp_path)
+    monkeypatch.setattr(service.api, "send_message", lambda *a, **k: 1)
+
+    with pytest.raises(TelegramContentRejected, match="could not resolve delivery artifact"):
+        service.send_reply(1, 0, f"Here [[send_image:{tmp_path / 'never-written.png'}]]")
+    assert not service.defers(TelegramContentRejected("permanent"))
+
+
+def test_a_failed_upload_of_an_existing_attachment_stays_retryable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0.0)
+    service = _service(tmp_path)
+    artifact = tmp_path / "manual.pdf"
+    artifact.write_bytes(b"pdf")
+    monkeypatch.setattr(service.api, "send_message", lambda *a, **k: 1)
+
+    def broken(*_args, **_kwargs):
+        raise TelegramAPIError("upload broke")
+
+    monkeypatch.setattr(service.api, "send_document", broken)
+    with pytest.raises(TelegramDeliveryError) as raised:
+        service.send_reply(1, 0, f"[[send_document:{artifact}]]")
+    assert not isinstance(raised.value, TelegramContentRejected)
+
+
+def test_a_marker_quoted_as_code_is_text_not_an_attachment(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path, agent_actions=("pin_reply",))
+    sent: list[str] = []
+    monkeypatch.setattr(service.api, "send_message",
+                        lambda chat_id, text, **kwargs: sent.append(text) or 1)
+    uploads: list[str] = []
+    monkeypatch.setattr(service.api, "send_photo",
+                        lambda _chat, path, topic_id=None: uploads.append(str(path)) or 1)
+    monkeypatch.setattr(service.api, "pin_chat_message",
+                        lambda *a, **k: pytest.fail("a quoted action must not run"))
+
+    service.send_reply(1, 0, "The `[[send_image:...]]` placeholder is a template, and so is\n"
+                             "```\n[[telegram_pin_reply]]\n```")
+
+    assert uploads == []
+    assert "[[send_image:...]]" in sent[0] and "[[telegram_pin_reply]]" in sent[0]
 
 
 @pytest.mark.parametrize("failure", [TelegramAPIError("upload broke"), ValueError("broken upload")])
