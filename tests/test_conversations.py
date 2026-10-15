@@ -238,42 +238,21 @@ def test_missing_session_callbacks_rotate_once_before_binding_replacement(
     assert rebound.provider_session_id == "replacement"
 
 
-def test_final_marker_is_refused_without_replay_admission(tmp_path):
-    cognition = FakeCognition([_reply('Old reply.\nTASK_PROPOSAL: {"repository":"app","title":"Fix parser","brief":"Repair it."}')])
+@pytest.mark.parametrize("marker", [
+    'TASK_PROPOSAL: {"repository":"app","title":"Fix parser","brief":"Repair it."}',
+    "TASK_ACTION: not-json\nMore narration.",
+    'TASK_PROPOSAL: {"repository":"other","title":"X","brief":"Y"}',
+])
+def test_a_final_marker_line_is_only_text(tmp_path: Path, marker: str) -> None:
+    """Operations are live task calls; reply text is never parsed for them."""
+    cognition = FakeCognition([_reply(f"Answer\n{marker}")])
     service = _service(tmp_path, cognition)
     first = _turn(service, "update-1")
-    replay = _turn(service, "update-1")
-    assert first == replay
-    assert first.task_admission is None
-    assert "markers are retired" in first.task_rejection
+    assert _turn(service, "update-1") == first
+    assert (first.task_admission, first.task_rejection) == (None, None)
+    assert first.reply_text == f"Answer\n{marker}"
     assert service._state.tasks.all() == []
     assert len(cognition.requests) == 1
-
-
-@pytest.mark.parametrize(
-    ("marker", "expected"),
-    [
-        ("TASK_PROPOSAL: not-json", "markers are retired"),
-        ("TASK_ACTION: not-json\nMore narration.", "markers are retired"),
-        ("TASK_ACTION: {}\nTASK_PROPOSAL: {}", "markers are retired"),
-        (
-            'TASK_PROPOSAL: {"repository":"other","title":"X","brief":"Y"}',
-            "markers are retired",
-        ),
-    ],
-)
-def test_malformed_or_unauthorized_marker_admits_nothing(
-    tmp_path: Path, marker: str, expected: str
-) -> None:
-    service = _service(tmp_path, FakeCognition([_reply(f"Answer\n{marker}")]))
-
-    result = _turn(service, "update-1")
-
-    assert result.task_admission is None
-    assert result.task_rejection is not None
-    assert expected in result.reply_text
-    with service._state.connect() as connection:
-        assert service._state.tasks.all() == []
 
 
 def test_failed_cognition_interrupts_the_durable_turn(tmp_path: Path) -> None:

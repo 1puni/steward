@@ -27,7 +27,7 @@ recommendations below; their revision-scoped evidence stays historical.
 | C: interrupted rhythms | `768d757a` retains interval obligations; `eeaaf067` reconciles continuation with callable notifications. | Uncertain external effects require explicit continuation, not inferred success. |
 | E: native task completion | `eb15d7b2`/`d5d875a5` removed suffix parsing but required typed close. The current change derives idle after correlated native completion and teardown, including no-diff/empty-reply turns, and removes revision-after-close repair for accepted understanding. | Optional ask/continue supplies state the adapters cannot yet map. Native question callbacks and provider goals need a separate direct mapping; prose is not scored. |
 | F: ordinary world completion | Successful empty replies now retain and accept their own world work and action receipts by default, just like automatic turns. | Low-level embedding callers can still explicitly require output. Truncation, errors, missing native completion and cancellation remain failures. |
-| F: notification instructions | `eb15d7b2` removed silence/notification markers. Finance's remaining `NOTIFY:` instruction now uses the shared native notification interface; reflection and security-review instructions no longer demand close. Retired task markers are refused without enforcing their obsolete syntax. | Notification is an explicit send decision, never inferred from completed cognition. |
+| F: notification instructions | `eb15d7b2` removed silence/notification markers. Finance's remaining `NOTIFY:` instruction now uses the shared native notification interface; reflection and security-review instructions no longer demand close. Retired task markers are ordinary reply text. | Notification is an explicit send decision, never inferred from completed cognition. |
 | Candidate reviews | The `VERDICT:` line is retired: a review records `verdict` through the native task tool, written as a `Verdict:` trailer on its evidence commit. | Native execution success does not tell whether a review passed. Missing/conflicting evidence still fails the gate. |
 | Attachments and pins | Existing transport syntax names payloads and message-bound actions under path/permission checks. | Completion state cannot supply a file path or operator pin decision. |
 | G: persistent processes | Provider homes persist, but processes remain invocation-scoped. | Process reuse still needs writer exclusion and is outside this correction. |
@@ -387,8 +387,8 @@ moved to the native task tool's `telegram` operation, which sends or pins at onc
 with its own keyed receipt, and reply text is no longer parsed. `pin_reply` was
 retired rather than moved: it needed the identity of a reply that does not exist
 while the turn asking for it runs, and no instance had used it.
-Retired `TASK_PROPOSAL`/`TASK_ACTION` lines are rejected uniformly without parsing
-payloads or demanding a final-line position. They cannot admit or steer work, including
+Retired `TASK_PROPOSAL`/`TASK_ACTION` lines are no longer recognised at all: a reply
+that still carries one is delivered as written and admits or steers nothing, including
 on recovery. The original raw output remains recorded. No `SILENT`, `QUESTION: NONE`, `DISPOSITION:` or
 `NOTIFY:` token controls execution or automatic sending.
 
