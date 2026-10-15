@@ -253,9 +253,10 @@ def build_procedure_scope(
     if not verdict:
         return scope
     return scope + (
-        "\nFinish with VERDICT: PASS or VERDICT: FAIL for the accepted procedure's scope, "
-        "then finish the native turn normally. Ask if evidence is insufficient; "
-        "never infer PASS from missing evidence."
+        "\nRecord your verdict for the accepted procedure's scope with the native steward_tasks "
+        'task tool: operation="verdict", key and verdict="pass" or "fail", then finish the native '
+        "turn normally. Your findings are never read as a verdict, and a review without a recorded "
+        "pass fails. Ask if evidence is insufficient; never infer pass from missing evidence."
     )
 
 

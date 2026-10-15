@@ -145,13 +145,12 @@ def convert(source: Path, destination: Path, *, remote_tips: dict[str, str] | No
         if verdict is not None:
             if verdict not in {'pass', 'fail'} or not work:
                 raise ValueError(f"task {task_id} has an unrepresentable accepted verdict")
-            message = store.git('show', '-s', '--format=%B', work)
-            lines = [line.strip() for line in message.splitlines() if line.startswith('VERDICT:')]
-            if lines != ['VERDICT: ' + verdict.upper()]:
+            recorded = store.git('show', '-s', '--format=%(trailers:key=Verdict,valueonly)', work).strip()
+            if recorded != verdict:
                 tree = store.git('rev-parse', work + '^{tree}')
                 converted_work = store.git('commit-tree', tree, '-p', work, input_text=(
                     'steward: preserve accepted review verdict during epoch-50 conversion\n\n'
-                    f'VERDICT: {verdict.upper()}\n\nDisposition: idle\n'))
+                    f'Disposition: idle\nVerdict: {verdict}\n'))
                 fields['work'] = converted_work
                 parents = (converted_work,)
                 report['preserved_verdicts'] += 1

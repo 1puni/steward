@@ -116,7 +116,7 @@ def render_prompt(stage: str) -> dict:
                 source_files.add(ROOT / policy)
             else:
                 read_text += "\n\nNo reflection policy ships with the harness: it belongs to the instance that configures the procedure. Set STEWARD_REFLECTION_POLICY to a repository-relative path to preview one."
-        output = "Final findings are recorded. Native close declares disposition; candidate reviews also return VERDICT evidence. See the closure instructions above."
+        output = "Final findings are recorded. Native close declares disposition; candidate reviews also record a verdict call. See the closure instructions above."
     else:
         request = "<operator message>"
         if not stage.startswith("conversation"):
