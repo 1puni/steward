@@ -4,6 +4,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import os
+
+import pytest
 
 from steward_harness.config.schema import ProcedureConfig, ProcedureRhythmConfig, TargetConfig, CommandSpec
 from steward_harness.procedures import Procedures
@@ -77,7 +80,7 @@ def test_target_requires_exact_input_and_procedure_evidence_and_external_observa
     adapter = InvestigationAdapter()
     state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter)
     execute = adapter.execute
-    adapter.execute = lambda request: replace(execute(request), output=TaskOutput('VERDICT: PASS', subject='review', disposition='idle'))
+    adapter.execute = lambda request: replace(execute(request), output=TaskOutput('Reviewed.', subject='review', disposition='idle', verdict='pass'))
     config, procedures = setup_procedures(tmp_path, state, runner)
     driver = tmp_path / "driver"
     observed = tmp_path / "observed.json"
@@ -222,7 +225,7 @@ def _transcribing(adapter, *, also_write=None):
         (projects / "session.jsonl").write_text('{"turn": 1}\n')
         if also_write is not None:
             (Path(request.cwd) / also_write).write_text("review must not change product")
-        return replace(result, output=TaskOutput('VERDICT: PASS', subject='review', disposition='idle'))
+        return replace(result, output=TaskOutput('Reviewed.', subject='review', disposition='idle', verdict='pass'))
 
     adapter.execute = run
 
@@ -323,10 +326,63 @@ def test_failed_requirement_returns_the_reviewers_findings(tmp_path):
     task = procedures.request("security-one", "app", candidate, candidate)
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        TaskOutput('The consumer handoff is unverified.\nVERDICT: FAIL', subject='review', disposition='idle')))
+        TaskOutput('The consumer handoff is unverified.', subject='review', disposition='idle', verdict='fail')))
     runner.prepare(task)
     failure = procedures.require(("security-one",), "app", candidate, candidate)
     assert "The consumer handoff is unverified." in failure
+
+
+def _review(tmp_path, output):
+    bare, clone = _repository(tmp_path)
+    adapter = InvestigationAdapter()
+    state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter)
+    _, procedures = setup_procedures(tmp_path, state, runner)
+    candidate = runner.transports["app"].fetch()
+    task = procedures.request("security-one", "app", candidate, candidate)
+    execute = adapter.execute
+    adapter.execute = lambda request: replace(execute(request), output=output(request))
+    runner.prepare(task)
+    return state, procedures, task, candidate
+
+
+def test_review_findings_that_say_pass_are_not_a_verdict(tmp_path):
+    """The line that used to be parsed now passes nothing; only the call does."""
+    state, procedures, task, candidate = _review(
+        tmp_path, lambda _request: TaskOutput("VERDICT: PASS", subject="review", disposition="idle"))
+    assert state.tasks.get(task).verdict == "fail"
+    assert "VERDICT: PASS" in procedures.require(("security-one",), "app", candidate, candidate)
+
+
+def test_recorded_verdict_is_a_trailer_on_the_evidence_commit(tmp_path):
+    state, procedures, task, candidate = _review(
+        tmp_path, lambda _request: TaskOutput("Reviewed.", subject="review", disposition="idle", verdict="pass"))
+    reviewed = state.tasks.get(task)
+    assert (reviewed.slice_verdict, reviewed.verdict, reviewed.findings) == ("pass", "pass", "Reviewed.")
+    assert procedures.require(("security-one",), "app", candidate, candidate) == ""
+
+
+def test_conflicting_verdicts_fail_the_review(tmp_path):
+    from test_task_calls import call
+    receipts = []
+    def output(request):
+        request.on_process_started(os.getpid(), None)
+        for verdict in ("pass", "fail", "pass"):
+            receipts.append(call(request.task_call_socket, operation="verdict", key="v", verdict=verdict))
+        return TaskOutput("Reviewed.", subject="review", disposition="idle")
+    state, procedures, task, candidate = _review(tmp_path, output)
+    assert receipts[0]["pending"] and "conflicting" in receipts[1]["error"]
+    assert "conflicted" in receipts[2]["error"]
+    assert state.tasks.get(task).verdict == "fail"
+    assert procedures.require(("security-one",), "app", candidate, candidate)
+
+
+def test_only_a_repository_review_records_a_verdict(tmp_path):
+    from steward_harness.task_calls import TaskExecutionCalls
+    bare, clone = _repository(tmp_path)
+    state, runner, _, _ = harness(tmp_path / "state", bare, clone, InvestigationAdapter())
+    task, _ = state.tasks.create(TaskSpec("app", "Ordinary work", "Change something"))
+    with pytest.raises(ValueError, match="only a read-only repository review"):
+        TaskExecutionCalls(state, task, {"app"})(dict(operation="verdict", key="v", verdict="pass"))
 
 
 def test_read_only_procedure_rejects_product_mutation_and_retries_at_the_candidate(tmp_path):
@@ -339,7 +395,7 @@ def test_read_only_procedure_rejects_product_mutation_and_retries_at_the_candida
     execute = adapter.execute
     def corrupt(request):
         (Path(request.cwd) / "injected.txt").write_text("review must not change product")
-        return replace(execute(request), output=TaskOutput('VERDICT: PASS', subject='review', disposition='idle'))
+        return replace(execute(request), output=TaskOutput('Reviewed.', subject='review', disposition='idle', verdict='pass'))
     adapter.execute = corrupt
     runner.prepare(task)
     assert "changed its input" in state.tasks.get(task).reason
@@ -348,7 +404,7 @@ def test_read_only_procedure_rejects_product_mutation_and_retries_at_the_candida
     seen = []
     def review(request):
         seen.append((Path(request.cwd) / "injected.txt").exists())
-        return replace(execute(request), output="VERDICT: PASS\nCOMMIT: review\nDISPOSITION: idle\nQUESTION: NONE")
+        return replace(execute(request), output=TaskOutput('Reviewed.', subject='review', disposition='idle', verdict='pass'))
     adapter.execute = review
     runner.prepare(task)
     # The rejected edit was never committed; the retry reviews the candidate.
@@ -534,7 +590,7 @@ def test_scheduled_review_scope_does_not_become_full_tree_release_evidence(tmp_p
         procedure="security-one", input="repositories/app/main")
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        TaskOutput('No changed obligations.\nVERDICT: PASS', subject='progress checked', disposition='idle')))
+        TaskOutput('No changed obligations.', subject='progress checked', disposition='idle', verdict='pass')))
     procedures.advance_rhythms(now=100)
     scheduled = state.tasks.queued()[0]
     runner.prepare(scheduled)

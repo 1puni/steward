@@ -155,15 +155,17 @@ def build_turn_prompt(
     interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE, "The native steward_tasks tool can inspect your configured notification owner's tasks: operation=list, or operation=show with task_id. Task mutations require controller-enabled drive_tasks; without it you may only inspect and notify. Telegram cosmetics are unavailable to world rhythms."] if transport == "rhythm"
                  else [])
     if transport == "telegram":
-        interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
         if delivery_roots:
-            interface.append("Photo roots: " + ", ".join(delivery_roots) + ".")
-        if telegram_actions:
-            interface.append("Telegram actions in this chat, only when the operator asks:")
-            if "pin_reply" in telegram_actions:
-                interface.append("[[telegram_pin_reply]] pins this reply.")
-            if "pin_message" in telegram_actions:
-                interface.append("[[telegram_pin_message:123]] pins that message.")
+            interface.append(
+                'Send an existing file with the native steward_tasks task tool: operation="telegram", '
+                'action="send_image" for a photo or "send_document" to keep the file as-is, key, and '
+                "text set to its absolute path beneath " + ", ".join(delivery_roots) + ". It is "
+                "delivered at once, before your reply; a refusal comes back to you. Reply text is "
+                "never parsed for files or actions.")
+        if "pin_message" in telegram_actions:
+            interface.append(
+                'Only when the operator asks, pin an existing message: operation="telegram", '
+                'action="pin_message", key, text set to its numeric message id.')
     return "\n\n".join(
         section for section in (
             "\n".join(interface),
@@ -253,9 +255,10 @@ def build_procedure_scope(
     if not verdict:
         return scope
     return scope + (
-        "\nFinish with VERDICT: PASS or VERDICT: FAIL for the accepted procedure's scope, "
-        "then finish the native turn normally. Ask if evidence is insufficient; "
-        "never infer PASS from missing evidence."
+        "\nRecord your verdict for the accepted procedure's scope with the native steward_tasks "
+        'task tool: operation="verdict", key and verdict="pass" or "fail", then finish the native '
+        "turn normally. Your findings are never read as a verdict, and a review without a recorded "
+        "pass fails. Ask if evidence is insufficient; never infer pass from missing evidence."
     )
 
 

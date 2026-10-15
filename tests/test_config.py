@@ -257,7 +257,7 @@ def test_telegram_presence_is_the_only_transport_state() -> None:
                 "identity": {"name": "t", "slug": "t"},
                 "telegram": {
                     "allowed_users": [1],
-                    "agent_actions": ["pin_reply"],
+                    "agent_actions": ["pin_message"],
                 },
             }
         )
@@ -273,7 +273,8 @@ def test_telegram_presence_is_the_only_transport_state() -> None:
         }
     )
     assert config.telegram is not None
-    assert config.telegram.agent_actions == ("pin_reply", "pin_message")
+    # pin_reply is retired; an existing config still loads without it.
+    assert config.telegram.agent_actions == ("pin_message",)
     with pytest.raises(ValidationError, match="enabled"):
         StewardConfig.model_validate(
             {

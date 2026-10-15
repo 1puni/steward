@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from enum import StrEnum
@@ -9,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from steward_harness.git import validate_git_branch, validate_git_remote_url
 from steward_harness.provider_types import (
@@ -19,7 +20,7 @@ from steward_harness.provider_types import (
     ProviderProfile,
 )
 
-TelegramAgentAction = Literal["pin_reply", "pin_message", "set_photo", "set_description"]
+TelegramAgentAction = Literal["pin_message", "set_photo", "set_description"]
 
 _DEFAULT_UNTRUSTED_ENVIRONMENT = (
     "COLORTERM",
@@ -294,6 +295,18 @@ class TelegramConfig(BaseModel):
     delivery_roots: tuple[str, ...] = ()
     agent_actions: tuple[TelegramAgentAction, ...] = ()
     adapter_commands: dict[str, TelegramAdapterCommandConfig] = Field(default_factory=dict)
+
+    @field_validator("agent_actions", mode="before")
+    @classmethod
+    def retires_pin_reply(cls, actions):
+        # pin_reply pinned a reply that does not exist while the turn that
+        # asks for it is running; no instance used it. Existing configs load.
+        if isinstance(actions, (list, tuple)) and "pin_reply" in actions:
+            logging.getLogger(__name__).warning(
+                "Telegram agent_actions: pin_reply is retired and ignored; "
+                "a conversation pins an existing message with pin_message")
+            return tuple(action for action in actions if action != "pin_reply")
+        return actions
 
     @model_validator(mode="after")
     def validates_adapter_commands(self) -> "TelegramConfig":

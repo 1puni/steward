@@ -377,6 +377,8 @@ class TaskExecutionCalls:
         # A task's result is its report. Only a rhythm's task, whose finished
         # result is recorded rather than sent, speaks to its owner by notify.
         self.notifies = bool(task.procedure and task.procedure.event.startswith("rhythm:"))
+        # Only a repository review has a verdict for anything to read.
+        self.judges = task.read_only and task.procedure.workdir is None
         self.query = OwnershipCalls(state.tasks, task_id, repositories)
         self.start_writer()
 
@@ -386,6 +388,8 @@ class TaskExecutionCalls:
         self.intent = None
         self.conflicted = False
         self.revision = None
+        self.verdict = None
+        self.verdict_conflicted = False
 
     def closure(self, findings):
         """Resolve only after the native writer and its descendants are torn down.
@@ -401,7 +405,29 @@ class TaskExecutionCalls:
             raise ValueError("conflicting close operations")
         decision = self.intent[1] if self.intent else TickClosure(
             "steward: complete native task execution", "idle")
-        return replace(decision, findings=findings or "")
+        verdict = None if self.verdict is None or self.verdict_conflicted else self.verdict[1]
+        return replace(decision, findings=findings or "", verdict=verdict)
+
+    def _verdict(self, request):
+        if not self.judges:
+            raise ValueError("only a read-only repository review records a verdict")
+        if (set(request) != {"operation", "key", "verdict"}
+                or not all(isinstance(value, str) for value in request.values())
+                or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request["key"])
+                or request["verdict"] not in {"pass", "fail"}):
+            raise ValueError("verdict requires key and verdict=pass or verdict=fail")
+        if self.verdict_conflicted:
+            raise ValueError("verdicts conflicted; this review fails")
+        if self.verdict is not None and self.verdict[0] != request:
+            # Two answers are no answer, and no answer is a failed review.
+            self.verdict_conflicted = True
+            raise ValueError("conflicting verdicts; this review fails")
+        replayed = self.verdict is not None
+        self.verdict = (dict(request), request["verdict"])
+        return {"operation": "verdict", "pending": True, "accepted": False,
+                "task_id": str(self.task_id), "execution": self.execution,
+                "key": request["key"], "verdict": request["verdict"], "replayed": replayed,
+                "message": "Verdict recorded for this execution only. It counts once the native turn completes and its evidence commits."}
 
     def _close(self, request):
         from steward_harness.landing.checkpoint import TickClosure
@@ -450,6 +476,11 @@ class TaskExecutionCalls:
                     # An invalid explicit wait must not become implicit success.
                     self.conflicted = True
                     raise
+        if isinstance(request, dict) and request.get("operation") == "verdict":
+            with self.state.tasks.lease:
+                if self.state.tasks.cancelled(self.task_id):
+                    raise ValueError("task was cancelled")
+                return self._verdict(request)
         if not isinstance(request, dict) or request.get("operation") != "notify":
             return self.query(request)
         if not self.notifies:

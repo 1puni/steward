@@ -35,12 +35,9 @@ from steward_harness.telegram.commands import (
 from steward_harness.telegram.format import (
     ArtifactKind,
     OutboundArtifact,
-    TelegramActionKind,
-    extract_artifact_markers,
-    extract_telegram_action_markers,
     format_markdown_chunks,
 )
-from steward_harness.telegram.admin import ChatAdministration
+from steward_harness.telegram.admin import ChatAdministration, resolve_delivery_file
 from steward_harness.receipts import write_receipt
 
 log = logging.getLogger(__name__)
@@ -134,7 +131,7 @@ def probe_chat_access(api: TelegramAPI, config: TelegramConfig) -> None:
                 or member.get("status") not in {"administrator", "creator"}
                 or (
                     member.get("status") != "creator"
-                    and bool(set(config.agent_actions) & {"pin_reply", "pin_message"})
+                    and "pin_message" in config.agent_actions
                     and member.get("can_pin_messages") is not True
                 )
             ):
@@ -774,10 +771,14 @@ class TelegramService:
 
     def send_reply(
         self, chat_id: int, topic_id: int, text: str, *,
+        artifacts: tuple[OutboundArtifact, ...] = (),
         max_wait_seconds: float = _MAX_RETRY_AFTER_WAIT,
         retained_result: bool = False,
     ) -> None:
-        """Send formatted text and extracted images to Telegram.
+        """Send formatted text, then any attachments the caller names, to Telegram.
+
+        Reply text is never parsed for attachments or actions: a conversation
+        sends files and pins through its native task tool during the turn.
 
         Update replies retain each confirmed piece across retries and restart.
         Failed pieces raise so callers cannot mistake partial delivery for success.
@@ -789,15 +790,11 @@ class TelegramService:
             receipt.setdefault("reply", [chat_id, topic_id, text])
             chat_id, topic_id, text = receipt["reply"]
             self._save_receipt()
+        clean_text = text.strip()
         if retained_result:
-            # Evidence and notification text do not authorize attachments/actions.
             # Bound each transport job; full evidence remains in its source.
-            clean_text = (text if len(text) <= 12_000 else
-                          text[:11_940] + "\n[truncated; full result retained in its receipt]")
-            actions, artifacts = [], []
-        else:
-            clean_text, actions = extract_telegram_action_markers(text)
-            clean_text, artifacts = extract_artifact_markers(clean_text)
+            clean_text = (clean_text if len(clean_text) <= 12_000 else
+                          clean_text[:11_940] + "\n[truncated; full result retained in its receipt]")
         retained = getattr(self._delivery_context, "path", None) is not None
         chunks = self._delivery_context.receipt.get("formatted_chunks") if retained else None
         if chunks is None:
@@ -817,29 +814,10 @@ class TelegramService:
                 self._save_receipt()
         failures: list[str] = []
         artifact_failures: list[tuple[OutboundArtifact, str, Path | None]] = []
-        sent_message_ids: list[int] = []
-        allowed_actions = set(self.config.agent_actions)
         # Every failed piece has to come back permanent for the whole reply
         # to be unrecoverable: one transient piece alongside it still means
         # retrying the reply is worth doing.
         all_permanent = True
-
-        for action in actions:
-            if chat_id != self.config.chat_id:
-                failures.append("Telegram action destination is not the configured chat")
-            elif action.kind.value not in allowed_actions:
-                failures.append(f"Telegram action {action.kind.value!r} is not enabled")
-            elif action.kind is TelegramActionKind.PIN_REPLY and not chunks:
-                failures.append("pin_reply requires a non-empty text reply")
-            elif (
-                action.kind is TelegramActionKind.PIN_MESSAGE
-                and action.message_id is not None
-                and action.message_id > 2_147_483_647
-            ):
-                failures.append("pin_message message id exceeds Telegram's numeric range")
-        if failures:
-            # Properties of the message/config, never the network: always permanent.
-            raise TelegramContentRejected("; ".join(failures))
 
         for index, chunk in enumerate(chunks):
             try:
@@ -849,7 +827,6 @@ class TelegramService:
                     ),
                     max_wait_seconds=max_wait_seconds,
                 )
-                sent_message_ids.append(message_id)
                 log.info(
                     "Telegram reply confirmed chat=%s topic=%s message=%s receipt=%s piece=%s",
                     chat_id, topic_id, message_id,
@@ -870,13 +847,6 @@ class TelegramService:
             permanent = True
             try:
                 path = self._resolve_delivery_artifact(artifact.path)
-                size = path.stat().st_size
-                limit = self.config.media_max_mb * 1024 * 1024
-                if size > limit:
-                    raise TelegramAPIError(
-                        f"{path.name} is {size // (1024 * 1024)}MB; "
-                        f"configured Telegram cap is {self.config.media_max_mb}MB"
-                    )
                 permanent = False
                 if artifact.kind is ArtifactKind.IMAGE:
                     send = lambda p=path: self.api.send_photo(
@@ -898,29 +868,6 @@ class TelegramService:
                 record = self._quarantine(str(exc), chat_id=chat_id, topic_id=topic_id,
                                          kind=artifact.kind.value, path=artifact.path)
                 artifact_failures.append((artifact, str(exc), record))
-
-        for action in actions:
-            if action.kind is TelegramActionKind.PIN_REPLY:
-                if not sent_message_ids:
-                    failures.append("pin_reply requires a successfully delivered text reply")
-                    continue
-                target_message_id = sent_message_ids[-1]
-            else:
-                target_message_id = action.message_id
-            if target_message_id is None:  # pragma: no cover - parser invariant
-                failures.append("Telegram pin action omitted its message id")
-                continue
-            try:
-                self._send_piece(
-                    f"pin:{target_message_id}", lambda message_id=target_message_id: self.api.pin_chat_message(
-                        chat_id, message_id
-                    ),
-                    max_wait_seconds=max_wait_seconds,
-                )
-            except TelegramAPIError as exc:
-                log.error("Failed to execute Telegram %s after retries: %s", action.kind, exc)
-                failures.append(f"{action.kind.value}: {exc}")
-                all_permanent = False
 
         if artifact_failures:
             records = [record.name for _artifact, _error, record in artifact_failures if record]
@@ -984,16 +931,17 @@ class TelegramService:
                     raise ValueError("job must contain exactly one of text, photo, or document")
 
                 kind = payloads[0]
-                value = str(raw[kind])
+                value, artifacts = str(raw[kind]), ()
                 if kind != "text":
-                    marker = "send_image" if kind == "photo" else "send_document"
-                    value = f"{caption or ''} [[{marker}:{value}]]".strip()
+                    artifacts = (OutboundArtifact(
+                        ArtifactKind.IMAGE if kind == "photo" else ArtifactKind.DOCUMENT, value),)
+                    value = caption or ""
             except (OSError, ValueError) as exc:
                 log.error("Telegram delivery job %s is invalid: %s", job_path.name, exc)
                 self._quarantine(str(exc), job=job_path)
                 continue
             try:
-                self.send_reply(chat_id, topic_id, value)
+                self.send_reply(chat_id, topic_id, value, artifacts=artifacts)
             except TelegramAPIError as exc:
                 log.error("Telegram delivery job %s failed: %s", job_path.name, exc)
                 self._quarantine(str(exc), job=job_path)
@@ -1002,15 +950,10 @@ class TelegramService:
 
     def _resolve_delivery_artifact(self, raw_path: str) -> Path:
         try:
-            artifact = Path(raw_path).resolve(strict=True)
-        except (OSError, ValueError) as exc:
-            raise TelegramAPIError(f"could not resolve delivery artifact: {exc}") from exc
-        if not artifact.is_file():
-            raise TelegramAPIError(f"delivery artifact is not a file: {artifact}")
-        roots = [Path(root).resolve() for root in self.config.delivery_roots]
-        if not any(artifact.is_relative_to(root) for root in roots):
-            raise TelegramAPIError("delivery artifact is outside configured delivery_roots")
-        return artifact
+            return resolve_delivery_file(raw_path, self.config.delivery_roots,
+                                         self.config.media_max_mb * 1024 * 1024)
+        except ValueError as exc:
+            raise TelegramAPIError(str(exc)) from None
 
     def _quarantine(self, error: str, *, job: Path | None = None, **facts: object) -> Path | None:
         """Record one failed delivery beside whatever it could not deliver.
