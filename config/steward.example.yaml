@@ -98,9 +98,9 @@ telegram:
   # access; do not place this spool beside the private state database.
   inbound_media_dir: "/var/lib/steward/inbound-media"
   # Optional model-requested actions remain controller-executed and fixed to
-  # chat_id. The provider receives marker syntax, never the bot token.
+  # chat_id. The provider calls its native task tool, never the bot token.
+  # Attachments need no opt-in: any file beneath delivery_roots may be sent.
   agent_actions:
-    - "pin_reply"
     - "pin_message"
   delivery_outbox_dir: "/home/steward/app-state/outbox"
   delivery_quarantine_dir: "/var/lib/steward/outbox-quarantine"

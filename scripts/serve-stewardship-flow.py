@@ -126,8 +126,8 @@ def render_prompt(stage: str) -> dict:
         prompt = prompts.build_turn_prompt(
             request, orientation.world_orientation(), "<world turn id>",
             transport="desk" if stage == "conversation-desk" else "telegram",
-            telegram_actions=("pin_reply", "pin_message") if enabled_telegram else (),
-            delivery_roots=("<configured absolute photo delivery root>",) if enabled_telegram else (),
+            telegram_actions=("pin_message",) if enabled_telegram else (),
+            delivery_roots=("<configured absolute delivery root>",) if enabled_telegram else (),
         )
         source.extend([prompts.build_turn_prompt, orientation.world_orientation])
     locations = [s if isinstance(s, str) else f"{Path(inspect.getsourcefile(s)).relative_to(ROOT)}:{inspect.getsourcelines(s)[1]} · {s.__name__}" for s in source]

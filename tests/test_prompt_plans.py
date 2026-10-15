@@ -7,7 +7,7 @@ from steward_harness.prompts import build_task_prompt, build_turn_prompt
 
 def test_turn_contains_current_interface_and_observations() -> None:
     turn = build_turn_prompt("  review this  ", "ORIENTATION-SENTINEL", "EVENT-SENTINEL", transport="telegram")
-    assert "[[send_image:" in turn
+    assert "[[" not in turn
     assert "TASK_PROPOSAL:" not in turn
     assert "TASK_ACTION:" not in turn
     assert "EVENT-SENTINEL" in turn
@@ -16,18 +16,20 @@ def test_turn_contains_current_interface_and_observations() -> None:
 
 
 def test_turn_names_only_enabled_scoped_telegram_actions() -> None:
-    turn = build_turn_prompt("pin this reply", transport="telegram", telegram_actions=("pin_reply",))
-    assert "[[telegram_pin_reply]]" in turn
-    assert "telegram_pin_message" not in turn
-    desk = build_turn_prompt("review this", transport="desk", telegram_actions=("pin_reply", "pin_message"))
-    assert "telegram_pin_" not in desk
-    assert "[[send_image:" not in desk
+    turn = build_turn_prompt("pin that", transport="telegram", telegram_actions=("set_photo",))
+    assert "pin_message" not in turn
+    turn = build_turn_prompt("pin that", transport="telegram", telegram_actions=("pin_message",))
+    assert 'operation="telegram", action="pin_message"' in turn
+    desk = build_turn_prompt("review this", transport="desk", telegram_actions=("pin_message",),
+                             delivery_roots=("/srv/delivery",))
+    assert "pin_message" not in desk and "send_image" not in desk
     assert "TASK_PROPOSAL:" not in desk and "TASK_ACTION:" not in desk
 
 
 def test_turn_names_authorized_delivery_roots() -> None:
     turn = build_turn_prompt("send image", transport="telegram", delivery_roots=("/var/lib/steward/world/artifacts/delivery",))
     assert "/var/lib/steward/world/artifacts/delivery" in turn
+    assert 'action="send_image"' in turn and "never parsed" in turn
     assert "/tmp" not in turn
 
 

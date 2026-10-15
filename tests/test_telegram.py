@@ -21,6 +21,7 @@ from steward_harness.state import ConversationBusy, StateDatabase
 from steward_harness.telegram import api as api_module
 from steward_harness.telegram import service as service_module
 from steward_harness.telegram.api import TelegramAPI, TelegramAPIError
+from steward_harness.telegram.format import ArtifactKind, OutboundArtifact
 from steward_harness.telegram.service import (
     TelegramContentRejected,
     TelegramDeliveryError,
@@ -538,7 +539,7 @@ def test_probe_requires_pin_permission_for_agent_actions(
     )
 
     with pytest.raises(TelegramAPIError, match="pin permission"):
-        probe_chat_access(api, _config(agent_actions=("pin_reply",)))
+        probe_chat_access(api, _config(agent_actions=("pin_message",)))
 
 
 def test_probe_proves_the_administrator_listing_it_will_depend_on(
@@ -1498,6 +1499,7 @@ def test_send_reply_raises_when_image_delivery_fails(
 ) -> None:
     monkeypatch.setattr(service_module, "_SEND_RETRY_BACKOFF_SECONDS", 0.0)
     service = _service(tmp_path)
+    (tmp_path / "x.png").write_bytes(b"image")
     monkeypatch.setattr(service.api, "send_message", lambda *a, **k: 1)
     monkeypatch.setattr(
         service.api,
@@ -1506,7 +1508,7 @@ def test_send_reply_raises_when_image_delivery_fails(
     )
 
     with pytest.raises(TelegramDeliveryError):
-        service.send_reply(1, 0, "look: [[send_image:/tmp/x.png]]")
+        service.send_reply(1, 0, "look:", artifacts=_image(tmp_path / "x.png"))
 
 
 def test_send_reply_delivers_text_and_image_when_both_succeed(
@@ -1528,91 +1530,13 @@ def test_send_reply_delivers_text_and_image_when_both_succeed(
         lambda chat_id, path, topic_id=None: sent_photos.append(str(path)) or 1,
     )
 
-    service.send_reply(1, 0, f"caption text [[send_image:{image}]]")  # must not raise
+    service.send_reply(1, 0, "caption text", artifacts=_image(image))  # must not raise
 
     assert sent_messages == ["caption text"]
     assert sent_photos == [str(image)]
 
 
-def test_send_reply_can_pin_its_exact_delivered_message(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service = _service(
-        tmp_path,
-        chat_id=-100123,
-        agent_actions=("pin_reply",),
-    )
-    sent: list[str] = []
-    pinned: list[tuple[int, int]] = []
-    monkeypatch.setattr(
-        service.api,
-        "send_message",
-        lambda chat_id, text, topic_id=None, **kwargs: sent.append(text) or 77,
-    )
-    monkeypatch.setattr(
-        service.api,
-        "pin_chat_message",
-        lambda chat_id, message_id: pinned.append((chat_id, message_id)),
-    )
-
-    service.send_reply(-100123, 0, "Welcome to OpenBrum [[telegram_pin_reply]]")
-
-    assert sent == ["Welcome to OpenBrum"]
-    assert pinned == [(-100123, 77)]
-
-
-def test_send_reply_can_pin_enabled_existing_message(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service = _service(
-        tmp_path,
-        chat_id=-100123,
-        agent_actions=("pin_message",),
-    )
-    pinned: list[tuple[int, int]] = []
-    monkeypatch.setattr(service.api, "send_message", lambda *args, **kwargs: 88)
-    monkeypatch.setattr(
-        service.api,
-        "pin_chat_message",
-        lambda chat_id, message_id: pinned.append((chat_id, message_id)),
-    )
-
-    service.send_reply(-100123, 0, "Done [[telegram_pin_message:42]]")
-
-    assert pinned == [(-100123, 42)]
-
-
-def test_send_reply_rejects_disabled_or_redirected_pin_before_sending(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service = _service(tmp_path, chat_id=-100123)
-    sent: list[str] = []
-    monkeypatch.setattr(
-        service.api,
-        "send_message",
-        lambda chat_id, text, topic_id=None, **kwargs: sent.append(text) or 77,
-    )
-
-    with pytest.raises(TelegramDeliveryError, match="not enabled"):
-        service.send_reply(-100123, 0, "No [[telegram_pin_reply]]")
-    assert sent == []
-
-    enabled = _service(
-        tmp_path,
-        chat_id=-100123,
-        agent_actions=("pin_reply",),
-    )
-    monkeypatch.setattr(
-        enabled.api,
-        "send_message",
-        lambda chat_id, text, topic_id=None, **kwargs: sent.append(text) or 77,
-    )
-    with pytest.raises(TelegramDeliveryError, match="configured chat"):
-        enabled.send_reply(-100999, 0, "No [[telegram_pin_reply]]")
-    assert sent == []
-
-
-def test_send_reply_delivers_document_marker(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_send_reply_delivers_a_named_document(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     service = _service(tmp_path)
     artifact = tmp_path / "manual.pdf"
     artifact.write_bytes(b"pdf")
@@ -1624,7 +1548,7 @@ def test_send_reply_delivers_document_marker(tmp_path, monkeypatch: pytest.Monke
         lambda chat_id, path, topic_id=None: sent_documents.append((str(path), topic_id)) or 1,
     )
 
-    service.send_reply(1, 9, f"Here it is [[send_document:{artifact}]]")
+    service.send_reply(1, 9, "Here it is", artifacts=_document(artifact))
 
     assert sent_documents == [(str(artifact), 9)]
 
@@ -1646,7 +1570,7 @@ def test_send_reply_rejects_artifact_outside_configured_roots(
     with pytest.raises(
         TelegramDeliveryError, match="outside configured delivery_roots"
     ):
-        service.send_reply(1, 0, f"[[send_document:{outside}]]")
+        service.send_reply(1, 0, "", artifacts=_document(outside))
 
     assert uploads == []
 
@@ -1658,8 +1582,8 @@ def test_a_missing_attachment_settles_instead_of_holding_the_conversation(
     service = _service(tmp_path)
     monkeypatch.setattr(service.api, "send_message", lambda *a, **k: 1)
 
-    with pytest.raises(TelegramContentRejected, match="could not resolve delivery artifact"):
-        service.send_reply(1, 0, f"Here [[send_image:{tmp_path / 'never-written.png'}]]")
+    with pytest.raises(TelegramContentRejected, match="could not resolve delivery file"):
+        service.send_reply(1, 0, "Here", artifacts=_image(tmp_path / "never-written.png"))
     assert not service.defers(TelegramContentRejected("permanent"))
 
 
@@ -1677,28 +1601,28 @@ def test_a_failed_upload_of_an_existing_attachment_stays_retryable(
 
     monkeypatch.setattr(service.api, "send_document", broken)
     with pytest.raises(TelegramDeliveryError) as raised:
-        service.send_reply(1, 0, f"[[send_document:{artifact}]]")
+        service.send_reply(1, 0, "", artifacts=_document(artifact))
     assert not isinstance(raised.value, TelegramContentRejected)
 
 
-def test_a_marker_quoted_as_code_is_text_not_an_attachment(
+def test_reply_text_is_never_parsed_for_attachments_or_actions(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    service = _service(tmp_path, agent_actions=("pin_reply",))
+    """A reply that names a file or an action only talks about it."""
+    service = _service(tmp_path, agent_actions=("pin_message",))
+    image = tmp_path / "x.png"
+    image.write_bytes(b"image")
     sent: list[str] = []
     monkeypatch.setattr(service.api, "send_message",
                         lambda chat_id, text, **kwargs: sent.append(text) or 1)
-    uploads: list[str] = []
     monkeypatch.setattr(service.api, "send_photo",
-                        lambda _chat, path, topic_id=None: uploads.append(str(path)) or 1)
+                        lambda *a, **k: pytest.fail("reply text must not upload"))
     monkeypatch.setattr(service.api, "pin_chat_message",
-                        lambda *a, **k: pytest.fail("a quoted action must not run"))
+                        lambda *a, **k: pytest.fail("reply text must not pin"))
 
-    service.send_reply(1, 0, "The `[[send_image:...]]` placeholder is a template, and so is\n"
-                             "```\n[[telegram_pin_reply]]\n```")
+    service.send_reply(1, 0, f"Here [[send_image:{image}]] and [[telegram_pin_message:42]]")
 
-    assert uploads == []
-    assert "[[send_image:...]]" in sent[0] and "[[telegram_pin_reply]]" in sent[0]
+    assert f"[[send_image:{image}]]" in sent[0] and "[[telegram_pin_message:42]]" in sent[0]
 
 
 @pytest.mark.parametrize("failure", [TelegramAPIError("upload broke"), ValueError("broken upload")])
@@ -1726,7 +1650,7 @@ def test_failed_document_is_quarantined_and_alerted_outside_topic(
 
     expected = TelegramDeliveryError if isinstance(failure, TelegramAPIError) else ValueError
     with pytest.raises(expected) as caught:
-        service.send_reply(1, 9, f"[[send_file:{artifact}]]")
+        service.send_reply(1, 9, "", artifacts=_document(artifact))
 
     records = list(quarantine.glob("*.json"))
     if isinstance(failure, TelegramAPIError):
@@ -1757,7 +1681,7 @@ def test_document_over_configured_cap_is_not_uploaded(
     )
 
     with pytest.raises(TelegramDeliveryError, match="configured Telegram cap is 1MB"):
-        service.send_reply(1, 0, f"[[send_document:{artifact}]]")
+        service.send_reply(1, 0, "", artifacts=_document(artifact))
 
     assert uploads == []
 
@@ -1788,10 +1712,10 @@ def test_delivery_outbox_sends_declared_root_document_and_removes_job(
     deliveries: list[tuple[int, int, str]] = []
     failure = ValueError("broken delivery formatting") if failure_at == "send" else OSError("acknowledgement failed")
 
-    def send(chat_id, topic_id, text):
+    def send(chat_id, topic_id, text, *, artifacts=()):
         if failure_at == "send":
             raise failure
-        deliveries.append((chat_id, topic_id, text))
+        deliveries.append((chat_id, topic_id, text, artifacts))
 
     monkeypatch.setattr(service, "send_reply", send)
     if failure_at == "acknowledge":
@@ -1812,7 +1736,7 @@ def test_delivery_outbox_sends_declared_root_document_and_removes_job(
         assert caught.value is failure
 
     assert deliveries == ([] if failure_at == "send" else [
-        (-100123, 8, f"signed [[send_document:{document}]]"),
+        (-100123, 8, "signed", _document(document)),
     ])
     assert job.exists() == (failure_at is not None)
     assert not quarantine.exists()
@@ -2550,9 +2474,9 @@ def test_rate_limited_inline_reply_and_restart_replay_defer_to_the_drain(
     assert not list(restarted.inbox.dir.glob("*.json*"))
 
 
-@pytest.mark.parametrize("piece", ["artifact", "pin", "attachment-alert"])
+@pytest.mark.parametrize("piece", ["artifact", "attachment-alert"])
 def test_poll_wait_budget_reaches_every_reply_piece(tmp_path, monkeypatch, piece):
-    service = _service(tmp_path, agent_actions=("pin_reply",))
+    service = _service(tmp_path)
     photo = tmp_path / "photo.png"
     photo.write_bytes(b"image")
     sleeps = []
@@ -2564,17 +2488,15 @@ def test_poll_wait_budget_reaches_every_reply_piece(tmp_path, monkeypatch, piece
     def limited(*a, **kw):
         raise TelegramAPIError("rate limited", retry_after=120)
 
-    if piece == "pin":
-        text = "reply [[telegram_pin_reply]]"
-        monkeypatch.setattr(service.api, "pin_chat_message", limited)
-    elif piece == "artifact":
-        text = f"reply [[send_image:{photo}]]"
+    if piece == "artifact":
+        text, artifacts = "reply", _image(photo)
         monkeypatch.setattr(service.api, "send_photo", limited)
     else:
-        text = f"[[send_image:{tmp_path / 'missing.png'}]]"
+        text, artifacts = "", _image(tmp_path / "missing.png")
         monkeypatch.setattr(service.api, "send_message", limited)
     with pytest.raises(TelegramDeliveryError):
-        service.send_reply(1, 7, text, max_wait_seconds=service_module._POLL_THREAD_MAX_WAIT)
+        service.send_reply(1, 7, text, artifacts=artifacts,
+                           max_wait_seconds=service_module._POLL_THREAD_MAX_WAIT)
     assert sleeps == []
 
 
@@ -2717,3 +2639,11 @@ def test_receipts_that_cannot_be_read_keep_the_ingress_from_polling(tmp_path, mo
     with pytest.raises(service_module.TelegramReceiptsUnadopted):
         service.start()
     assert not (service.inbox.dir / "offset").exists()
+
+
+def _image(path):
+    return (OutboundArtifact(ArtifactKind.IMAGE, str(path)),)
+
+
+def _document(path):
+    return (OutboundArtifact(ArtifactKind.DOCUMENT, str(path)),)

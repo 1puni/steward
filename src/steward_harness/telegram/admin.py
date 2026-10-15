@@ -45,6 +45,27 @@ def read_photo(path, roots):
     return data
 
 
+def resolve_delivery_file(raw_path, roots, max_bytes):
+    """An existing file beneath a delivery root, within the configured size cap."""
+    try:
+        artifact = Path(raw_path).resolve(strict=True)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f'could not resolve delivery file: {exc}') from None
+    if not artifact.is_file():
+        raise ValueError(f'delivery file is not a file: {artifact}')
+    if not any(artifact.is_relative_to(Path(root).resolve()) for root in roots):
+        raise ValueError('delivery file is outside configured delivery_roots')
+    size = artifact.stat().st_size
+    if size > max_bytes:
+        raise ValueError(f'{artifact.name} is {size // (1024 * 1024)}MB; '
+                         f'configured Telegram cap is {max_bytes // (1024 * 1024)}MB')
+    return artifact
+
+
+#: Sent to the calling conversation's own topic, at once, before its reply.
+_CONVERSATION_ACTIONS = {'send_image', 'send_document', 'pin_message'}
+
+
 class ChatAdministration:
     def __init__(self, config, api, receipts):
         self.config, self.api, self.receipts = config, api, Path(receipts)
@@ -57,18 +78,24 @@ class ChatAdministration:
                     description=chat.get('description', ''),
                     photo_id=(chat.get('photo') or {}).get('big_file_unique_id'),
                     can_change_info=member.get('status') == 'creator' or member.get('can_change_info') is True,
-                    enabled_actions=[a for a in self.config.agent_actions if a.startswith('set_')])
+                    enabled_actions=sorted(self._enabled()))
+
+    def _enabled(self):
+        sends = {'send_image', 'send_document'} if self.config.delivery_roots else set()
+        return sends | (set(self.config.agent_actions) & {'set_photo', 'set_description', 'pin_message'})
 
     def __call__(self, scope, request):
         action, key, text = (request.get(k) for k in ('action', 'key', 'text'))
         if (not all(isinstance(v, str) for v in (action, key, text))
                 or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', key)):
             raise ValueError('telegram requires string action, text and a bounded stable key')
-        if action not in {'info', 'set_photo', 'set_description'}:
+        if action not in {'info', 'set_photo', 'set_description', *_CONVERSATION_ACTIONS}:
             raise ValueError('unknown Telegram action')
-        enabled = set(self.config.agent_actions) & {'set_photo', 'set_description'}
+        enabled = self._enabled()
         if not enabled or (action != 'info' and action not in enabled):
-            raise ValueError('Telegram cosmetic action is not enabled')
+            raise ValueError(f'Telegram action {action!r} is not enabled')
+        if action in _CONVERSATION_ACTIONS:
+            return self._converse(scope, action, key, text)
         if action == 'info':
             if text:
                 raise ValueError('info requires empty text')
@@ -110,4 +137,52 @@ class ChatAdministration:
                           receipt=identity, **after)
             receipt['result'] = result
             write_receipt(path, receipt)
+            return result
+
+    def _converse(self, scope, action, key, text):
+        kind, _, topic = scope.partition(':')
+        if kind != 'telegram' or not topic.isdigit():
+            raise ValueError(f'{action} is available only to a Telegram conversation')
+        if action == 'pin_message':
+            if not text.isdigit() or not 0 < int(text) <= 2_147_483_647:
+                raise ValueError('pin_message requires the numeric id of a message in this chat')
+            fingerprint = dict(action=action, message_id=int(text))
+        else:
+            path = resolve_delivery_file(text, self.config.delivery_roots,
+                                         self.config.media_max_mb * 1024 * 1024)
+            fingerprint = dict(action=action, path=str(path), size=path.stat().st_size)
+        identity = hashlib.sha256(json.dumps([scope, key]).encode()).hexdigest()
+        receipt_path = self.receipts / (identity + '.json')
+        with self.lock:
+            prior = json.loads(receipt_path.read_text()) if receipt_path.exists() else None
+            if prior:
+                if prior['request'] != fingerprint:
+                    raise ValueError('Telegram action key already used with different content')
+                if prior.get('result'):
+                    return prior['result'] | {'replayed': True}
+                if action != 'pin_message':
+                    # Pinning twice is harmless; a second upload is a duplicate.
+                    raise ValueError('Telegram send outcome is unknown and may have been delivered; '
+                                     'use a new key only if a duplicate is acceptable')
+            self.receipts.mkdir(parents=True, exist_ok=True, mode=0o700)
+            write_receipt(receipt_path, dict(request=fingerprint))
+            chat, thread = self.config.chat_id, int(topic)
+            try:
+                if action == 'pin_message':
+                    self.api.pin_chat_message(chat, int(text))
+                    message_id = int(text)
+                elif action == 'send_image':
+                    message_id = self.api.send_photo(chat, path, topic_id=thread)
+                else:
+                    message_id = self.api.send_document(chat, path, topic_id=thread)
+            except Exception as error:
+                answered = getattr(error, 'status_code', None)
+                if answered is not None and answered < 500:
+                    # Telegram answered and refused: nothing was delivered.
+                    receipt_path.unlink()
+                    raise ValueError(f'Telegram refused {action}: {error}') from None
+                raise
+            result = dict(operation='telegram', accepted=True, replayed=False, action=action,
+                          message_id=message_id, receipt=identity)
+            write_receipt(receipt_path, dict(request=fingerprint, result=result))
             return result

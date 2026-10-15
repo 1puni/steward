@@ -380,15 +380,13 @@ queries and closure now use the native tool. The former `QUESTION: TASK_QUERY`
 fallback is removed. The separate candidate-review verdict remains structured
 gate evidence, with its reason for staying recorded in the closure contract.
 
-The final-prose sweep also found two transport representations that stay in this
-change. `[[send_image:...]]` and `[[send_document:...]]` name message attachments,
-subject to existing path and receipt checks; they do not decide whether an
-automatic run sends. Configured Telegram pin directives stay with the transport
-receipt because `pin_reply` needs the actual delivered message identity and
-pin retries share that message's durable delivery record. They retain the existing
-configured-chat permission checks and operator-request policy; they do not
-select execution closure or notification opt-in. Moving these actions to a separate API must preserve that
-message/receipt binding; this change does not introduce an independent pin queue.
+The final-prose sweep also found two transport representations that stayed in this
+change: `[[send_image:...]]`/`[[send_document:...]]` attachment markers and
+`[[telegram_pin_reply]]`/`[[telegram_pin_message:N]]` directives. Both have since
+moved to the native task tool's `telegram` operation, which sends or pins at once
+with its own keyed receipt, and reply text is no longer parsed. `pin_reply` was
+retired rather than moved: it needed the identity of a reply that does not exist
+while the turn asking for it runs, and no instance had used it.
 Retired `TASK_PROPOSAL`/`TASK_ACTION` lines are rejected uniformly without parsing
 payloads or demanding a final-line position. They cannot admit or steer work, including
 on recovery. The original raw output remains recorded. No `SILENT`, `QUESTION: NONE`, `DISPOSITION:` or

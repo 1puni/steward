@@ -158,8 +158,8 @@ def test_turn_prompt_scopes_delivery_to_telegram(tmp_path: Path) -> None:
     )
     desk_prompt = cognition.requests[1].prompt
     assert str(delivery_root) not in desk_prompt
-    assert "[[send_image:" not in desk_prompt
-    assert "telegram_pin_" not in desk_prompt
+    assert "send_image" not in desk_prompt
+    assert "pin_message" not in desk_prompt
     assert "native steward_tasks task tool" in desk_prompt
 
 
@@ -187,7 +187,7 @@ def test_current_delivery_contract_preserves_an_existing_persistent_session(
     assert replacement.provider_session_id == "session-before-delivery-contract"
     assert updated._state.find_conversation("telegram", "chat:topic").generation == 1
     assert str(delivery_root) in replacement.prompt
-    assert "[[send_image:/absolute/path/to/image.png]]" in replacement.prompt
+    assert 'action="send_image"' in replacement.prompt
 
 
 def test_provider_switch_is_fresh_then_resumes_new_provider(tmp_path: Path) -> None:
@@ -311,7 +311,6 @@ def test_failed_started_session_is_not_resumed_without_an_accepted_turn(
 
     request = recovered.requests[0]
     assert request.provider_session_id is None
-    assert "[[send_image:" in request.prompt
     assert "native steward_tasks task tool" in request.prompt
 
 
@@ -331,7 +330,7 @@ def test_failed_resumed_turn_preserves_an_accepted_session(
 
     request = failed.requests[0]
     assert request.provider_session_id == "committed-session"
-    assert "[[send_image:" in request.prompt
+    assert "native steward_tasks task tool" in request.prompt
     conversation = resumed._state.find_conversation("telegram", "chat:topic")
     assert conversation is not None
     assert conversation.generation == 1
