@@ -171,8 +171,13 @@ def build_turn_prompt(
                          "people talking to each other. Any word you write instead, a placeholder "
                          "included, is sent as written.")
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
+        # The document transport existed and was never named: a model told only
+        # about photos told the operator a finished video could not be sent.
+        interface.append("File delivery, unrecompressed, for video and any other file: "
+                         "[[send_document:/absolute/path/to/file.mp4]] (existing file).")
         if delivery_roots:
-            interface.append("Photo roots: " + ", ".join(delivery_roots) + ".")
+            interface.append("Delivery roots, for both: " + ", ".join(delivery_roots)
+                             + ". Copy a file into one before naming it.")
         if telegram_actions:
             interface.append("Telegram actions in this chat, only when the operator asks:")
             if "pin_reply" in telegram_actions:

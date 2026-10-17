@@ -29,6 +29,7 @@ def test_turn_names_only_enabled_scoped_telegram_actions() -> None:
 def test_turn_names_authorized_delivery_roots() -> None:
     turn = build_turn_prompt("send image", transport="telegram", delivery_roots=("/var/lib/steward/world/artifacts/delivery",))
     assert "/var/lib/steward/world/artifacts/delivery" in turn
+    assert "[[send_document:" in turn
     assert "/tmp" not in turn
 
 
