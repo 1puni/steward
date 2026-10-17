@@ -378,7 +378,8 @@ class GitTaskStore:
         That record and its findings stay on its task ref, as a review's do,
         and notification calls still reach its owner; landing them would put a
         transcript-only commit on the input branch every interval. A run that
-        changed a real file publishes its session record with it. Any other
+        changed a real file publishes that change and its memories; its
+        transcript stays on the task ref, as every task's does. Any other
         task that changed no file still publishes its findings.
         """
         run = task.procedure

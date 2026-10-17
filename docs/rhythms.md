@@ -145,7 +145,8 @@ Four things follow from its landing where it works:
   in its worktree, so every run writes one. That record alone is not a change:
   a run whose only difference is its own provider's session state lands nothing,
   and the record stays with the run on its task ref. A run that changed a real
-  file publishes its session record with its work, as provenance.
+  file publishes that change and its provider memories; its transcript stays on
+  the task ref, as every task's does. Provenance is the task ref, not main.
 - A blocked run is superseded at the next admission, like any rhythm run, and its
   unpublished work is dropped with it. The next run reads everything again.
 

@@ -13,7 +13,7 @@ import sys
 import httpx
 import yaml
 
-from steward_harness.config.loader import load_config
+from steward_harness.config.schema import StewardConfig
 from steward_harness.deploy.config import SystemdReleaseConfig
 from steward_harness.deploy.engine import DeployEngine
 from steward_harness.deploy.health import HealthGate
@@ -97,6 +97,20 @@ def _check_observation_boundary(config, config_path, settings_path, settings):
         raise PermissionError(f"observation evidence is untrusted: {failure}")
 
 
+# The driver is pinned outside the release it deploys, so the configuration it
+# reads may be newer than its schema. It validates only the sections it uses: a
+# field it does not own, such as a new rhythm option, must not stop deployment.
+# `requires_execution_boundary` keeps its answer, since a target names a repository.
+DRIVER_SECTIONS = ("identity", "execution", "provider", "repositories", "targets")
+
+
+def driver_config(path: Path) -> StewardConfig:
+    data = yaml.load(path.read_text(encoding="utf-8"), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid YAML structure in {path}: expected mapping")
+    return StewardConfig.model_validate({key: data[key] for key in DRIVER_SECTIONS if key in data})
+
+
 def main(argv=None, *, worker_entry=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -107,7 +121,7 @@ def main(argv=None, *, worker_entry=None):
     parser.add_argument("--policy")
     args = parser.parse_args(argv)
     config_path, settings_path = Path(args.config).resolve(), Path(args.settings).resolve()
-    config = load_config(config_path)
+    config = driver_config(config_path)
     settings = SystemdReleaseConfig.model_validate(yaml.safe_load(settings_path.read_text()))
     policy = hashlib.sha256(config_path.read_bytes() + settings_path.read_bytes()).hexdigest()
     request = dict(target=args.target, revision=args.revision) if args.operation == "worker" else json.load(sys.stdin)

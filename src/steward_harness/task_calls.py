@@ -29,6 +29,11 @@ def _digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def rhythm_submissions(name):
+    """The source prefix of every task a rhythm submitted, from either kind of run."""
+    return "controller:task-call:" + _digest(f"rhythm:{name}:submit") + ":"
+
+
 NOTIFY_DIRECTIVE = """Final replies from automatic runs are recorded only. To notify this run's
 owner, call the native steward_tasks task tool with operation="notify", key and
 text. Use a distinct key per message; retry an identical request with the same
@@ -457,7 +462,7 @@ class TaskExecutionCalls:
         tasks = self.state.tasks
         if request["repository"] not in self.repositories:
             raise ValueError("repository work is not authorized")
-        source = "controller:task-call:" + _digest(f"rhythm:{self.rhythm}:submit") + ":" + _digest(request["key"])
+        source = rhythm_submissions(self.rhythm) + _digest(request["key"])
         task_id = TaskId("task-" + uuid.uuid5(uuid.NAMESPACE_URL, source).hex)
         with self.state.connect(write=True) as connection, tasks.lease:
             if tasks.cancelled(self.task_id):

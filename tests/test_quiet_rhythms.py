@@ -688,9 +688,9 @@ def test_writing_org_rhythm_notifies_through_a_call(tmp_path):
 def test_driving_org_rhythm_admits_one_repair_per_key_for_its_owner(tmp_path):
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
     peer_clone = peer(tmp_path, state, runner)
+    # No paths: every head and every ordinary task's work is input, as on nsnodes.
     config.rhythms = {"org": ProcedureRhythmConfig(owner="desk:steward", schedule=100, workdir=str(tmp_path),
-        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",),
-        drive_tasks=True)}
+        procedure="security-one", input="repositories/app/main", drive_tasks=True)}
     runner.driving_rhythms = frozenset({"org"})
     outputs = []
 
@@ -713,9 +713,14 @@ def test_driving_org_rhythm_admits_one_repair_per_key_for_its_owner(tmp_path):
     repair = state.tasks.get(receipt["task_id"])
     assert (repair.owner, repair.repository, repair.title) == ("desk:steward", "app", "Repair the task channel")
     assert repair.status.value == "queued" and not repair.procedure
+    # The repair's own work is the rhythm's output, never its next input.
+    runner.prepare(repair.task_id)
+    assert state.tasks.get(repair.task_id).work_sha
+    procedures.advance_rhythms(now=200)
+    assert not [task for task in state.tasks.queued() if task not in {first, repair.task_id}]
     # The next run on new input names the same defect: no second repair.
     commit(peer_clone, "release.txt")
-    procedures.advance_rhythms(now=200)
+    procedures.advance_rhythms(now=300)
     second = next(task for task in state.tasks.queued() if task not in {first, repair.task_id})
     runner.prepare(second)
     assert outputs[-1].receipts[0] == receipt | {"replayed": True, "revision": outputs[-1].receipts[0]["revision"]}
@@ -818,7 +823,7 @@ def test_a_writing_run_whose_only_change_is_its_session_record_lands_nothing(tmp
     assert state.tasks.git("show", f"{finished.work_sha}:artefacts/claude/projects/run.jsonl")
 
 
-def test_a_writing_run_that_changed_a_file_publishes_its_session_record_too(tmp_path):
+def test_a_writing_run_publishes_its_change_and_keeps_its_session_record(tmp_path):
     clone, _, state, runner, procedures, _ = writing_org_rhythm(
         tmp_path, edit="Launch moved.\n", findings="", session=True)
     procedures.advance_rhythms(now=100)
@@ -828,4 +833,6 @@ def test_a_writing_run_that_changed_a_file_publishes_its_session_record_too(tmp_
     assert publish_task(runner) == task
     _git("fetch", "-q", "origin", cwd=clone)
     assert _git("show", "origin/main:launch.md", cwd=clone) == "Launch moved."
-    assert _git("show", "origin/main:artefacts/claude/projects/run.jsonl", cwd=clone)
+    assert "artefacts" not in _git("ls-tree", "--name-only", "origin/main", cwd=clone)
+    work = state.tasks.get(task).work_sha
+    assert state.tasks.git("show", f"{work}:artefacts/claude/projects/run.jsonl")
