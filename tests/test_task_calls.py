@@ -592,3 +592,17 @@ def test_driving_rhythm_cannot_cross_authority_or_undo_cancellation(tmp_path):
         calls(dict(operation='cancel', key='stop', task_id=str(task_id), text='Stop'))
     with pytest.raises(ValueError, match='only notify'):
         TaskCalls(state, turn.turn_id, drive_tasks=True)(submission())
+
+
+def test_bridge_names_the_failure_when_the_socket_is_unreachable():
+    # A provider outside the controller's mount namespace sees no socket at all.
+    import uuid
+    from steward_harness.runtime.task_call_mcp import CLIENT
+    request = dict(jsonrpc='2.0', id=1, method='tools/call',
+                   params=dict(name='task', arguments=dict(operation='list')))
+    missing = f'/tmp/steward-missing-{uuid.uuid4().hex[:8]}/call.sock'  # AF_UNIX paths are short
+    result = subprocess.run(['python3', '-c', CLIENT, missing],
+                            input=json.dumps(request) + '\n', text=True, capture_output=True, check=True)
+    reply = json.loads(result.stdout)['result']
+    assert reply['isError']
+    assert 'No such file or directory' in reply['content'][0]['text']
