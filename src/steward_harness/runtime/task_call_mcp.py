@@ -51,8 +51,8 @@ for line in sys.stdin:
             print(json.dumps({'jsonrpc': '2.0', 'id': message['id'],
                 'error': {'code': -32601, 'message': 'Unknown method or tool'}}), flush=True)
             continue
-    except Exception:
-        result = {'content': [{'type': 'text', 'text': 'Task call outcome unknown; retry the exact request with the same key using the current execution tool.'}], 'isError': True}
+    except Exception as error:
+        result = {'content': [{'type': 'text', 'text': f'Task call outcome unknown ({type(error).__name__}: {error}); retry the exact request with the same key using the current execution tool.'}], 'isError': True}
     print(json.dumps({'jsonrpc': '2.0', 'id': message.get('id'), 'result': result}), flush=True)
 '''
 

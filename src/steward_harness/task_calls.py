@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import os
 import socket
@@ -13,7 +14,6 @@ import tempfile
 import shutil
 from pathlib import Path
 from socketserver import UnixStreamServer
-import sqlite3
 import uuid
 import time
 from http.server import BaseHTTPRequestHandler
@@ -21,6 +21,8 @@ from threading import Thread
 
 from steward_harness.state import ConversationId, TaskAction, TaskId, TaskSpec, TaskOriginKind, TaskStatus
 from steward_harness.task_store import PREFIX
+
+logger = logging.getLogger(__name__)
 
 
 def _digest(value):
@@ -289,9 +291,10 @@ class TaskCallServer:
                     status = 200
                 except (ValueError, LookupError, PermissionError) as error:
                     result, status = {"accepted": False, "error": str(error)}, 400
-                except (RuntimeError, OSError, sqlite3.Error):
+                except Exception as error:
                     # The commit may already exist. Never label an ambiguous
                     # failure as a rejection; exact retry finds the Git receipt.
+                    logger.warning("task call outcome unknown: %s: %s", type(error).__name__, error)
                     result, status = {"accepted": None, "error": "operation outcome unknown; retry the exact request"}, 503
                 self.reply(status, result)
 
@@ -310,7 +313,11 @@ class TaskCallServer:
                 super().setup()
                 self.connection.settimeout(5)
 
-        self.directory = tempfile.mkdtemp(prefix="steward-task-", dir="/tmp")
+        # Executions run as transient units under PID 1 (runtime.ownership),
+        # outside this service's mount namespace, so a PrivateTmp /tmp here is
+        # not theirs. /run is the host's, as for their invocation scratch.
+        host = os.geteuid() == 0 and Path("/run/systemd/system").is_dir()
+        self.directory = tempfile.mkdtemp(prefix="steward-task-", dir="/run" if host else "/tmp")
         os.chmod(self.directory, 0o755)
         self.path = str(Path(self.directory) / "call.sock")
         self.server = UnixStreamServer(self.path, Handler)
