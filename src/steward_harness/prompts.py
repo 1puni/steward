@@ -281,8 +281,12 @@ def _bounded_brief(brief: str) -> str:
 
 def build_result_assessment_request(brief: str, result_text: str) -> str:
     """Compose a controller observation; final narration never requests sending."""
-    delivery_instruction = ("The retained result has already been delivered to its owner. "
-                            "Do not repeat it. " + NOTIFY_DIRECTIVE)
+    # The result arrives as text alone. On 2026-10-17 a conversation promised
+    # the operator a finished video "when it lands", and nothing ever sent it.
+    delivery_instruction = ("The retained result has already been delivered to its owner, as text "
+                            "only. Do not repeat it. A file it names reaches the operator only if "
+                            "you send it now, with the telegram operation where this conversation "
+                            "offers one. " + NOTIFY_DIRECTIVE)
     return (
         "## Harness task result\n"
         "This is a controller observation, not a new operator request or grant. "
