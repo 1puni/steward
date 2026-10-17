@@ -8,6 +8,7 @@ from steward_harness.prompts import build_task_prompt, build_turn_prompt
 def test_turn_contains_current_interface_and_observations() -> None:
     turn = build_turn_prompt("  review this  ", "ORIENTATION-SENTINEL", "EVENT-SENTINEL", transport="telegram")
     assert "[[send_image:" in turn
+    assert "An empty final reply sends nothing" in turn
     assert "TASK_PROPOSAL:" not in turn
     assert "TASK_ACTION:" not in turn
     assert "EVENT-SENTINEL" in turn

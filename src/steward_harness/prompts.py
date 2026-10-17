@@ -165,6 +165,11 @@ def build_turn_prompt(
     interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE, "The native steward_tasks tool can inspect your configured notification owner's tasks: operation=list, or operation=show with task_id. Task mutations require controller-enabled drive_tasks; without it you may only inspect and notify. Telegram cosmetics are unavailable to world rhythms."] if transport == "rhythm"
                  else [])
     if transport == "telegram":
+        # Delivery sends nothing for an empty reply. Without saying so, a model
+        # whose history is full of placeholder words writes one, and it is sent.
+        interface.append("An empty final reply sends nothing: use it when no reply is wanted, such as "
+                         "people talking to each other. Any word you write instead, a placeholder "
+                         "included, is sent as written.")
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
         if delivery_roots:
             interface.append("Photo roots: " + ", ".join(delivery_roots) + ".")
