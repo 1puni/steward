@@ -210,6 +210,45 @@ def test_pin_chat_message_sends_fixed_numeric_target(
     }
 
 
+def test_send_video_asks_telegram_to_play_it_in_the_topic(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[httpx.Request] = []
+    client_type = httpx.Client
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 74}})
+
+    monkeypatch.setattr(
+        api_module.httpx, "Client",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    video = tmp_path / "trailer.mp4"
+    video.write_bytes(b"mp4")
+
+    assert TelegramAPI("tok").send_video(-100123, video, topic_id=914) == 74
+    (request,) = calls
+    assert str(request.url).endswith("/bottok/sendVideo")
+    assert b'name="supports_streaming"\r\n\r\ntrue' in request.content
+    assert b'name="message_thread_id"\r\n\r\n914' in request.content
+    assert b'name="video"; filename="trailer.mp4"' in request.content
+
+
+def test_send_reply_plays_a_named_video(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _service(tmp_path)
+    video = tmp_path / "trailer.mp4"
+    video.write_bytes(b"mp4")
+    sent: list[tuple[str, int | None]] = []
+    monkeypatch.setattr(service.api, "send_message", lambda *a, **k: 1)
+    monkeypatch.setattr(
+        service.api, "send_video",
+        lambda chat_id, path, topic_id=None: sent.append((str(path), topic_id)) or 1,
+    )
+
+    service.send_reply(1, 9, "Here it is", artifacts=_video(video))
+
+    assert sent == [(str(video), 9)]
+
+
 def test_send_document_streams_generic_file_with_topic(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[httpx.Request] = []
     client_type = httpx.Client
@@ -1742,6 +1781,26 @@ def test_delivery_outbox_sends_declared_root_document_and_removes_job(
     assert not quarantine.exists()
 
 
+def test_delivery_outbox_sends_a_video_job_as_a_playable_video(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    outbox, artifacts = tmp_path / "outbox", tmp_path / "artifacts"
+    outbox.mkdir()
+    artifacts.mkdir()
+    video = artifacts / "trailer.mp4"
+    video.write_bytes(b"mp4")
+    (outbox / "001.json").write_text('{"video": "' + str(video) + '", "thread_id": 8}')
+    service = _service(
+        tmp_path, topics={"builds": 8}, delivery_outbox_dir=str(outbox),
+        delivery_quarantine_dir=str(tmp_path / "quarantine"), delivery_roots=[str(artifacts)],
+    )
+    deliveries = []
+    monkeypatch.setattr(service, "send_reply",
+                        lambda chat_id, topic_id, text, *, artifacts=(): deliveries.append((topic_id, artifacts)))
+
+    service._drain_delivery_outbox()
+
+    assert deliveries == [(8, _video(video))]
+
+
 def test_delivery_outbox_rejects_destination_override_and_quarantines_job(tmp_path) -> None:
     outbox = tmp_path / "outbox"
     quarantine = tmp_path / "quarantine"
@@ -2647,3 +2706,7 @@ def _image(path):
 
 def _document(path):
     return (OutboundArtifact(ArtifactKind.DOCUMENT, str(path)),)
+
+
+def _video(path):
+    return (OutboundArtifact(ArtifactKind.VIDEO, str(path)),)

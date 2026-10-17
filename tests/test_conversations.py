@@ -188,6 +188,7 @@ def test_current_delivery_contract_preserves_an_existing_persistent_session(
     assert updated._state.find_conversation("telegram", "chat:topic").generation == 1
     assert str(delivery_root) in replacement.prompt
     assert 'action="send_image"' in replacement.prompt
+    assert '"send_video" for an MP4 that plays in the chat' in replacement.prompt
 
 
 def test_provider_switch_is_fresh_then_resumes_new_provider(tmp_path: Path) -> None:

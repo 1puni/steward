@@ -158,7 +158,8 @@ def build_turn_prompt(
         if delivery_roots:
             interface.append(
                 'Send an existing file with the native steward_tasks task tool: operation="telegram", '
-                'action="send_image" for a photo or "send_document" to keep the file as-is, key, and '
+                'action="send_image" for a photo, "send_video" for an MP4 that plays in the chat, or '
+                '"send_document" for a file the reader downloads as-is, key, and '
                 "text set to its absolute path beneath " + ", ".join(delivery_roots) + ". It is "
                 "delivered at once, before your reply; a refusal comes back to you. Reply text is "
                 "never parsed for files or actions.")
