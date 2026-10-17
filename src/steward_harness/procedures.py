@@ -17,6 +17,7 @@ from steward_harness.lease import Busy, Lease
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.state import ConversationBusy, ConversationId, TaskId, TaskSpec, TaskStatus
 from steward_harness.task_store import ProcedureRun
+from steward_harness.task_calls import rhythm_submissions
 from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
 
 log = logging.getLogger(__name__)
@@ -217,7 +218,7 @@ class Procedures:
                 failures.append(f"{name} ({task_id}): {(task.findings or '')[-4000:]}")
         return "\n\n".join(failures) if failures else (None if pending else "")
 
-    def observe(self, rhythm, definitions=None, heads=None, *, fetch=True, fetched=None):
+    def observe(self, rhythm, definitions=None, heads=None, *, fetch=True, fetched=None, name=None):
         """(repository, candidate, base, activity): the input a run would capture.
 
         A repository rhythm's input is its candidate. An organisation rhythm
@@ -225,6 +226,8 @@ class Procedures:
         remote head and every ordinary task's accepted work. Task documents,
         their acceptance commits and procedure runs' evidence are the steward's
         own bookkeeping and never appear: a run cannot supply its successor's input.
+        Nor can the tasks a driving rhythm `name` submitted: their work is its own
+        output, and counting it woke nsnodes' light three times in 35 minutes.
         With `paths`, only the keys under them count, and only the repositories
         they name are fetched: a repository that cannot wake the rhythm is not
         worth a network round trip on every poll.
@@ -261,9 +264,11 @@ class Procedures:
                     for name in watched for ref, sha in remote(name).items()}
         if definitions is None:
             definitions = {str(task.task_id): task.definition for task in self.state.tasks.all()}
+        own = rhythm_submissions(name) if name else None
         activity.update({f"tasks/{task_id}": d.work for task_id, d in definitions.items()
                          if d.work and not (d.procedure and (d.procedure.access == "read-only"
-                                                             or d.procedure.event.startswith("rhythm:")))})
+                                                             or d.procedure.event.startswith("rhythm:")))
+                         and not (own and (d.source or "").startswith(own))})
         if prefixes:
             # What the rhythm is for, not everything it can read: its runs
             # capture only these keys, so nothing outside them is ever new.
@@ -315,7 +320,7 @@ class Procedures:
                 fetch = {rhythm.input.split("/", 2)[1], *(set(self.transports) - refreshed)}
             try:
                 repository, candidate, base, activity = self.observe(
-                    rhythm, definitions, heads, fetch=fetch, fetched=fetched)
+                    rhythm, definitions, heads, fetch=fetch, fetched=fetched, name=name)
             except GitTransportError as error:
                 log.warning("Rhythm %s input unavailable this poll: %s", name, error)
                 continue

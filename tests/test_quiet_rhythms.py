@@ -688,9 +688,9 @@ def test_writing_org_rhythm_notifies_through_a_call(tmp_path):
 def test_driving_org_rhythm_admits_one_repair_per_key_for_its_owner(tmp_path):
     clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
     peer_clone = peer(tmp_path, state, runner)
+    # No paths: every head and every ordinary task's work is input, as on nsnodes.
     config.rhythms = {"org": ProcedureRhythmConfig(owner="desk:steward", schedule=100, workdir=str(tmp_path),
-        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",),
-        drive_tasks=True)}
+        procedure="security-one", input="repositories/app/main", drive_tasks=True)}
     runner.driving_rhythms = frozenset({"org"})
     outputs = []
 
@@ -713,9 +713,14 @@ def test_driving_org_rhythm_admits_one_repair_per_key_for_its_owner(tmp_path):
     repair = state.tasks.get(receipt["task_id"])
     assert (repair.owner, repair.repository, repair.title) == ("desk:steward", "app", "Repair the task channel")
     assert repair.status.value == "queued" and not repair.procedure
+    # The repair's own work is the rhythm's output, never its next input.
+    runner.prepare(repair.task_id)
+    assert state.tasks.get(repair.task_id).work_sha
+    procedures.advance_rhythms(now=200)
+    assert not [task for task in state.tasks.queued() if task not in {first, repair.task_id}]
     # The next run on new input names the same defect: no second repair.
     commit(peer_clone, "release.txt")
-    procedures.advance_rhythms(now=200)
+    procedures.advance_rhythms(now=300)
     second = next(task for task in state.tasks.queued() if task not in {first, repair.task_id})
     runner.prepare(second)
     assert outputs[-1].receipts[0] == receipt | {"replayed": True, "revision": outputs[-1].receipts[0]["revision"]}
