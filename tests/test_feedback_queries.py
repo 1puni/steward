@@ -69,18 +69,24 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     assert {r["task_id"] for r in receipts} == {str(task)}
     assert {r["owner"] for r in receipts} == {"telegram:17"}
     assert [r["observation"][1] for r in receipts] == ["satisfied", "failed", "satisfied"]
-    cognition = FakeCognition([_task_reply(dict(operation="notify", key="repair", text="Deployment requires repair."))])
+    cognition = FakeCognition([
+        _task_reply(dict(operation="notify", key="ready", text="The deployment is ready.")),
+        _task_reply(dict(operation="notify", key="repair", text="Deployment requires repair.")),
+        _task_reply(dict(operation="notify", key="recovered", text="The deployment recovered.")),
+    ])
     service = _service(root, cognition)
     # Skip already-covered publication receipt: this journey exercises later target evidence.
     for item in (old, task):
         key = f"task_result:{item}:{state.tasks.get(item).outcome}:done"
         state.save_result_receipt(dict(owner=state.tasks.read(item)[1].owner, task_id=str(item), source_key=key, done=True))
     owner = ConversationId("telegram:17")
-    # Retained observations arrive before any optional model assessment.
+    # Observations are evidence until the owning steward chooses a message.
     sent = []
-    assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == (
-        f"production reached {revision[:12]}.\nready first time")
+    assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) is None
     assert cognition.requests == []
+    service.assess_task_result(owner)
+    assert service.deliver_task_result(owner, send=lambda *args: sent.append(args)) == "The deployment is ready."
+    service.assess_task_result(owner)
     def fail(*args):
         sent.append(args)
         raise OSError("transport offline")
@@ -88,17 +94,14 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
         service.deliver_task_result(owner, send=fail)
     restarted = _service(root, cognition)
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert sent[1] == sent[2] and "repair required" in sent[1][0]
-    assert "Desired revision: " + revision in sent[1][0]
-    assert cognition.requests == []
-    restarted.assess_task_result(owner)
-    assert len(cognition.requests) == 1
+    assert sent[1] == sent[2] and sent[1][0] == "Deployment requires repair."
+    assert len(cognition.requests) == 2
     assert "Desired revision: " + revision in cognition.requests[-1].prompt
+    assert "repair required" in cognition.requests[-1].prompt
+    restarted.assess_task_result(owner)
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert len(cognition.requests) == 1
-    restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert {text for text, _ in sent[-2:]} == {
-        f"production recovered and reached {revision[:12]}.\nrecovered", "Deployment requires repair."}
+    assert len(cognition.requests) == 3
+    assert sent[-1][0] == "The deployment recovered."
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed")) is None
 
 

@@ -164,14 +164,14 @@ Settled checkpoints and accepted input determine recovery, not lock-file existen
   clears the hold so the retained branch gets another slice. Incident-owned
   tasks refuse operator retry; their own policy drives them.
 
-**Stuck work is named again once a day.** A waiting, blocked or proposed task
-reports once, to its owner, and nothing re-queues it after that. Once a task has
-been stuck for more than a day, the controller lists it every UTC day while it
-stays stuck. The list carries the title, the reason, and the command that moves it
+**Stuck work is reconsidered once a day.** Once a waiting, blocked or proposed task
+has been stuck for more than a day, the controller retains an observation every
+UTC day while it stays stuck. The list carries the title, reason and available action
 (`/task answer`, `/task retry` or `/task confirm`, and `/task cancel`). Each
-Telegram owner gets one digest for its own tasks. Everything owned elsewhere, such
+Telegram owner gets one observation for its own tasks. Everything owned elsewhere, such
 as a desk or a rhythm that is not somewhere you read, goes to the configured
-`operator` (or `incidents`) topic. The digest is fixed text and costs no model turn.
+`operator` (or `incidents`) conversation. Its steward assesses relevance and decides
+whether to notify; the raw digest is not posted to chat.
 A task query the controller answers itself is not listed.
 
 **What "ongoing" means here.** A task is dispatchable when it has never run,

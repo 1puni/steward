@@ -164,7 +164,7 @@ def test_progress_is_never_delivered_and_live_is_delivered_once(tmp_path, monkey
         revision = live["observation"][0]
         assert live["observation"] == [revision, "satisfied"]
         # The driver's own words from the observation that reached it, once.
-        assert live["reply"] == f"production reached {revision[:12]}.\nready at t=0.0"
+        assert "reply" not in live
         assert live["owner"] is None and live["task_id"] is None
 
 
@@ -197,12 +197,12 @@ def test_a_persistent_failure_is_told_once_and_its_recovery_once(tmp_path, monke
         target.step("failed", at=900)
         live, failed = target.receipts()
         assert failed["observation"] == [live["observation"][0], "failed"]
-        assert failed["reply"].startswith("production is not reaching ")
-        assert "observe failed (exit 1)" in failed["reply"]
+        assert "reply" not in failed
+        assert "observe failed (exit 1)" in failed["result_text"]
         target.step("ready", at=910)
         target.step("ready", at=920)
         assert len(target.receipts()) == 3
-        assert target.receipts()[-1]["reply"].startswith("production recovered and reached ")
+        assert "reply" not in target.receipts()[-1]
 
 
 def test_a_told_failure_survives_restart_without_being_told_again(tmp_path, monkeypatch):
@@ -222,7 +222,7 @@ def test_a_told_failure_survives_restart_without_being_told_again(tmp_path, monk
         assert [failed["observation"][1], recovered["observation"][1]] == ["failed", "satisfied"]
         assert failed["observation"][0] == recovered["observation"][0]
         assert all(r["owner"] is None and r["task_id"] is None for r in (failed, recovered))
-        assert "recovered" in recovered["reply"]
+        assert "reply" not in recovered
 
 
 def test_receipts_from_before_outcomes_do_not_repeat_a_live_message(tmp_path, monkeypatch):
@@ -239,7 +239,7 @@ def test_receipts_from_before_outcomes_do_not_repeat_a_live_message(tmp_path, mo
         assert len(target.receipts()) == 1
 
 
-def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, monkeypatch):
+def test_an_owning_task_assesses_both_live_and_failure(tmp_path, monkeypatch):
     with _harness(tmp_path) as (daemon, clone, _calls):
         revision = _git("rev-parse", "HEAD", cwd=clone)
         targets = daemon._targets
@@ -255,8 +255,8 @@ def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, m
         target.step("failed", at=400)
         live, failed = target.receipts()
         assert (live["owner"], live["task_id"]) == ("telegram:42", "task-1")
-        # A live observation says everything; no model turn restates it.
-        assert live["reply"] == f"production reached {revision[:12]}.\nready at t=2"
+        # Both outcomes belong to the owner to assess.
+        assert "reply" not in live
         # A failure is the owner's to assess, so it carries no canned reply.
         assert (failed["owner"], failed["task_id"]) == ("telegram:42", "task-1")
         assert "reply" not in failed
@@ -269,6 +269,5 @@ def test_empty_site_target_does_not_claim_live_application(tmp_path, monkeypatch
                             Observation(revision=revision, ready=True, details='no sites declared'))
         target.step('ready')
         [receipt] = target.receipts()
-        assert receipt['reply'].startswith('production reached ')
-        assert 'no sites declared' in receipt['reply']
-        assert 'live' not in receipt['reply']
+        assert 'reply' not in receipt
+        assert 'no sites declared' in receipt['result_text']

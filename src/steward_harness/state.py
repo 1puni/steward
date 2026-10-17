@@ -1330,7 +1330,7 @@ class StateDatabase:
                     TaskStatus.WAITING, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.DONE}):
                 continue
             key = f"task_result:{task.task_id}:{task.outcome}:{status.value}"
-            if self.result_receipt(key).get("done"):
+            if self.result_receipt(key):
                 continue
             yield task, key
 
@@ -1349,7 +1349,7 @@ class StateDatabase:
         A task that asks, blocks or awaits confirmation reports once, through
         its owner. After that nothing re-queues it, and an owner that is a
         desk or a rhythm is not somewhere the operator reads. So each UTC day
-        the tasks stuck longer than a day are listed, without a model turn:
+        the tasks stuck longer than a day are retained for their owner to assess:
         one digest to each Telegram owner, and one to the configured operator
         route for everything else. The day is the idempotency key, so a
         restart or a second pass sends nothing new. Returns digests recorded.
@@ -1385,9 +1385,8 @@ class StateDatabase:
                 continue
             text = ("Still open after a day or more. Nothing re-queues these; "
                     "each needs an answer, a retry or a cancel.\n\n" + "\n\n".join(entries))[:10_000]
-            # A prepared reply: delivery sends it as is and assesses nothing.
             self.save_result_receipt({"owner": owner, "task_id": None, "source_key": key,
-                                      "result_text": text, "reply": text})
+                                      "result_text": text})
             recorded += 1
         return recorded
 
@@ -1409,14 +1408,25 @@ class StateDatabase:
         ]
         return sorted(
             (receipt for receipt in receipts if not receipt.get("done")),
-            key=lambda receipt: (receipt.get("target", ""), receipt.get("task_id") or "",
-                                 receipt.get("sequence", 0), receipt["source_key"]),
+            # Drain frozen legacy reports before newer notifications; notify
+            # calls retain acceptance time, so their hashes cannot reorder chat.
+            key=lambda receipt: (bool(receipt.get("recorded_at")),
+                                 receipt.get("target", ""), receipt.get("task_id") or "",
+                                 receipt.get("sequence", 0), receipt.get("recorded_at", 0),
+                                 receipt["source_key"]),
         )
 
     def pending_result_assessments(self) -> list[dict]:
-        return [receipt for path in self.result_receipt_path("").parent.glob("*.json")
-                if (receipt := json.loads(path.read_text())).get("done")
-                and receipt.get("assess") and not receipt.get("assessment_done")]
+        receipts = [json.loads(path.read_text())
+                    for path in self.result_receipt_path("").parent.glob("*.json")]
+        receipts.sort(key=lambda r: (r.get("target", ""), r.get("task_id") or "",
+                                     r.get("sequence", 0), r["source_key"]))
+        return [r for r in receipts if r.get("owner") and not r.get("assessment_error") and (
+                    (not r.get("done") and "reply" not in r) or
+                    (r.get("done") and r.get("assess") and not r.get("assessment_done"))
+                )] + [dict(owner=task.owner, task_id=str(task.task_id), source_key=key,
+                           result_text=self._task_result_text(task))
+                       for task, key in self._undelivered_task_results()]
 
     def pending_task_result_for(self, conversation_id):
         for receipt in self.pending_result_receipts():

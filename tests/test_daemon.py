@@ -455,7 +455,17 @@ def _cancel_conversation_task(
     return task_id
 
 
-def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monkeypatch) -> None:
+def _notify_cancelled_result(request):
+    import os
+    from test_task_calls import call
+    request.on_process_started(os.getpid(), None)
+    receipt = call(request.task_call_socket, operation="notify", key="cancelled",
+                   text="The requested work was cancelled.")
+    assert receipt["accepted"]
+    return "Cancellation assessed."
+
+
+def test_daemon_delivers_owner_judgment_to_the_desk_that_admitted_it(tmp_path, monkeypatch) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
     events = tmp_path / "desk" / "events.jsonl"
@@ -474,7 +484,7 @@ def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monke
             },
         }
     )
-    reviewer = ReadingAdapter("review-session", lambda request: "")
+    reviewer = ReadingAdapter("review-session", _notify_cancelled_result)
     daemon = StewardDaemon(
         config, tmp_path / "steward.yaml", adapters={"codex": reviewer}
     )
@@ -494,12 +504,11 @@ def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monke
     with running(daemon) as errors:
         assert sent.wait(5), errors
 
-    # Delivery can precede the next pass that schedules optional assessment.
-    assert len(reviewer.requests) <= 1
-    if reviewer.requests:
-        assert "Harness task result" in reviewer.requests[0].prompt
-    assert str(task_id) in events.read_text()
-    assert "Task cancelled" in events.read_text()
+    assert len(reviewer.requests) == 1
+    assert "Harness task result" in reviewer.requests[0].prompt
+    assert str(task_id) in reviewer.requests[0].prompt
+    assert "The requested work was cancelled." in events.read_text()
+    assert "Task cancelled:" not in events.read_text()
 
 
 @pytest.mark.parametrize("busy_error", [Busy, ConversationBusy, WorldUpdatePending, WorldContentConflict,
@@ -570,7 +579,7 @@ def test_a_provider_refusing_a_desk_turn_fails_the_message_not_the_controller(tm
 # results were owed to.
 @pytest.mark.parametrize("topic_id", [42, 582, 4568, 0])
 @pytest.mark.parametrize("restart_after_failure", [False, True])
-def test_daemon_delivers_task_truth_to_the_telegram_topic_that_admitted_it(
+def test_daemon_delivers_owner_judgment_to_the_telegram_topic_that_admitted_it(
     tmp_path, monkeypatch, topic_id, restart_after_failure
 ) -> None:
     sent: list[tuple[int, int, str]] = []
@@ -625,7 +634,7 @@ def test_daemon_delivers_task_truth_to_the_telegram_topic_that_admitted_it(
             },
         }
     )
-    reviewer = ReadingAdapter("review-session", lambda request: "SILENT")
+    reviewer = ReadingAdapter("review-session", _notify_cancelled_result)
     def make_daemon():
         daemon = StewardDaemon(
             config, tmp_path / "steward.yaml", adapters={"codex": reviewer}
@@ -649,13 +658,12 @@ def test_daemon_delivers_task_truth_to_the_telegram_topic_that_admitted_it(
     with running(daemon) as errors:
         assert delivered.wait(5), errors
 
-    # Delivery can precede the next pass that schedules optional assessment.
-    assert len(reviewer.requests) <= 1
-    if reviewer.requests:
-        assert "Harness task result" in reviewer.requests[0].prompt
+    assert len(reviewer.requests) == 1
+    assert "Harness task result" in reviewer.requests[0].prompt
+    assert str(task_id) in reviewer.requests[0].prompt
     assert len(sent) == 1
     assert sent[0][:2] == (99, topic_id)
-    assert str(task_id) in sent[0][2]
+    assert sent[0][2] == "The requested work was cancelled."
     assert not state.pending_result_receipts()
 
 

@@ -168,16 +168,6 @@ class Targets:
                 [name, task_id, previous.get("source_key"), identity], sort_keys=True,
             ).encode()).hexdigest()
             at = datetime.now(timezone.utc).isoformat()
-            short = (revision or "an unresolved revision")[:12]
-            # Satisfied is whatever the driver says it is; its own words say
-            # what that meant this time, so "reached" never claims more.
-            details = f"\n{observed.details[:1000]}" if observed and observed.details else ""
-            if outcome == "failed":
-                reply = f"{name} is not reaching {short}.\n{message}"
-            elif (was_revision, was) == (revision, "failed"):
-                reply = f"{name} recovered and reached {short}.{details}"
-            else:
-                reply = f"{name} reached {short}.{details}"
             receipt = {
                 "owner": owner, "task_id": task_id, "source_key": source,
                 "target": name, "sequence": sequence, "observation": identity,
@@ -185,10 +175,6 @@ class Targets:
                                f"Desired revision: {revision}\n{message}\n"
                                + (f"Observed: {observed.model_dump_json()}" if observed else "No driver observation available."),
             }
-            # Live is fully stated by the observation, so an owner's model could
-            # only restate it. A failure is owed the owner's assessment.
-            if task_id is None or outcome == "satisfied":
-                receipt["reply"] = reply
             self.state.save_result_receipt(receipt)
 
     def _satisfied_age(self, name, revision):

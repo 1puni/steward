@@ -24,7 +24,7 @@ rhythm → procedure → accepted Git task                   │          │
                                                          ▼          │
                               collapsed outcome → integrate → gates/reviews → push
                                                          │          │
-                                      owned result → delivery + assessment ────┘
+                                      owned result → assessment → notify ────┘
                                       observed refs → named target drivers
 ```
 
@@ -274,15 +274,16 @@ Telegram results return to the admitted owner's topic in the configured chat,
 including topics absent from `telegram.topics`. That mapping names configured
 destinations; it is not an allow-list for ordinary conversations or their results.
 
-Delivery and assessment have separate decisions and completion receipts. Delivery
-freezes the selected outcome and existing owner/source in the private result receipt,
-sends it, then marks it delivered. A busy or cleared owning conversation cannot
-block that send. A receipt already selected for transport remains owed even if the
-task advances; it describes the retained outcome. Before later assessment the
-controller rechecks current task outcome and owner, skipping obsolete task questions
-or reassigned work. Assessment uses the ordinary world-turn path and current
+The controller retains the selected outcome and existing owner/source before
+assessment. Ordinary task outcomes, deployment outcomes and daily open-work
+observations enter the owning conversation as evidence; they are not themselves
+chat messages. Assessment uses the ordinary world-turn path and current
 authority. The [live task tool](git-native-tasks.md#live-conversation-task-calls)
 can answer, retry, note or cancel authorized work; prose cannot resume it.
+Only an accepted assessment settles the observation. Input offered to an ongoing
+execution remains pending until that execution is accepted. A busy conversation
+therefore delays judgment, without losing the observation. Reassigned task outcomes
+are not assessed under their old owner's authority.
 
 Automatic runs remain quiet unless they explicitly request notification; null owners
 retain evidence only. A requested message is delivered as retained. Assessment cannot
@@ -291,7 +292,7 @@ New operator-facing judgment requires a separate explicit notification decision
 through the same result receipt transport. Full evidence remains in Git and the receipt.
 
 **Latency expectation:** with a running controller, healthy local storage and an
-available route, a newly reportable outcome is queued on the next controller pass
+available route, an explicitly queued notification is eligible on the next controller pass
 (default 5 seconds). One dedicated transport worker drains these jobs independently
 of all cognition slots and conversation execution. With no transport backlog the
 send starts within that polling interval plus discovery overhead. With a backlog,
@@ -306,9 +307,14 @@ require deployed measurement.
 
 Transport retries replay saved replies, including historical silence, without
 repeating cognition. Existing accepted assessment alone is not proof of delivery.
-Optional assessment follows delivery through the shared worker budget. Its accepted
-world receipt survives restart; provider failure is recorded as an assessment error
-and cannot retract the delivered evidence. Checkpoints have no separate broadcast
+Assessment uses the shared worker budget; its accepted world receipt survives
+restart. Provider failure keeps the observation pending with a diagnostic and queues
+one compact recovery notice through the independent transport lane. It never falls
+back to broadcasting the evidence. Interrupted native work is not automatically
+replayed: an operator must inspect its retained evidence and request continuation
+in a new conversation turn. The interrupted receipt remains inspectable; there is
+no automatic recovery or public receipt-reset command. Other observations and
+queued notifications can progress. Checkpoints have no separate broadcast
 channel. Telegram reuses per-piece receipts across retry and restart. Preserve both
 adjacent receipt directories during upgrades. A crash between remote acceptance and
 the local receipt write can duplicate that piece: delivery is at-least-once,
@@ -564,7 +570,7 @@ isolated probe cannot establish the health of a deployed steward.
 ### Telegram cosmetics and delivery
 
 Every run has one voice to its owner. An operator conversation's final reply is
-delivered, and an ordinary task's result is its report, so neither is offered
+delivered, and an ordinary task's result is evidence for its owner, so neither is offered
 `notify`. Automatic result assessment, world rhythms and rhythm tasks record their
 finals instead, and speak only through explicit notifications.
 
