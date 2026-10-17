@@ -218,6 +218,29 @@ def test_plain_fast_forward_when_main_unmoved(repo: dict, tmp_path: Path) -> Non
     assert _origin_main_tree(repo, "work.txt") == "plain ff"
 
 
+def test_published_work_carries_no_session_record(repo: dict, tmp_path: Path) -> None:
+    # Main already has an older transcript; the run rewrote it and added one.
+    old = repo["clone"] / "artefacts" / "glm" / "projects" / "old.jsonl"
+    old.parent.mkdir(parents=True)
+    old.write_text("kept\n")
+    _commit_all(repo["clone"], "older transcript")
+    _push_main(repo)
+    _branch(repo, "tasks/task-1")
+    (repo["clone"] / "work.txt").write_text("real change\n")
+    old.write_text("rewritten by the run\n")
+    transcript = repo["clone"] / "artefacts" / "glm" / "projects" / "run.jsonl"
+    transcript.write_text('{"role": "user"}\n')
+    _commit_all(repo["clone"], "work with its session")
+    engine = _engine(repo, tmp_path)
+    engine.session_state = ("artefacts/glm/",)
+    assert _land(engine, repo, "tasks/task-1") is None
+    assert _origin_main_tree(repo, "work.txt") == "real change"
+    assert _origin_main_tree(repo, "artefacts/glm/projects/old.jsonl") == "kept"
+    assert "run.jsonl" not in _origin_git(repo, "ls-tree", "-r", "--name-only", "main")
+    # The task ref keeps the session record it was resumed and reviewed from.
+    assert _git("show", "tasks/task-1:artefacts/glm/projects/run.jsonl", cwd=repo["clone"])
+
+
 def test_landing_does_not_run_repository_hooks(repo: dict, tmp_path: Path) -> None:
     _branch(repo, "steward/work")
     (repo["clone"] / "work.txt").write_text("hook-safe\n")

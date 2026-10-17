@@ -823,7 +823,7 @@ def test_a_writing_run_whose_only_change_is_its_session_record_lands_nothing(tmp
     assert state.tasks.git("show", f"{finished.work_sha}:artefacts/claude/projects/run.jsonl")
 
 
-def test_a_writing_run_that_changed_a_file_publishes_its_session_record_too(tmp_path):
+def test_a_writing_run_publishes_its_change_and_keeps_its_session_record(tmp_path):
     clone, _, state, runner, procedures, _ = writing_org_rhythm(
         tmp_path, edit="Launch moved.\n", findings="", session=True)
     procedures.advance_rhythms(now=100)
@@ -833,4 +833,6 @@ def test_a_writing_run_that_changed_a_file_publishes_its_session_record_too(tmp_
     assert publish_task(runner) == task
     _git("fetch", "-q", "origin", cwd=clone)
     assert _git("show", "origin/main:launch.md", cwd=clone) == "Launch moved."
-    assert _git("show", "origin/main:artefacts/claude/projects/run.jsonl", cwd=clone)
+    assert "artefacts" not in _git("ls-tree", "--name-only", "origin/main", cwd=clone)
+    work = state.tasks.get(task).work_sha
+    assert state.tasks.git("show", f"{work}:artefacts/claude/projects/run.jsonl")
