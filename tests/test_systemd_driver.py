@@ -396,3 +396,28 @@ def test_release_bootstrap_worker_pins_core_and_vendor_after_pointer_moves(tmp_p
     assert report["dependency"] == "release-a"
     assert report["argv"] == worker[3:]
     assert not list(entries[0].parents[1].rglob("*.pyc"))
+
+
+def test_the_pinned_driver_reads_only_the_sections_it_uses(tmp_path):
+    # A newer schema's rhythm option stopped nsnodes' self-deploy on 10-17.
+    import pytest
+    import yaml
+    from steward_harness.deploy.cli import driver_config
+    data = {
+        "identity": {"name": "t", "slug": "t"},
+        "provider": {"state_db": str(tmp_path / "state.db"), "workdir": str(tmp_path / "work")},
+        "repositories": {"app": {"path": str(tmp_path / "app"), "remote_url": str(tmp_path / "app.git")}},
+        "targets": {"app": {"ref": "repositories/app/main", "driver": "/usr/local/libexec/app"}},
+        "rhythms": {"light": {"schedule": 300, "procedure": "review", "input": "world",
+                              "owner": "telegram:3", "option_from_a_newer_release": True}},
+        "telegram": {"field_from_a_newer_release": 1},
+    }
+    path = tmp_path / "steward.yaml"
+    path.write_text(yaml.safe_dump(data))
+    config = driver_config(path)
+    assert set(config.targets) == {"app"} and config.requires_execution_boundary
+    # What it uses is still validated.
+    data["targets"]["app"]["ref"] = "repositories/missing/main"
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError):
+        driver_config(path)
