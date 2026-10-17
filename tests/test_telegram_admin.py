@@ -24,6 +24,9 @@ class API:
     def send_document(self, chat, path, topic_id=None):
         self.calls.append(('sendDocument', chat, str(path), topic_id))
         return 502
+    def send_video(self, chat, path, topic_id=None):
+        self.calls.append(('sendVideo', chat, str(path), topic_id))
+        return 503
     def pin_chat_message(self, chat, message_id):
         self.calls.append(('pinChatMessage', chat, message_id))
     def _request(self, method, endpoint, **kwargs):
@@ -112,6 +115,16 @@ def test_conversation_sends_a_file_to_its_own_topic_once(tmp_path):
     assert api.calls == [('sendPhoto', -123, str(photo), 7)]
     with pytest.raises(ValueError, match='different content'):
         admin('telegram:7', request('send_document', str(photo), key='chart'))
+
+
+def test_a_video_is_sent_to_play_in_the_chat_not_to_download(tmp_path):
+    admin, api, root = setup(tmp_path, ())
+    video = root / 'trailer.mp4'
+    video.write_bytes(b'mp4')
+    assert 'send_video' in admin.info()['enabled_actions']
+    result = admin('telegram:914', request('send_video', str(video), key='trailer'))
+    assert result['message_id'] == 503
+    assert api.calls == [('sendVideo', -123, str(video), 914)]
 
 
 def test_send_refuses_what_it_cannot_deliver_before_reaching_telegram(tmp_path):

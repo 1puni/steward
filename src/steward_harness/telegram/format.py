@@ -346,6 +346,7 @@ def format_markdown_chunks(
 
 class ArtifactKind(StrEnum):
     IMAGE = "image"
+    VIDEO = "video"
     DOCUMENT = "document"
 
 

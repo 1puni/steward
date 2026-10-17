@@ -63,7 +63,7 @@ def resolve_delivery_file(raw_path, roots, max_bytes):
 
 
 #: Sent to the calling conversation's own topic, at once, before its reply.
-_CONVERSATION_ACTIONS = {'send_image', 'send_document', 'pin_message'}
+_CONVERSATION_ACTIONS = {'send_image', 'send_video', 'send_document', 'pin_message'}
 
 
 class ChatAdministration:
@@ -81,7 +81,7 @@ class ChatAdministration:
                     enabled_actions=sorted(self._enabled()))
 
     def _enabled(self):
-        sends = {'send_image', 'send_document'} if self.config.delivery_roots else set()
+        sends = {'send_image', 'send_video', 'send_document'} if self.config.delivery_roots else set()
         return sends | (set(self.config.agent_actions) & {'set_photo', 'set_description', 'pin_message'})
 
     def __call__(self, scope, request):
@@ -173,6 +173,8 @@ class ChatAdministration:
                     message_id = int(text)
                 elif action == 'send_image':
                     message_id = self.api.send_photo(chat, path, topic_id=thread)
+                elif action == 'send_video':
+                    message_id = self.api.send_video(chat, path, topic_id=thread)
                 else:
                     message_id = self.api.send_document(chat, path, topic_id=thread)
             except Exception as error:

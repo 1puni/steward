@@ -852,6 +852,10 @@ class TelegramService:
                     send = lambda p=path: self.api.send_photo(
                         chat_id, p, topic_id=topic_id
                     )
+                elif artifact.kind is ArtifactKind.VIDEO:
+                    send = lambda p=path: self.api.send_video(
+                        chat_id, p, topic_id=topic_id
+                    )
                 else:
                     send = lambda p=path: self.api.send_document(
                         chat_id, p, topic_id=topic_id
@@ -894,7 +898,7 @@ class TelegramService:
     def _drain_delivery_outbox(self) -> None:
         """Deliver fixed-destination jobs from the configured product spool.
 
-        Jobs contain exactly one of ``text``, ``photo``, or ``document`` plus
+        Jobs contain exactly one of ``text``, ``photo``, ``video``, or ``document`` plus
         optional ``caption`` and ``thread_id``. The destination chat always
         comes from configuration, topics must be declared, and file paths must
         resolve beneath a configured delivery root.
@@ -926,15 +930,15 @@ class TelegramService:
                 if topic_id not in allowed_topics:
                     raise ValueError(f"topic {topic_id} is not declared")
                 caption = str(raw.get("caption") or "").strip() or None
-                payloads = [name for name in ("text", "photo", "document") if raw.get(name)]
+                payloads = [name for name in ("text", "photo", "video", "document") if raw.get(name)]
                 if len(payloads) != 1:
-                    raise ValueError("job must contain exactly one of text, photo, or document")
+                    raise ValueError("job must contain exactly one of text, photo, video, or document")
 
                 kind = payloads[0]
                 value, artifacts = str(raw[kind]), ()
                 if kind != "text":
                     artifacts = (OutboundArtifact(
-                        ArtifactKind.IMAGE if kind == "photo" else ArtifactKind.DOCUMENT, value),)
+                        ArtifactKind.IMAGE if kind == "photo" else ArtifactKind(kind), value),)
                     value = caption or ""
             except (OSError, ValueError) as exc:
                 log.error("Telegram delivery job %s is invalid: %s", job_path.name, exc)

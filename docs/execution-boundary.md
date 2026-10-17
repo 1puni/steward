@@ -195,7 +195,7 @@ be able to write this spool.
 Controller-only does not mean operationally unavailable. Narrow operations should cross
 a typed harness boundary. Telegram sends and pins are the example: during its turn a
 conversation calls its native task tool (`operation="telegram"`, `send_image`,
-`send_document`, or opted-in `pin_message`), and the controller resolves the file beneath
+`send_video`, `send_document`, or opted-in `pin_message`), and the controller resolves the file beneath
 `delivery_roots`, fixes the destination to configured `chat_id` and the conversation's
 own topic, and uses the token itself. A refusal returns to the model in the same call;
 reply text is never parsed for files or actions. Extend this pattern instead of making

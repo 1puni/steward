@@ -294,6 +294,28 @@ class TelegramAPI:
             timeout=600.0,
         )
 
+    def send_video(
+        self,
+        chat_id: int,
+        video_path: str | Path,
+        caption: str | None = None,
+        topic_id: int | None = None,
+    ) -> int:
+        """Upload a video that plays in the chat; a document must be downloaded first."""
+        path = Path(video_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Video file not found: {path}")
+
+        data: dict[str, Any] = {"chat_id": str(chat_id), "supports_streaming": "true"}
+        if topic_id and topic_id > 1:
+            data["message_thread_id"] = str(topic_id)
+        if caption:
+            data["caption"] = caption
+        media_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+        return self._send_file(
+            "sendVideo", "video", path, data, media_type=media_type, timeout=600.0
+        )
+
     def _send_file(
         self,
         endpoint: str,
