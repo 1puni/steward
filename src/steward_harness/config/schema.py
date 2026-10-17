@@ -637,8 +637,8 @@ class ProcedureRhythmConfig(BaseModel):
         if any(not source.strip() or source != source.strip()
                or any(char.isspace() for char in source) for source in self.sources):
             raise ValueError("rhythm source prefixes must be nonempty and contain no whitespace")
-        if self.drive_tasks and (self.input != "world" or self.workdir is not None or not self.owner):
-            raise ValueError("drive_tasks requires a world rhythm with a result owner")
+        if self.drive_tasks and not self.owner:
+            raise ValueError("drive_tasks requires a result owner")
         if self.workdir is not None:
             _require_bounded_absolute("rhythm workdir", self.workdir)
         if (self.schedule is None) == (self.after is None):

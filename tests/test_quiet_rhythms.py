@@ -685,6 +685,79 @@ def test_writing_org_rhythm_notifies_through_a_call(tmp_path):
     assert tuple(map(str, state.pending_task_result_conversations())) == ("desk:steward",)
 
 
+def test_driving_org_rhythm_admits_one_repair_per_key_for_its_owner(tmp_path):
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    peer_clone = peer(tmp_path, state, runner)
+    config.rhythms = {"org": ProcedureRhythmConfig(owner="desk:steward", schedule=100, workdir=str(tmp_path),
+        procedure="security-one", input="repositories/app/main", paths=("repositories/peer/main",),
+        drive_tasks=True)}
+    runner.driving_rhythms = frozenset({"org"})
+    outputs = []
+
+    def found_defect(request):
+        # Each run words the same defect differently; the key is what repeats.
+        brief = f"Task calls fail from executions (run {len(outputs) + 1})."
+        output = TaskOutput("The task channel fails.", subject="reviewed", disposition="idle",
+                            submit=dict(key="task-channel", repository="app", title="Repair the task channel",
+                                        brief=brief))
+        outputs.append(output)
+        return replace(execute(request), output=output)
+
+    execute, adapter.execute = adapter.execute, found_defect
+    procedures.advance_rhythms(now=100)
+    first = state.tasks.queued()[0]
+    runner.prepare(first)
+    assert 'operation="submit"' in adapter.requests[-1].prompt
+    receipt = outputs[-1].receipts[0]
+    assert receipt.get("accepted") and not receipt["replayed"], receipt
+    repair = state.tasks.get(receipt["task_id"])
+    assert (repair.owner, repair.repository, repair.title) == ("desk:steward", "app", "Repair the task channel")
+    assert repair.status.value == "queued" and not repair.procedure
+    # The next run on new input names the same defect: no second repair.
+    commit(peer_clone, "release.txt")
+    procedures.advance_rhythms(now=200)
+    second = next(task for task in state.tasks.queued() if task not in {first, repair.task_id})
+    runner.prepare(second)
+    assert outputs[-1].receipts[0] == receipt | {"replayed": True, "revision": outputs[-1].receipts[0]["revision"]}
+    assert len([task for task in state.tasks.all() if not task.procedure]) == 1
+
+
+def test_only_a_driving_rhythm_run_may_submit(tmp_path):
+    from steward_harness.state import ConversationId, TaskId
+    from steward_harness.task_calls import TaskExecutionCalls
+    from steward_harness.task_store import ProcedureRun
+    state = StateDatabase(tmp_path / "state.db")
+    state.tasks.repositories = {"app"}
+
+    def run(task_id, event, owner="telegram:3"):
+        task_id = TaskId(task_id)
+        state.tasks.create(TaskSpec("app", "Review", "Review."), task_id=task_id, owner=owner)
+        state.open_conversation(ConversationId.for_task(task_id), provider="codex", profile="balanced")
+        if event:
+            revision = state.tasks.read(task_id)[0]
+            procedure = ProcedureRun(name="review", event=event, instructions="Review.", provider="codex",
+                                     model={"model": "gpt"}, access="read-only", identity="a" * 64,
+                                     candidate=revision, base=revision)
+            state.tasks.change(task_id, lambda d: d.model_copy(update={"procedure": procedure}), message="review")
+        return task_id
+
+    repair = dict(operation="submit", key="defect", repository="app", title="Repair", brief="Fix it.")
+    light = TaskExecutionCalls(state, run("task-light", "rhythm:light:quiet:1"), {"app"}, drive_tasks=True)
+    admitted = light(repair)
+    assert admitted["accepted"] and state.tasks.get(admitted["task_id"]).owner == "telegram:3"
+    # Another rhythm's identical key is a different intent.
+    other = TaskExecutionCalls(state, run("task-other", "rhythm:other:quiet:1"), {"app"}, drive_tasks=True)
+    assert other(repair)["task_id"] != admitted["task_id"]
+    with pytest.raises(ValueError, match="not authorized"):
+        light(repair | {"key": "private", "repository": "private"})
+    for calls in (TaskExecutionCalls(state, run("task-quiet", "rhythm:light:quiet:2"), {"app"}),
+                  TaskExecutionCalls(state, run("task-plain", None), {"app"}, drive_tasks=True),
+                  TaskExecutionCalls(state, run("task-unowned", "rhythm:light:quiet:3", owner=None), {"app"},
+                                     drive_tasks=True)):
+        with pytest.raises(ValueError, match="drives tasks"):
+            calls(repair)
+
+
 def test_writing_org_rhythm_that_changed_and_found_nothing_lands_nothing(tmp_path):
     clone, _, state, runner, procedures, _ = writing_org_rhythm(tmp_path, edit="", findings="")
     before = remote_main(clone)

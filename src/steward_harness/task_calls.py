@@ -374,7 +374,7 @@ Final TASK_PROPOSAL/TASK_ACTION lines do not execute operations.\n'''
 class TaskExecutionCalls:
     """Task-scoped calls; the native invocation supplies no owner or authority."""
 
-    def __init__(self, state, task_id, repositories, *, telegram_admin=None):
+    def __init__(self, state, task_id, repositories, *, telegram_admin=None, drive_tasks=False):
         from steward_harness.task_query import OwnershipCalls
         self.state = state
         self.task_id = task_id
@@ -384,6 +384,10 @@ class TaskExecutionCalls:
         # A task's result is its report. Only a rhythm's task, whose finished
         # result is recorded rather than sent, speaks to its owner by notify.
         self.notifies = bool(task.procedure and task.procedure.event.startswith("rhythm:"))
+        # The controller's config decides; the rhythm, not this run, owns the keys.
+        self.rhythm = task.procedure.event.split(":")[1] if self.notifies else None
+        self.drive_tasks = bool(drive_tasks and self.rhythm and self.owner)
+        self.repositories = set(repositories)
         self.query = OwnershipCalls(state.tasks, task_id, repositories)
         self.start_writer()
 
@@ -437,7 +441,38 @@ class TaskExecutionCalls:
                 "task_revision": self.revision, "key": request["key"], "replayed": replayed,
                 "message": "Intent recorded for this execution only. Acceptance requires writer teardown and a settled checkpoint."}
 
+    def _submit(self, request):
+        """A driving rhythm's run admits work for its owner, once per key per rhythm.
+
+        A later run naming the same key gets the admitted task back, whatever its
+        wording: the key names the defect, and runs of one rhythm repeat themselves.
+        """
+        if not self.drive_tasks:
+            raise ValueError("this run may submit only when its rhythm drives tasks")
+        if (set(request) != {"operation", "key", "repository", "title", "brief"}
+                or not all(isinstance(value, str) for value in request.values())):
+            raise ValueError("submit requires operation, key, repository, title, brief")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request["key"]):
+            raise ValueError("key must be 1-128 ASCII letters, digits, or _ . : -")
+        tasks = self.state.tasks
+        if request["repository"] not in self.repositories:
+            raise ValueError("repository work is not authorized")
+        source = "controller:task-call:" + _digest(f"rhythm:{self.rhythm}:submit") + ":" + _digest(request["key"])
+        task_id = TaskId("task-" + uuid.uuid5(uuid.NAMESPACE_URL, source).hex)
+        with self.state.connect(write=True) as connection, tasks.lease:
+            if tasks.cancelled(self.task_id):
+                raise ValueError("task was cancelled")
+            lineage = self.state._lineage_in(connection, str(ConversationId.for_task(self.task_id)))
+            admission = self.state._insert_task(connection, TaskSpec(repository=request["repository"],
+                title=request["title"], brief=request["brief"]), task_id=task_id,
+                source=source, kind=TaskOriginKind.CONVERSATION, origin_ref=None,
+                conversation_id=ConversationId(self.owner), provider=lineage.provider, profile=lineage.profile)
+        return dict(operation="submit", key=request["key"], task_id=str(task_id),
+                    revision=tasks.read(task_id)[0], accepted=True, replayed=not admission.created)
+
     def __call__(self, request):
+        if isinstance(request, dict) and request.get("operation") == "submit":
+            return self._submit(request)
         if isinstance(request, dict) and request.get("operation") == "telegram":
             if (set(request) != {"operation", "action", "key", "text"}
                     or not all(isinstance(value, str) for value in request.values())):

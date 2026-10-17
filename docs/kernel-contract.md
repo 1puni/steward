@@ -201,7 +201,9 @@ protocol evidence.
 Only the owning conversation, a rhythm or incident policy admits harness tasks.
 An opted-in world rhythm (`drive_tasks: true`) admits tasks to its configured
 result owner and may answer, retry or note that owner's existing work. It cannot
-steer unowned/other-owner work, cancel tasks, or resume cancelled work. Admission
+steer unowned/other-owner work, cancel tasks, or resume cancelled work. An
+opted-in organisation rhythm's procedure run may submit, once per key per rhythm,
+to the same owner; it cannot steer. Admission
 retains the rhythm source and idempotency key; results return to the owner's normal
 transport and assessment loop. Default rhythms remain observational. A task
 session may use its provider's native subagents freely, but it cannot admit further
