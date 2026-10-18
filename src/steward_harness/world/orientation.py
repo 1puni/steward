@@ -33,6 +33,12 @@ def repository_orientation(now: datetime | None = None) -> str:
     return (
         _workspace_header(now)
         + "Read project knowledge from its owning files. "
-        "Use git log and git show for history. This workspace is read-only; "
+        "The checkout's HEAD may lag published work. Before reporting current "
+        "status or choosing work, compare HEAD with the configured repository's "
+        "observed remote branch and read the published charter and owner documents "
+        "with git show when they differ. A local branch or tracking ref alone "
+        "does not prove current deployment; use controller task/target evidence "
+        "and the actual served behavior. Use git log and git show for history. "
+        "This workspace is read-only; "
         "changes reach the repository through gated tasks."
     )
