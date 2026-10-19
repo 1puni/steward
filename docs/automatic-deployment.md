@@ -303,14 +303,18 @@ Failure markers have no age or count limit tied to artifact retention.
 
 Four things read the controller configuration, and a deploy advances only one of
 them. The service runs the new release. The driver's environment is pinned to the
-harness it was built from and rejects unknown keys like any other loader. The
-configuration file and the schema-epoch check live outside the release entirely. So a
-new configuration field deploys cleanly to the service and then fails every
-`observe`: self-deploy stops while health stays green. The order that works is push,
-install the configuration, restart, rebuild the driver environment at the new release,
-then verify with `observe`. Where a source constant would do, prefer it to a new key.
-Once accepted records carry a new field, an older strict reader cannot read them, so
-upgrade the driver before you introduce one.
+harness it was built from, so it is older than the configuration every time an
+instance adopts a new field. It therefore drops fields its code does not know,
+naming them in a warning, and still refuses every other invalid value. Ignoring them
+loses nothing: the driver can enforce only the boundary it knows, and the controller
+re-proves its complete boundary under its own schema on every start. A new field
+deploys like any other change. A gate that proves the pinned driver can read a
+candidate should call `load_known_config`, as the driver does. A renamed or removed
+field the driver still requires, a new field inside a union, or a change to the
+driver's own behaviour still needs the driver environment rebuilt at the new release
+first; verify with `observe`. Once accepted records carry a new field, an older
+strict reader cannot read them, so upgrade the driver before you introduce one. The
+configuration file and the schema-epoch check live outside the release entirely.
 
 A schema-epoch change cannot self-deploy. The new release refuses the old database,
 health fails, and the driver rolls back. Convert the database deliberately; see

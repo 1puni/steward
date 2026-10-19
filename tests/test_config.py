@@ -704,3 +704,40 @@ def test_a_models_list_validates_at_load():
     with pytest.raises(ValidationError, match="provider and model, or a models list"):
         StewardConfig.model_validate(dict(identity=dict(name="t", slug="t"),
             procedures={"p": dict(instructions="/etc/p.md")}))
+
+
+def _newer_config(repo_root: Path, tmp_path: Path, change) -> Path:
+    import yaml
+    document = yaml.safe_load((repo_root / "config" / "steward.example.yaml").read_text())
+    change(document)
+    path = tmp_path / "steward.yaml"
+    path.write_text(yaml.safe_dump(document))
+    return path
+
+
+def test_a_pinned_driver_ignores_only_fields_newer_than_its_code(repo_root: Path, tmp_path: Path) -> None:
+    from steward_harness.config.loader import load_known_config
+
+    def adopt_new_fields(document):
+        document["rhythms"]["weekly-security"]["wake_on_moon"] = True
+        document["future_section"] = {"anything": 1}
+
+    path = _newer_config(repo_root, tmp_path, adopt_new_fields)
+    # The controller still refuses what it does not know: a typo is not a feature.
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        load_config(path)
+    config, ignored = load_known_config(path)
+    assert sorted(ignored) == ["future_section", "rhythms.weekly-security.wake_on_moon"]
+    assert config == load_config(repo_root / "config" / "steward.example.yaml")
+
+
+@pytest.mark.parametrize("change", [
+    # A known field with an invalid value is still refused, even beside a new one.
+    lambda d: d["rhythms"]["weekly-security"].update(schedule=-1, wake_on_moon=True),
+    # A new field inside a union names a branch, not a data path: refused.
+    lambda d: d["rhythms"]["weekly-security"].update(schedule={"quiet": 300, "jitter": 5}),
+])
+def test_a_pinned_driver_still_refuses_invalid_configuration(repo_root, tmp_path, change) -> None:
+    from steward_harness.config.loader import load_known_config
+    with pytest.raises(ValidationError):
+        load_known_config(_newer_config(repo_root, tmp_path, change))
