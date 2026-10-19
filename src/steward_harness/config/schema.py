@@ -645,11 +645,18 @@ class ProcedureRhythmConfig(BaseModel):
     # World turn source prefixes, matched against accepted Git trailers. OR
     # with paths: a conversation may change no file. This selects input only.
     sources: tuple[str, ...] = ()
+    # An executable the agent runs in the accepted world, once per interval
+    # the rhythm has not yet run: exit 0 is an event, 1 is none. Also OR.
+    watch: str | None = None
 
     @model_validator(mode="after")
     def validates_workdir(self):
         if self.sources and (self.input != "world" or self.workdir is not None):
             raise ValueError("rhythm sources apply only to world rhythms")
+        if self.watch is not None:
+            if self.input != "world" or self.workdir is not None:
+                raise ValueError("rhythm watch applies only to world rhythms")
+            _require_bounded_absolute("rhythm watch", self.watch)
         if any(not source.strip() or source != source.strip()
                or any(char.isspace() for char in source) for source in self.sources):
             raise ValueError("rhythm source prefixes must be nonempty and contain no whitespace")

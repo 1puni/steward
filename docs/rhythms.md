@@ -365,8 +365,12 @@ interval an hour later, so the same rhythm fires on the first poll after 01:00
 UTC. The offset must be shorter than the interval, and it works the same way
 for a procedure rhythm's interval.
 
-A world rhythm without `paths` or `sources` runs every interval. With either
-filter, a model call needs matching new input:
+A world rhythm without `paths`, `sources` or `watch` runs every interval. That
+is right only when a new interval is itself the input, as a nightly Sleep's is.
+Otherwise it is a model call that exists to decide nothing happened: an X
+procedure woken every 30 minutes skipped about 385 of 440 October runs at
+roughly 110k input tokens each. With any of the three, a model call needs an
+event:
 
 ```yaml
 rhythms:
@@ -404,6 +408,42 @@ work already performed by the conversation that received it.
 
 Older releases reject the new configuration field. Rollback must restore their
 matching configuration as well as code. No persisted task schema changes.
+
+`watch` is for events outside the world, and for times the rhythm chose itself:
+
+```yaml
+rhythms:
+  inbox:
+    schedule: 300
+    procedure: inbox
+    input: world
+    watch: /etc/steward/watch/inbox-new-mail
+    owner: telegram:5
+```
+
+The watch is an executable, run without a model as the untrusted agent in the
+accepted world, at most once per interval in which the rhythm has not yet run.
+Exit 0 is an event, and its output is appended to the turn's instructions as
+what woke it. Exit 1 is nothing to do. Anything else, including a timeout after
+30 seconds, means the watch is broken: the interval runs no model, `/rhythm
+list` shows `input_unobserved`, and the incidents topic is told, because a
+watch that fails quietly looks exactly like a quiet mailbox. The interval is the
+watch's period, so a 300-second schedule notices mail within five minutes.
+
+The cursor is world state the rhythm itself maintains, not harness state: the
+inbox procedure records the newest message it handled, and the watch reports
+mail newer than that. A rhythm that chooses its next opportunity writes the
+time into a world file, and its watch exits 0 once that time has passed. It
+moves the time on every run, or deletes the file to wait for something else.
+A run that does not advance its cursor wakes again next interval, so unhandled
+input is never lost and never silently skipped. Any accepted turn,
+including the operator's own conversation, can edit the cursor and so wake the
+rhythm early or put it to sleep.
+
+A watch reads; it must not write. It runs on the scheduler's observation pass,
+so it must answer in seconds. Read world files through `git show HEAD:<path>`
+rather than the working tree. `paths`, `sources` and `watch` are alternatives:
+a world change admits the pass without asking the watch.
 
 Only something new to read counts: a file added or modified under the paths.
 A deletion, a move out of the paths and a move within them are not input, so
@@ -558,8 +598,8 @@ A refused task operation in an automatic turn is retained and logged.
 There are no built-in light, sleep or REM rhythms and no seeded world files; the
 harness never invents a schedule for you. A world rhythm is configured like any
 other, and the instance supplies its procedure file. A chain is one predecessor
-per rhythm, not a graph: there are no calendars, fan-in, hooks or conditions
-beyond "the previous one was accepted".
+per rhythm, not a graph: there are no calendars, fan-in or hooks. A time
+belongs in the world, written by the rhythm that chose it and read by its watch.
 
 Publication requirements check the final integrated candidate before it can be
 pushed. Target requirements review the complete candidate tree before application
