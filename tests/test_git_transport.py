@@ -148,7 +148,99 @@ def test_remote_objects_cross_without_trusting_agent_origin(tmp_path: Path) -> N
     )
 
     assert observed == expected
-    assert _git("rev-parse", transport.remote_ref, cwd=agent) == expected
+    assert _git("rev-parse", "refs/remotes/origin/main", cwd=agent) == expected
+    assert _git("remote", "get-url", "origin", cwd=agent) == str(remote)
+
+
+def _commit(repository: Path, name: str) -> str:
+    (repository / name).write_text(f"{name}\n")
+    _git("add", name, cwd=repository)
+    _git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+         "commit", "-qm", name, cwd=repository)
+    return _git("rev-parse", "HEAD", cwd=repository)
+
+
+@pytest.mark.parametrize("merge_options", [None, "--squash"])
+def test_stale_clone_observes_current_main_through_its_own_git_names(tmp_path: Path, merge_options) -> None:
+    remote, source, base = _remote_repository(tmp_path)
+    agent = tmp_path / "agent"
+    _git("clone", "-q", str(remote), str(agent), cwd=tmp_path)
+    if merge_options:
+        _git("config", "branch.main.mergeOptions", merge_options, cwd=agent)
+    (agent / "scratch.txt").write_text("untracked work stays\n")
+    newer = _commit(source, "newer.txt")
+    _git("push", "-q", str(remote), "HEAD:refs/heads/main", cwd=source)
+    transport = ControllerGitTransport(
+        tmp_path / "state.db", "app", str(remote), "main", allow_local=True
+    )
+    broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
+    assert _git("rev-parse", "main", cwd=agent) == base
+
+    assert transport.sync_remote_to_agent(agent, broker) == newer
+
+    for name in ("main", "origin/main", "origin", "HEAD"):
+        assert _git("rev-parse", name, cwd=agent) == newer
+    assert (agent / "newer.txt").read_text() == "newer.txt\n"
+    assert (agent / "scratch.txt").read_text() == "untracked work stays\n"
+
+
+def test_diverged_clone_stays_put_and_reports_it(tmp_path: Path) -> None:
+    remote, source, _base = _remote_repository(tmp_path)
+    agent = tmp_path / "agent"
+    _git("clone", "-q", str(remote), str(agent), cwd=tmp_path)
+    local = _commit(agent, "local.txt")
+    newer = _commit(source, "newer.txt")
+    _git("push", "-q", str(remote), "HEAD:refs/heads/main", cwd=source)
+    transport = ControllerGitTransport(
+        tmp_path / "state.db", "app", str(remote), "main", allow_local=True
+    )
+
+    transport.sync_remote_to_agent(agent, UntrustedExecutionBroker(UntrustedExecutionConfig()))
+
+    assert _git("rev-parse", "HEAD", cwd=agent) == local
+    assert _git("rev-parse", "origin/main", cwd=agent) == newer
+    assert "diverged" in _git("status", cwd=agent)
+
+
+def test_refresh_does_not_autostash_overlapping_local_work(tmp_path: Path) -> None:
+    remote, source, base = _remote_repository(tmp_path)
+    agent = tmp_path / "agent"
+    _git("clone", "-q", str(remote), str(agent), cwd=tmp_path)
+    _git("config", "merge.autostash", "true", cwd=agent)
+    (agent / "file").write_text("unfinished local work\n")
+    (source / "file").write_text("published change\n")
+    _git("commit", "-am", "change existing file", cwd=source)
+    newer = _git("rev-parse", "HEAD", cwd=source)
+    _git("push", "-q", str(remote), "HEAD:main", cwd=source)
+    transport = ControllerGitTransport(
+        tmp_path / "state.db", "app", str(remote), "main", allow_local=True
+    )
+
+    transport.sync_remote_to_agent(agent, UntrustedExecutionBroker(UntrustedExecutionConfig()))
+
+    assert _git("rev-parse", "origin/main", cwd=agent) == newer
+    assert _git("rev-parse", "HEAD", cwd=agent) == base
+    assert (agent / "file").read_text() == "unfinished local work\n"
+    assert _git("ls-files", "--unmerged", cwd=agent) == ""
+    assert _git("stash", "list", cwd=agent) == ""
+
+
+def test_origin_configuration_failure_is_not_reported_as_a_successful_sync(tmp_path: Path) -> None:
+    remote, source, base = _remote_repository(tmp_path)
+    agent = tmp_path / "agent"
+    _git("clone", "-q", str(remote), str(agent), cwd=tmp_path)
+    newer = _commit(source, "newer.txt")
+    _git("push", "-q", str(remote), "HEAD:main", cwd=source)
+    (agent / ".git/config.lock").touch()
+    transport = ControllerGitTransport(
+        tmp_path / "state.db", "app", str(remote), "main", allow_local=True
+    )
+
+    with pytest.raises(GitTransportError, match="could not update agent remote.origin.url"):
+        transport.sync_remote_to_agent(agent, UntrustedExecutionBroker(UntrustedExecutionConfig()))
+
+    assert _git("rev-parse", "HEAD", cwd=agent) == base
+    assert _git("rev-parse", "origin/main", cwd=agent) == newer
 
 
 def test_deploy_resolution_accepts_only_exact_remote_history(tmp_path: Path) -> None:
@@ -456,7 +548,7 @@ def test_concurrent_remote_syncs_do_not_overwrite_a_newer_agent_observation(tmp_
     assert failures == []
     assert second_copy.is_set()
     assert copied == [base, peer]
-    assert _git("rev-parse", transport.remote_ref, cwd=agent) == peer
+    assert _git("rev-parse", "refs/remotes/origin/main", cwd=agent) == peer
 
 
 def test_rejected_candidate_leaves_no_ref(tmp_path: Path) -> None:
@@ -577,8 +669,8 @@ def test_sync_materializes_missing_branch_commit_without_authorizing_release(
     # Even when main has not moved, the observation poll delivers new source.
     assert transport.sync_remote_to_agent(agent, broker) == base
     assert _git("show", f"{requested}:social.md", cwd=agent).startswith("authorized source")
-    ref = f"refs/steward/remote/{branch}"
-    assert _git("rev-parse", ref, cwd=agent) == tip
+    ref, label = f"refs/steward/remote/{branch}", f"refs/remotes/origin/{branch}"
+    assert _git("rev-parse", label, cwd=agent) == tip
     assert _git("rev-parse", "HEAD", cwd=agent) == base
     assert _git("status", "--porcelain", cwd=agent) == ""
     with pytest.raises(GitTransportError, match="not contained"):
@@ -592,10 +684,10 @@ def test_sync_materializes_missing_branch_commit_without_authorizing_release(
     assert _git("for-each-ref", "--format=%(refname)", ref,
                 cwd=transport.git_dir) == ""
     assert _git("show", f"{requested}:social.md", cwd=agent).startswith("authorized source")
-    assert _git("for-each-ref", "--format=%(refname)", ref, cwd=agent) == ""
+    assert _git("for-each-ref", "--format=%(refname)", label, cwd=agent) == ""
     _git("push", "-q", str(remote), f"HEAD:refs/heads/{branch}/replacement", cwd=source)
     assert transport.sync_remote_to_agent(agent, broker) == base
-    assert _git("rev-parse", f"{ref}/replacement", cwd=agent) == tip
+    assert _git("rev-parse", f"{label}/replacement", cwd=agent) == tip
 
 
 def test_a_signalled_git_child_is_not_reported_as_a_repository_failure(

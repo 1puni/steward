@@ -347,8 +347,8 @@ def test_org_reflection_refreshes_sibling_refs_without_moving_local_work(tmp_pat
 
     def inspect(request):
         assert request.cwd == tmp_path
-        assert _git("rev-parse", "refs/steward/remote/main", cwd=sibling) == newer
-        assert _git("show", "refs/steward/remote/main:newer.txt", cwd=sibling) == "newer.txt"
+        assert _git("rev-parse", "refs/remotes/origin/main", cwd=sibling) == newer
+        assert _git("show", "refs/remotes/origin/main:newer.txt", cwd=sibling) == "newer.txt"
         assert _git("rev-parse", "HEAD", cwd=sibling) == local
         assert (sibling / "uncommitted.txt").read_text() == "preserve me"
         return execute(request)

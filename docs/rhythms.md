@@ -117,11 +117,10 @@ Provision that directory with the managed repositories as siblings and an entry
 README; existing checkouts can be linked into it. A reviewing rhythm's native
 cognition starts there, while its task account and checkpoint remain in a
 separate retained task worktree. The accepted run captures the directory so retries keep the same scope.
-Before cognition the existing credential-free Git transfer refreshes observed
-remote refs in the configured repositories, as `refs/steward/remote/<branch>`,
-without moving their HEADs, changing `origin/<branch>` or touching local changes.
-Those refs are observations, not new authority: read source at the configured
-default branch under that namespace. See
+Before cognition the existing credential-free Git transfer refreshes each
+configured repository's `origin` to the observed remote and fast-forwards a clean
+default-branch checkout, so ordinary Git reads current source. Those names are
+observations, not new authority. See
 [source and retained findings](provenance-discovery.md#observed-source-and-retained-findings).
 Manual `/rhythm run` uses the same working directory.
 
