@@ -207,6 +207,21 @@ class PipelineConfig(BaseModel):
     probe: ProbeSpec
 
 
+class UpstreamConfig(BaseModel):
+    """The accepted source branch a downstream repository can integrate."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    remote_url: str
+    branch: str = "main"
+
+    @model_validator(mode="after")
+    def validates_source(self) -> "UpstreamConfig":
+        validate_git_remote_url(self.remote_url, allow_local=True)
+        validate_git_branch(self.branch)
+        return self
+
+
 class RepositoryConfig(BaseModel):
     """Policy for one managed repository."""
 
@@ -215,6 +230,7 @@ class RepositoryConfig(BaseModel):
     path: str
     remote_url: str
     default_branch: str = "main"
+    upstream: UpstreamConfig | None = None
     gates: tuple[CommandSpec, ...] = ()
     requires: tuple[str, ...] = ()
 

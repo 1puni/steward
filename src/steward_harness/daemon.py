@@ -56,6 +56,7 @@ from steward_harness.telegram.service import (
 from steward_harness.telegram.tasks import app_link, task_card
 from steward_harness.web.health import HealthServer
 from steward_harness.web.tasks import TaskBoard, TaskWeb
+from steward_harness.world_events import ExchangeDue, Subscription, github_repository
 from steward_harness.world.git_world import GitWorld
 from steward_harness.lease import Busy, Lease
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldContentConflict, WorldUpdatePending
@@ -519,6 +520,7 @@ class StewardDaemon:
         self.adapters = adapters
         self._alerted: dict[str, float] = {}
         self._stop = threading.Event()
+        self._world_events = None
         self._inbox: InboxDrain | None = None
         self._telegram: TelegramService | None = None
         self._result_dispatch = Dispatch(1)
@@ -954,27 +956,83 @@ class StewardDaemon:
             except (OSError, GitTransportError, Busy, subprocess.CalledProcessError) as error:
                 log.warning("result discovery deferred: %s", error)
 
+        exchange = ExchangeDue(fallback=WORLD_EXCHANGE_SECONDS)
+        readers = {}
+        events_url = os.environ.get("STEWARD_WORLD_EVENTS_URL")
+        if events_url:
+            sources = {}
+            upstream_sources = {}
+            for name, transport in state.tasks.transports.items():
+                due = ExchangeDue()
+                readers[name] = (transport, due)
+                identities = [(github_repository(transport.remote_url), "refs/heads/" + transport.branch)]
+                if transport.upstream is not None:
+                    identity = (github_repository(transport.upstream.remote_url),
+                                "refs/heads/" + transport.upstream.branch)
+                    identities.append(identity)
+                    upstream_sources.setdefault(identity, []).append(transport.upstream_exchange)
+                for identity in identities:
+                    sources.setdefault(identity, []).append(due)
+            own = None
+            if checkpoint is not None and checkpoint.transport is not None:
+                own = (github_repository(checkpoint.transport.remote_url),
+                       "refs/heads/" + checkpoint.transport.branch)
+
+            def notice(notices):
+                for source in notices:
+                    identity = (source["repository"].lower(), source["ref"])
+                    if identity == own:
+                        exchange.fallback = 3600
+                        exchange.notify()
+                    for due in upstream_sources.get(identity, ()):
+                        due.fallback = 3600
+                        due.notify()
+                    for due in sources.get(identity, ()):
+                        due.notify()
+
+            self._world_events = Subscription(
+                events_url, os.environ.get("STEWARD_WORLD_EVENTS_TOKEN", ""), notice,
+            ).start()
+
         def converge_world() -> None:
+            exchange.begin()
             try:
                 published = checkpoint.converge()
             except (Busy, GitTransportError, OSError, RuntimeError,
                     subprocess.TimeoutExpired, WorldContentConflict, WorldUpdatePending) as error:
+                exchange.finish(None, False)
                 log.warning("world remote deferred: %s", deferral_cause(error))
             else:
+                observed = checkpoint.transport.observed_tip()
+                exchange.finish(published or (observed[0] if observed else None), bool(published or observed))
                 if published:
                     log.info("world published %s", published)
-
-        next_world_exchange = [0.0]
 
         def world_remote() -> Iterator[Owner]:
             # Publication, like repository publication, continues while paused.
             if checkpoint is None or checkpoint.transport is None:
                 return
-            if time.monotonic() >= next_world_exchange[0]:
-                next_world_exchange[0] = time.monotonic() + WORLD_EXCHANGE_SECONDS
+            if exchange.due(checkpoint.world.input_cursor()):
                 yield ("world", "remote"), converge_world
 
-        lanes = (kernel.owners, probes, rhythm, targets, assessments, world_remote)
+        def refresh_reader(name, transport, due):
+            due.begin()
+            try:
+                with repository_lease(state, name):
+                    transport.sync_remote_to_agent(self.config.repositories[name].path, self.broker)
+            except (Busy, GitTransportError, OSError, RuntimeError) as error:
+                due.finish(None, False)
+                log.warning("repository reader %s deferred: %s", name, deferral_cause(error))
+            else:
+                due.finish(None, True)
+
+        def repository_notices() -> Iterator[Owner]:
+            for name, (transport, due) in readers.items():
+                # Only a scoped notice confirms that this reader is subscribed.
+                if (due.pending.is_set() or due.deadline) and due.due(None):
+                    yield ("repository-reader", name), lambda n=name, t=transport, d=due: refresh_reader(n, t, d)
+
+        lanes = (kernel.owners, probes, rhythm, targets, assessments, world_remote, repository_notices)
 
         def sync_tasks():
             try:
@@ -1138,6 +1196,8 @@ class StewardDaemon:
         threads genuinely concurrent with it have to be waited for.
         """
         self._stop.set()
+        if self._world_events is not None:
+            self._world_events.close()
         if self._telegram is not None:
             self._telegram.request_stop()
         if self._inbox is not None:

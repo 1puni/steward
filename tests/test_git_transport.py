@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from steward_harness.config.schema import UntrustedExecutionConfig
+from steward_harness.config.schema import UntrustedExecutionConfig, UpstreamConfig
 from steward_harness.git_transport import (
     ControllerGitTransport,
     GitTransportError,
@@ -751,3 +751,56 @@ def test_failed_fetch_reports_bounded_redacted_stderr(tmp_path, monkeypatch):
     assert message.startswith(prefix + "fatal: cannot fetch [URL redacted]")
     assert "credential" not in message
     assert len(message) <= len(prefix) + 1000
+
+
+def test_upstream_refresh_uses_configured_source_without_moving_instance(tmp_path):
+    remote, agent, base = _remote_repository(tmp_path)
+    upstream = tmp_path / "upstream.git"
+    _git("clone", "--bare", str(remote), str(upstream), cwd=tmp_path)
+    _git("checkout", "-b", "source", cwd=agent)
+    (agent / "shared").write_text("source")
+    _git("add", "shared", cwd=agent)
+    _git("-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-m", "source", cwd=agent)
+    source = _git("rev-parse", "HEAD", cwd=agent)
+    _git("push", str(upstream), "HEAD:main", cwd=agent)
+    _git("checkout", "main", cwd=agent)
+    _git("remote", "add", "upstream", "https://example.invalid/wrong.git", cwd=agent)
+    transport = ControllerGitTransport(tmp_path / "state.db", "app", str(remote), "main",
+        allow_local=True, upstream=UpstreamConfig(remote_url=str(upstream)))
+    broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
+    assert transport.sync_remote_to_agent(agent, broker) == base
+    assert _git("rev-parse", "HEAD", cwd=agent) == base
+    assert _git("rev-parse", "upstream/main", cwd=agent) == source
+    assert _git("remote", "get-url", "upstream", cwd=agent) == str(upstream)
+    assert transport.observed_tip()[0] == base
+
+
+def test_upstream_checks_coalesce_until_notice(tmp_path, monkeypatch):
+    remote, agent, base = _remote_repository(tmp_path)
+    transport = ControllerGitTransport(tmp_path / "state.db", "app", str(remote), "main",
+        allow_local=True, upstream=UpstreamConfig(remote_url=str(remote)))
+    calls = []
+    run = transport._run
+    def observed(*args, **kwargs):
+        if args[0] == "fetch":
+            calls.append(args)
+        return run(*args, **kwargs)
+    monkeypatch.setattr(transport, "_run", observed)
+    for _ in range(3):
+        assert transport.fetch_upstream() == base
+    assert len(calls) == 1
+    transport.upstream_exchange.notify()
+    assert transport.fetch_upstream() == base
+    assert len(calls) == 2
+    assert transport.fetch_upstream(force=True) == base
+    assert len(calls) == 3
+
+
+def test_upstream_outage_does_not_hide_destination_revision(tmp_path):
+    remote, agent, base = _remote_repository(tmp_path)
+    transport = ControllerGitTransport(tmp_path / "state.db", "app", str(remote), "main",
+        allow_local=True, upstream=UpstreamConfig(remote_url=str(tmp_path / "missing.git")))
+    assert transport.fetch() == base
+    with pytest.raises(GitTransportError):
+        transport.fetch_upstream()
+    assert transport.observed_tip()[0] == base
