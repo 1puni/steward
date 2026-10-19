@@ -856,6 +856,10 @@ class TelegramService:
                     send = lambda p=path: self.api.send_video(
                         chat_id, p, topic_id=topic_id
                     )
+                elif artifact.kind is ArtifactKind.VOICE:
+                    send = lambda p=path: self.api.send_voice(
+                        chat_id, p, topic_id=topic_id
+                    )
                 else:
                     send = lambda p=path: self.api.send_document(
                         chat_id, p, topic_id=topic_id
@@ -898,7 +902,7 @@ class TelegramService:
     def _drain_delivery_outbox(self) -> None:
         """Deliver fixed-destination jobs from the configured product spool.
 
-        Jobs contain exactly one of ``text``, ``photo``, ``video``, or ``document`` plus
+        Jobs contain exactly one of ``text``, ``photo``, ``video``, ``voice``, or ``document`` plus
         optional ``caption`` and ``thread_id``. The destination chat always
         comes from configuration, topics must be declared, and file paths must
         resolve beneath a configured delivery root.
@@ -930,9 +934,9 @@ class TelegramService:
                 if topic_id not in allowed_topics:
                     raise ValueError(f"topic {topic_id} is not declared")
                 caption = str(raw.get("caption") or "").strip() or None
-                payloads = [name for name in ("text", "photo", "video", "document") if raw.get(name)]
+                payloads = [name for name in ("text", "photo", "video", "voice", "document") if raw.get(name)]
                 if len(payloads) != 1:
-                    raise ValueError("job must contain exactly one of text, photo, video, or document")
+                    raise ValueError("job must contain exactly one of text, photo, video, voice, or document")
 
                 kind = payloads[0]
                 value, artifacts = str(raw[kind]), ()
