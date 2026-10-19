@@ -267,13 +267,16 @@ controller host trust boundary.
 ## Managed source branches
 
 Repository polling fetches all advertised heads from each configured trusted
-remote and delivers their objects to the development repository under
-`refs/steward/remote/<branch>`, including branches that have never reached `main`.
-Use `git show refs/steward/remote/<branch>:path` or create a local worktree from
-that ref. Existing task branches, checked-out files and native sessions stay in
-place. Unchanged heads transfer no objects, and deleted remote labels are pruned.
-Credentials stay with the controller; a worker's local remote settings cannot
-change the authenticated destination. Only the configured default branch supplies
+remote and delivers them to the development repository as its own `origin`:
+`remote.origin.url` is the configured URL and every head, including branches that
+have never reached `main`, is `origin/<branch>`. The agent cannot fetch, so this
+delivery is what keeps its Git names true. A checkout of the default branch
+fast-forwards when Git can do so without touching local work; any other checkout,
+task branch or native session stays in place, and `git status` reports it behind
+or diverged. Unchanged heads transfer no objects, and deleted remote heads are
+pruned. Credentials stay with the controller; the agent's remote settings are
+labels the controller rewrites and never read, so they cannot change the
+authenticated destination. Only the configured default branch supplies
 publication ancestry and deployment authority.
 
 Source delivery uses the existing repository poll. Native pushes of arbitrary

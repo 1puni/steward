@@ -266,8 +266,8 @@ def test_retained_checkout_sees_new_source_and_completion_without_losing_work(tm
         assert _git("rev-parse", "HEAD", cwd=cwd) == work
         assert (cwd / "result.txt").read_text() == "completed\n"
         assert (cwd / "local-only.txt").read_text() == "unfinished evidence"
-        assert _git("rev-parse", "refs/steward/remote/main", cwd=cwd) == accepted_source
-        assert _git("show", "refs/steward/remote/main:completion.txt", cwd=cwd) == "completed by the owner"
+        assert _git("rev-parse", "refs/remotes/origin/main", cwd=cwd) == accepted_source
+        assert _git("show", "refs/remotes/origin/main:completion.txt", cwd=cwd) == "completed by the owner"
         assert correction in request.prompt
         assert not (cwd / "completion.txt").exists()
         return execute(request)

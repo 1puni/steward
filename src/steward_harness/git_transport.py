@@ -1,4 +1,4 @@
-"""Controller-owned Git transport that never opens an agent repository."""
+"""Controller-owned Git transport that never trusts an agent repository."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from steward_harness.git import (
     controller_git_dir,
     hardened_git_argv,
     redact_command_output,
+    run_agent_git,
     validate_git_branch,
     validate_git_remote_url,
     validate_object_id,
@@ -211,16 +212,37 @@ class ControllerGitTransport:
     def sync_remote_to_agent(
         self, agent_repo: str | Path, broker: UntrustedExecutionBroker
     ) -> str:
-        """Mirror the observed remote heads into an agent clone as labels.
+        """Make the agent clone's own Git names say what the remote says.
 
-        Source refs are convenience labels, never publication or deploy
-        authority. The fetch lock covers the push so concurrent polls cannot
-        regress refs; vanished heads are pruned.
+        The agent cannot fetch, so its `origin` is whatever the controller last
+        delivered: the configured URL, its observed heads as `origin/*`, and
+        the default-branch checkout fast-forwarded when Git can do so without
+        touching local work. A checkout that cannot fast-forward stays as it is,
+        and `git status` then reports it behind or diverged. These are labels,
+        never publication or deploy authority. The fetch lock covers the push so
+        concurrent polls cannot regress refs; vanished heads are pruned.
         """
         with self._fetch_lock:
             sha = self.fetch()
-            self.push_to_agent(agent_repo, broker, "+refs/steward/remote/*:refs/steward/remote/*",
+            repo = self._agent_repo_path(agent_repo)
+            # A clone's `origin/HEAD` symref would make the pruning push refuse
+            # an aliased update; it is restored to the default branch below.
+            run_agent_git(broker, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD", cwd=repo)
+            self.push_to_agent(agent_repo, broker, "+refs/steward/remote/*:refs/remotes/origin/*",
                                prune=True)
+            for setting, value in (("remote.origin.url", self.remote_url),
+                                   ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")):
+                result = run_agent_git(broker, "config", "--replace-all", setting, value, cwd=repo)
+                if result.returncode:
+                    raise GitTransportError(f"could not update agent {setting}: {redact_command_output(result.stderr)}")
+            result = run_agent_git(broker, "symbolic-ref", "refs/remotes/origin/HEAD",
+                                   f"refs/remotes/origin/{self.branch}", cwd=repo)
+            if result.returncode:
+                raise GitTransportError(f"could not update agent origin/HEAD: {redact_command_output(result.stderr)}")
+            head = run_agent_git(broker, "symbolic-ref", "-q", "HEAD", cwd=repo)
+            if head.stdout.strip() == f"refs/heads/{self.branch}":
+                run_agent_git(broker, "merge", "--ff-only", "--no-autostash", "--no-squash", "--quiet",
+                              f"refs/remotes/origin/{self.branch}", cwd=repo)
             return sha
 
     def push_to_agent(self, agent_repo: str | Path, broker: UntrustedExecutionBroker,

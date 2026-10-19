@@ -27,17 +27,17 @@ decision that gets reused.
 
 ## Observed source and retained findings
 
-Before an organisation rhythm thinks, the controller refreshes
-every configured clone's `refs/steward/remote/<branch>`. Those refs are
-convenience labels for remote commits the controller observed. They grant no
-acceptance, publication or deployment authority. Working HEADs, local changes and
-`origin/<branch>` are left alone, and can be old. Read source at the observed
-ref, record the resolved SHA and when you observed it, and follow that revision's
-README and docs map:
+Before an organisation rhythm thinks, the controller refreshes every
+configured clone's `origin` to what it observed on the remote, and fast-forwards
+a clean default-branch checkout (see
+[managed source branches](execution-boundary.md#managed-source-branches)). Those
+names are labels for observed commits; they grant no acceptance, publication or
+deployment authority. Record the SHA you read and when, and follow that
+revision's README and docs map:
 
 ```sh
-git -C app show -s --format=%H refs/steward/remote/main
-git -C app show refs/steward/remote/main:README.md
+git -C app show -s --format=%H origin/main
+git -C app status --short --branch
 ```
 
 Substitute the configured default branch for `main`. A read-only procedure's
