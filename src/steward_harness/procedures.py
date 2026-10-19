@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import subprocess
 import time
 from pathlib import Path
 from datetime import datetime
@@ -123,7 +124,8 @@ def world_rhythm_observation(rhythms, name, now, *, run=None, latest=None,
                  observed_at=now, due_at=start, interval_end=start + root.schedule,
                  schedule=({'after': rhythm.after} if rhythm.after else
                            {'interval': rhythm.schedule, 'offset': rhythm.offset}),
-                 paths=list(rhythm.paths or []), sources=list(rhythm.sources), eligible=False,
+                 paths=list(rhythm.paths or []), sources=list(rhythm.sources),
+                 watch=rhythm.watch, eligible=False,
                  obligation=("accepted" if run and run.state == "completed"
                              else "open" if run or before else "uncaptured"),
                  turn_id=str(run.turn_id) if run else None)
@@ -146,9 +148,9 @@ def world_rhythm_observation(rhythms, name, now, *, run=None, latest=None,
         value['eligible'] = run.state == "completed"  # Never replay uncertain native work.
     elif rhythm.after and (before is None or before.state != "completed"):
         progress = "predecessor_held" if before and before.state == "interrupted" else "awaiting_predecessor"
-    elif (rhythm.paths or rhythm.sources) and changed is None:
+    elif (rhythm.paths or rhythm.sources or rhythm.watch) and changed is None:
         progress = "input_unobserved"
-    elif (rhythm.paths or rhythm.sources) and not changed:
+    elif (rhythm.paths or rhythm.sources or rhythm.watch) and not changed:
         progress = "awaiting_input"
     else:
         progress = "overdue" if now > start else "due"
@@ -167,6 +169,8 @@ class Procedures:
         self._quiet = {}
         # Per procedure rhythm: the bucket whose fetch it has already made.
         self._observed_bucket = {}
+        # Per watched world rhythm: (interval, its watch's answer and output).
+        self._watched = {}
 
     def request(self, name, repository, candidate, base, *, event="", owner=None, activity=None, workdir=None):
         config = self.config.procedures[name]
@@ -378,9 +382,14 @@ class Procedures:
             before = predecessors.get(index, [None])[-1]
             receipt = bool(self.state.result_receipt(key))
             changed = None
-            if ((rhythm.paths or rhythm.sources) and prior is None and not receipt
+            if ((rhythm.paths or rhythm.sources or rhythm.watch) and prior is None and not receipt
                     and (not rhythm.after or (before and before.state == "completed"))):
-                changed = self._world_changed(name, rhythm.paths, rhythm.sources)
+                if rhythm.paths or rhythm.sources:
+                    changed = self._world_changed(name, rhythm.paths, rhythm.sources)
+                if rhythm.watch and not changed:
+                    woke = self._watch(name, rhythm.watch, index)
+                    # Empty output on exit 0 is still an event; a broken watch is unknown.
+                    changed = None if woke is None else woke is not False
             claim = claims.get(str(prior.turn_id)) if prior else None
             observations[name] = world_rhythm_observation(
                 self.config.rhythms, name, now, run=prior,
@@ -437,6 +446,32 @@ class Procedures:
         """
         last = self.state.last_world_candidate(ConversationId(f"rhythm:{name}"))
         return last is None or self.world.changed(last, paths, sources)
+
+    def _watch(self, name, command, index):
+        """Ask the rhythm's watch, once per interval, whether anything happened.
+
+        The question costs no model: the agent runs the instance's executable
+        in the accepted world, where the rhythm keeps its own cursor (a wake
+        time it chose, the last mail it read). Exit 0 is an event and its
+        output says what woke the turn; exit 1 is none. Anything else is a
+        broken watch, so the interval runs no model and the operator is told:
+        a probe that fails quietly looks exactly like a quiet world.
+        """
+        cached = self._watched.get(name)
+        if cached is not None and cached[0] == index:
+            return cached[1]
+        try:
+            done = self.world.execution_broker.run([command], cwd=self.world.root, timeout=30)
+            woke = done.stdout.strip() if done.returncode == 0 else (False if done.returncode == 1 else None)
+            detail = (done.stderr or done.stdout or f"exit {done.returncode}").strip()
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            woke, detail = None, str(error)
+        if woke is None:
+            log.error("rhythm %s watch failed: %s", name, detail[-600:])
+            self.alert(f"watch:{name}", f"⚠️ The {name} rhythm's watch failed, so it cannot "
+                       f"wake: {detail[-600:]}")
+        self._watched[name] = (index, woke)
+        return woke
 
     def _world_rhythm_lease(self):
         # Commands and the automatic dispatcher share this exclusion boundary.
@@ -509,6 +544,9 @@ class Procedures:
             self.state.bind_conversation_provider(owner, procedure.lead_provider, None)
         try:
             text = prior.input_text if prior else Path(procedure.instructions).read_text()
+            woke = self._watched.get(name, (None, None))
+            if not prior and woke[0] == index and woke[1]:
+                text += f"\n\nWhat woke this run, from its watch:\n{woke[1][-4000:]}"
             result = conversations.run_turn(
                 transport="rhythm", transport_key=name, source_event_key=source,
                 operator_id="harness:rhythm", text=text,

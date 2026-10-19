@@ -1226,3 +1226,82 @@ def test_source_arriving_during_capture_remains_unseen_after_acceptance(tmp_path
     assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("staging", "rhythm:staging:21")]
     procedures.run_world_rhythm(service, "staging", "rhythm:staging:21")
     assert list(procedures.due_world_rhythms(now=NOW + 2 * DAY)) == []
+
+
+def _watched(tmp_path, cognition=None, *, body):
+    """A rhythm woken only by its watch: a script that counts its own calls."""
+    watch = tmp_path / "watch.sh"
+    watch.write_text(f"#!/bin/sh\necho . >> {tmp_path}/watch.calls\n{body}\n")
+    watch.chmod(0o755)
+    rhythms = {"inbox": CHAIN["sleep"] | {"schedule": 300, "watch": str(watch)}}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, cognition, rhythms=rhythms)
+    alerts = []
+    procedures.alert = lambda key, text: alerts.append(key)
+    calls = lambda: len((tmp_path / "watch.calls").read_text().split()) if (tmp_path / "watch.calls").exists() else 0
+    return procedures, service, cognition, alerts, calls
+
+
+def test_a_watch_that_sees_nothing_calls_no_model_and_asks_once_per_interval(tmp_path):
+    event = tmp_path / "mail"
+    seen = []
+    procedures, service, cognition, alerts, calls = _watched(
+        tmp_path, EditingCognition(before_return=seen.append),
+        body=f'[ -e {event} ] || exit 1\ncat {event}')
+    # A clock tick is not input: no event, no turn, however often it is polled.
+    for second in (0, 60, 299):
+        assert list(procedures.due_world_rhythms(now=NOW + second)) == []
+    assert calls() == 1 and cognition.calls == 0
+    observed = procedures.world_rhythm_observations(now=NOW + 1)["inbox"]
+    assert observed["progress"] == "awaiting_input" and observed["watch"].endswith("watch.sh")
+
+    # The next interval asks again; what it saw tells the turn why it woke.
+    event.write_text("2 new messages since 2026-10-19T09:00Z")
+    index = int((NOW + 300) // 300)
+    assert list(procedures.due_world_rhythms(now=NOW + 300)) == [("inbox", f"rhythm:inbox:{index}")]
+    procedures.run_world_rhythm(service, "inbox", f"rhythm:inbox:{index}")
+    assert cognition.calls == 1 and calls() == 2 and not alerts
+    assert "2 new messages since 2026-10-19T09:00Z" in seen[0].prompt
+
+    # A run settles its interval; the watch is not asked again until the next.
+    assert list(procedures.due_world_rhythms(now=NOW + 400)) == []
+    assert calls() == 2
+
+
+def test_a_watch_event_without_output_still_wakes_the_rhythm(tmp_path):
+    procedures, service, cognition, alerts, calls = _watched(tmp_path, body="exit 0")
+    assert [name for name, _ in procedures.due_world_rhythms(now=NOW)] == ["inbox"]
+
+
+@pytest.mark.parametrize("body", ["echo 'keyring locked' >&2; exit 2", "kill -9 $$"])
+def test_a_broken_watch_runs_no_model_and_tells_the_operator(tmp_path, body):
+    procedures, service, cognition, alerts, calls = _watched(tmp_path, body=body)
+    assert list(procedures.due_world_rhythms(now=NOW)) == []
+    assert list(procedures.due_world_rhythms(now=NOW + 60)) == []
+    assert procedures.world_rhythm_observations(now=NOW)["inbox"]["progress"] == "input_unobserved"
+    # One ask per interval, one alert key per rhythm (the alert path rate-limits by key).
+    assert calls() == 1 and alerts == ["watch:inbox"] and cognition.calls == 0
+
+
+def test_world_changes_also_wake_a_watched_rhythm_without_asking_the_watch(tmp_path):
+    watch = tmp_path / "watch.sh"
+    watch.write_text("#!/bin/sh\nexit 1\n")
+    watch.chmod(0o755)
+    rhythms = {"x": CHAIN["sleep"] | {"schedule": 300, "watch": str(watch), "sources": ["tg_"]}}
+    config, state, checkpoint, service, cognition, procedures = _chain(tmp_path, rhythms=rhythms)
+    index = int(NOW // 300)
+    procedures.run_world_rhythm(service, "x", f"rhythm:x:{index}")
+    world = checkpoint.world
+    world.finish("evt-v", "Post about the boat comic now.", "Noted.", base=world.input_cursor(),
+                 source="tg_301")
+    watch.unlink()  # Would fail if asked: the world change alone is the event.
+    assert list(procedures.due_world_rhythms(now=NOW + 300)) == [("x", f"rhythm:x:{index + 1}")]
+
+
+@pytest.mark.parametrize("rhythm,error", [
+    ({"input": "repositories/app/main", "watch": "/bin/true"}, "watch applies only to world"),
+    ({"input": "world", "watch": "watch.sh"}, "bounded absolute path"),
+])
+def test_configuration_refuses_a_misplaced_watch(rhythm, error):
+    from steward_harness.config.schema import ProcedureRhythmConfig
+    with pytest.raises(ValueError, match=error):
+        ProcedureRhythmConfig(schedule=300, procedure="sleep", owner=None, **rhythm)
