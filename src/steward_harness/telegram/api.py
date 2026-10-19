@@ -316,6 +316,25 @@ class TelegramAPI:
             "sendVideo", "video", path, data, media_type=media_type, timeout=600.0
         )
 
+    def send_voice(
+        self,
+        chat_id: int,
+        voice_path: str | Path,
+        caption: str | None = None,
+        topic_id: int | None = None,
+    ) -> int:
+        """Upload MP3, M4A or OGG/Opus as a playable Telegram voice message."""
+        path = Path(voice_path)
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if topic_id and topic_id > 1:
+            data["message_thread_id"] = str(topic_id)
+        if caption:
+            data["caption"] = caption
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return self._send_file(
+            "sendVoice", "voice", path, data, media_type=media_type, timeout=600.0
+        )
+
     def _send_file(
         self,
         endpoint: str,

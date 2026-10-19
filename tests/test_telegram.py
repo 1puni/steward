@@ -233,6 +233,33 @@ def test_send_video_asks_telegram_to_play_it_in_the_topic(tmp_path, monkeypatch:
     assert b'name="video"; filename="trailer.mp4"' in request.content
 
 
+@pytest.mark.parametrize('suffix,mime', [('.mp3', 'audio/mpeg'), ('.ogg', 'audio/ogg'), ('.m4a', 'audio/mp4')])
+@pytest.mark.parametrize('topic', [None, 1, 7])
+def test_send_voice_uses_native_voice_upload_and_correct_topic(tmp_path, monkeypatch, suffix, mime, topic):
+    calls: list[httpx.Request] = []
+    client_type = httpx.Client
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 75}})
+
+    monkeypatch.setattr(
+        api_module.httpx, "Client",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    voice = tmp_path / ('hello' + suffix)
+    voice.write_bytes(b'voice bytes')
+    assert TelegramAPI('tok').send_voice(-100123, voice, caption='Hello', topic_id=topic) == 75
+    (request,) = calls
+    assert str(request.url).endswith('/bottok/sendVoice')
+    assert b'name="voice"; filename="hello' + suffix.encode() + b'"' in request.content
+    assert b'Content-Type: ' + mime.encode() in request.content
+    assert b'name="chat_id"\r\n\r\n-100123' in request.content
+    assert b'name="caption"\r\n\r\nHello' in request.content
+    assert (b'name="message_thread_id"' in request.content) == (topic == 7)
+    assert b'voice bytes' in request.content
+
+
 def test_send_reply_plays_a_named_video(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     service = _service(tmp_path)
     video = tmp_path / "trailer.mp4"
@@ -1799,6 +1826,26 @@ def test_delivery_outbox_sends_a_video_job_as_a_playable_video(tmp_path, monkeyp
     service._drain_delivery_outbox()
 
     assert deliveries == [(8, _video(video))]
+
+
+def test_delivery_outbox_sends_native_voice_note_and_removes_completed_job(tmp_path, monkeypatch):
+    outbox = tmp_path / 'outbox'
+    outbox.mkdir()
+    voice = tmp_path / 'hello.mp3'
+    voice.write_bytes(b'voice')
+    job = outbox / '001.json'
+    job.write_text(json.dumps({'voice': str(voice), 'thread_id': 8}))
+    service = _service(tmp_path, topics={'steward': 8}, delivery_outbox_dir=str(outbox),
+                       delivery_quarantine_dir=str(tmp_path / 'quarantine'))
+    sent = []
+    monkeypatch.setattr(service.api, 'send_voice',
+                        lambda chat, path, topic_id=None: sent.append((chat, path, topic_id)) or 75)
+    monkeypatch.setattr(service.api, 'send_document', lambda *a, **kw: pytest.fail('must be a voice note'))
+    service._drain_delivery_outbox()
+    assert sent == [(service.config.chat_id, voice, 8)]
+    assert not job.exists()
+    service._drain_delivery_outbox()
+    assert len(sent) == 1
 
 
 def test_delivery_outbox_rejects_destination_override_and_quarantines_job(tmp_path) -> None:

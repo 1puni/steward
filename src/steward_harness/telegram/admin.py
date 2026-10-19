@@ -63,7 +63,7 @@ def resolve_delivery_file(raw_path, roots, max_bytes):
 
 
 #: Sent to the calling conversation's own topic, at once, before its reply.
-_CONVERSATION_ACTIONS = {'send_image', 'send_video', 'send_document', 'pin_message'}
+_CONVERSATION_ACTIONS = {'send_image', 'send_video', 'send_voice', 'send_document', 'pin_message'}
 
 
 class ChatAdministration:
@@ -81,7 +81,7 @@ class ChatAdministration:
                     enabled_actions=sorted(self._enabled()))
 
     def _enabled(self):
-        sends = {'send_image', 'send_video', 'send_document'} if self.config.delivery_roots else set()
+        sends = {'send_image', 'send_video', 'send_voice', 'send_document'} if self.config.delivery_roots else set()
         return sends | (set(self.config.agent_actions) & {'set_photo', 'set_description', 'pin_message'})
 
     def __call__(self, scope, request):
@@ -150,6 +150,8 @@ class ChatAdministration:
         else:
             path = resolve_delivery_file(text, self.config.delivery_roots,
                                          self.config.media_max_mb * 1024 * 1024)
+            if action == 'send_voice' and path.suffix.lower() not in {'.ogg', '.mp3', '.m4a'}:
+                raise ValueError('send_voice requires MP3, M4A or OGG/Opus; convert WAV before sending')
             fingerprint = dict(action=action, path=str(path), size=path.stat().st_size)
         identity = hashlib.sha256(json.dumps([scope, key]).encode()).hexdigest()
         receipt_path = self.receipts / (identity + '.json')
@@ -175,6 +177,8 @@ class ChatAdministration:
                     message_id = self.api.send_photo(chat, path, topic_id=thread)
                 elif action == 'send_video':
                     message_id = self.api.send_video(chat, path, topic_id=thread)
+                elif action == 'send_voice':
+                    message_id = self.api.send_voice(chat, path, topic_id=thread)
                 else:
                     message_id = self.api.send_document(chat, path, topic_id=thread)
             except Exception as error:
