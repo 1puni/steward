@@ -24,6 +24,8 @@ block is in the [kernel contract](kernel-contract.md#configuration).
 | [Topic evidence export](topic-evidence-export.md) | Bounded metadata-only operator handoff for a Telegram routing investigation |
 | [Task board](task-mini-app.md) | The read-only Mini App: where each displayed fact comes from, and why no write crosses the socket |
 | [Upgrading](upgrading.md) | Carrying a running steward's obligations across a new version, rehearsed before performed |
+| [Downstream instances and upstream](forks-and-upstream.md) | Shared ancestry, instance flavour, integration and private contributions |
+| [Repository notifications](repository-notifications.md) | Signed push invalidations, scoped readers and reconciliation |
 
 ## Understand the machine
 

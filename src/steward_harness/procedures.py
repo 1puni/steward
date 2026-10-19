@@ -243,10 +243,16 @@ class Procedures:
                 transport = self.transports[name]
                 if wanted:
                     transport.fetch()
+                    transport.fetch_upstream()
                     fetched.add(name)
                 heads[name] = dict(line.split()[::-1] for line in transport._run(
                     "for-each-ref", "--format=%(objectname) %(refname:strip=3)",
                     "refs/steward/remote/").splitlines())
+                if transport.upstream is not None:
+                    heads[name].update((f"upstream/{branch}", sha) for sha, branch in
+                        (line.split() for line in transport._run(
+                            "for-each-ref", "--format=%(objectname) %(refname:strip=3)",
+                            f"refs/steward/upstream/{transport.upstream.branch}").splitlines()))
             return heads[name]
 
         _, repository, _ = rhythm.input.split("/", 2)

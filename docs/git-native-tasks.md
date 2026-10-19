@@ -34,13 +34,17 @@ survive and a cancellation must not be overwritten. A task lock excludes two nat
 executions; controller decision writes use a short separate lock, never the long
 native-execution lock. A fresh execution receives the entire durable context.
 
-The gated candidate is a single commit whose message names the work it lands
+The gated candidate is one commit whose message names the work it lands
 (`Steward-Work: <work sha>`). A task is landed when the observed remote tip contains
 a commit naming its current work, so a push whose response or observation was lost
 is recognized on the next pass without any record written before the push, and
 without retipping the native work branch. A gate attempt is evidence, not an
 irreversible external effect; only the externally observed push establishes landing. Rejected or blocked work
 retains its context and work. Retry and answer authorize another slice explicitly.
+
+For a [configured upstream](forks-and-upstream.md), this commit retains the
+integrated source ancestry as merge parents while collapsing task exploration.
+Ordinary tasks without new upstream ancestry retain the single-parent form.
 
 SQL owns conversation transport ingestion, world-turn acceptance and incident
 observations. It must not own task records or task-input consumption.
