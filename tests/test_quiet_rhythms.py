@@ -22,7 +22,7 @@ def quiet_harness(tmp_path):
     adapter = InvestigationAdapter()
     execute = adapter.execute
     adapter.execute = lambda request: replace(execute(request), output=(
-        TaskOutput('Existing findings are owned.\nVERDICT: FAIL', subject='reviewed', disposition='idle')))
+        TaskOutput('Existing findings are owned.', subject='reviewed', disposition='idle')))
     state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter)
     config, _ = setup_procedures(tmp_path, state, runner)
     config.rhythms["light"] = ProcedureRhythmConfig(owner=None, schedule={"quiet": 300},

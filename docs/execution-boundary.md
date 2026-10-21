@@ -193,10 +193,13 @@ directories, `0640` files) to the execution identity. The configured account mus
 be able to write this spool.
 
 Controller-only does not mean operationally unavailable. Narrow operations should cross
-a typed harness boundary. Telegram pinning is the first example: an opted-in model
-response can request `pin_reply` or a numeric `pin_message`, while the root transport
-fixes the destination to configured `chat_id` and uses the token itself. Extend this
-pattern instead of making secrets readable to the agent account.
+a typed harness boundary. Telegram sends and pins are the example: during its turn a
+conversation calls its native task tool (`operation="telegram"`, `send_image`,
+`send_document`, or opted-in `pin_message`), and the controller resolves the file beneath
+`delivery_roots`, fixes the destination to configured `chat_id` and the conversation's
+own topic, and uses the token itself. A refusal returns to the model in the same call;
+reply text is never parsed for files or actions. Extend this pattern instead of making
+secrets readable to the agent account.
 
 ## Enforcement and verification
 

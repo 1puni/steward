@@ -154,7 +154,7 @@ def test_pending_action_replays_with_repository_authority(tmp_path, allowed):
     restarted._state.tasks.transports = {"app": facts}
     result = restarted.accept_prepared(str(turn.turn_id))
     assert restarted._state.prepared_turn(str(turn.turn_id))["state"] == "completed"
-    assert "markers are retired" in result.task_rejection
+    assert result.task_rejection is None
     notes = tuple((k, t) for _, k, t, _ in state.tasks.get(task_id).pending)
     assert not notes
     restarted.accept_prepared(str(turn.turn_id))

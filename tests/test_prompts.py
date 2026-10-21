@@ -71,8 +71,9 @@ def test_requirement_audit_is_asked_for_the_verdict_its_gate_reads() -> None:
     scope = prompts.build_procedure_scope(
         candidate="abc123", base="def456", read_only=True, full_tree=True, verdict=True)
     assert "Review the complete candidate tree at abc123" in scope
-    assert "VERDICT: PASS" in scope
-    assert "never infer PASS from missing evidence" in scope
+    assert 'operation="verdict"' in scope
+    assert "never read as a verdict" in scope
+    assert "never infer pass from missing evidence" in scope
 
 
 def test_recurring_run_is_not_asked_to_compress_its_scope_into_a_gate_token() -> None:

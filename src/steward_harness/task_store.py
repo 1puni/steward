@@ -125,6 +125,7 @@ class Task:
     #: The retained slice commit's trailers and message body.
     disposition: str | None = None
     slice_reason: str | None = None
+    slice_verdict: str | None = None
     findings: str | None = None
     landed: str | None = None
     running: bool = False
@@ -150,13 +151,15 @@ class Task:
 
     @property
     def verdict(self) -> str | None:
-        """A finished candidate review's pass or fail, read off its findings."""
+        """A finished candidate review's pass or fail: its recorded verdict call.
+
+        Findings are evidence for a person, never parsed. A review that recorded
+        no verdict, or two different ones, did not pass.
+        """
         p = self.procedure
         if not p or p.access != "read-only" or p.workdir is not None or self.disposition != "idle":
             return None
-        verdicts = [line.strip() for line in (self.findings or "").splitlines()
-                    if line.startswith("VERDICT:")]
-        return "pass" if verdicts == ["VERDICT: PASS"] else "fail"
+        return "pass" if self.slice_verdict == "pass" else "fail"
 
     @property
     def quiet(self) -> bool:
@@ -315,17 +318,19 @@ class GitTaskStore:
                     tuple(inputs), tuple(pending.values()), outcome)
         if not definition.work:
             return task
-        [(disposition, reason, message)] = _records(self.git("show", "-s", _format(
-            "%(trailers:key=Disposition,valueonly)", "%(trailers:key=Reason,valueonly)", "%B",
-        ), definition.work), 3)
+        [(disposition, reason, verdict, message)] = _records(self.git("show", "-s", _format(
+            "%(trailers:key=Disposition,valueonly)", "%(trailers:key=Reason,valueonly)",
+            "%(trailers:key=Verdict,valueonly)", "%B",
+        ), definition.work), 4)
         # Subject, findings, trailers: drop the first paragraph, and the last
         # one only if it is ours. A slice that concluded nothing has two.
         paragraphs = message.partition("\n")[2].strip().split("\n\n")
-        if paragraphs and all(line.startswith(("Disposition:", "Reason:", "Steward-Execution:", "Steward-Task-Revision:"))
+        if paragraphs and all(line.startswith(("Disposition:", "Reason:", "Verdict:", "Steward-Execution:", "Steward-Task-Revision:"))
                               for line in paragraphs[-1].strip().splitlines() if line.strip()):
             paragraphs.pop()
         return replace(task, disposition=disposition.strip() or None,
                        slice_reason=reason.strip() or None,
+                       slice_verdict=verdict.strip() or None,
                        findings="\n\n".join(paragraphs).strip() or None)
 
     def get(self, task_id: TaskId) -> Task:

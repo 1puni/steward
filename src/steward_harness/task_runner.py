@@ -752,6 +752,7 @@ class TaskRunner:
             findings=closure.findings,
             execution=calls.execution,
             task_revision=live.baseline,
+            verdict=closure.verdict,
         )
         log.info("Task %s checkpoint: %s", task.task_id, closure.subject)
 
