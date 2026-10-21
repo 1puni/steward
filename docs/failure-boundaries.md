@@ -30,14 +30,18 @@ way you count errors.
 | Deployment | Report staging/activation failure; failed restart or health attempts rollback | A pointer flip or HTTP success alone proves artifact integrity |
 | Inbound message | Requeue at the front of its conversation on a busy owner, storage refusal, world contention, pending application, content conflict or transient transport error; park other failures as `.failed` and tell a Telegram sender | One conflicted session requires stopping the controller or replaying accepted cognition |
 | Telegram update reply | Persist confirmed delivery pieces in the message file and retry unfinished pieces; park a reply Telegram refuses on its content | Exactly-once network delivery |
-| Task-result assessment | Retain the selected outcome before assessment; replay accepted assessment and retry transport until acknowledged or refused on its content, which settles the receipt | Exactly-once network delivery, or permission to repeat uncertain model side effects |
+| Task-result assessment | Retain the selected outcome until accepted assessment; explicit notifications retry transport until acknowledged or refused on content | Exactly-once network delivery, or permission to repeat uncertain model side effects |
 
-Result receipts are selected before assessment starts and stay pending until the
-transport confirms, so a crash mid-assessment cannot silently drop an outcome.
+Outcome receipts are selected before assessment starts and stay pending until its
+owning execution is accepted. Explicit notification receipts remain pending until
+transport confirms or refuses their content. A failed assessment retains its evidence
+and queues one compact operator recovery notice, never the raw report. Interrupted
+native work requires operator inspection and a new requested continuation; it is
+not automatically replayed or silently acknowledged.
 Invalid routes retain a diagnostic and do not enter the worker queue until the
 configured route is usable. Target results are outcomes only (live, or failing
 for five minutes), once per revision; unowned outcomes use a configured operator
-route and plain text without invoking task cognition.
+route for ordinary owner assessment without inventing a task.
 
 ## Cancellation and shutdown
 
