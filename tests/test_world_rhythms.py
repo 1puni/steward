@@ -1143,12 +1143,14 @@ def test_driving_world_rhythm_submits_owned_task_through_live_capability(tmp_pat
     assert state.result_receipt('rhythm:sleep:20')['recorded_only']
 
 
-@pytest.mark.parametrize('change', [{'owner': None}, {'input': 'repository:app'}, {'workdir': '/tmp/work'}])
-def test_task_driving_requires_world_input_and_result_owner(change):
+def test_task_driving_requires_a_result_owner():
     from steward_harness.config.schema import ProcedureRhythmConfig
-    with pytest.raises(ValueError, match='world rhythm with a result owner'):
-        ProcedureRhythmConfig.model_validate(dict(schedule=300, procedure='review', input='world',
-            owner='telegram:3', drive_tasks=True) | change)
+    driving = dict(schedule=300, procedure='review', input='world', owner='telegram:3', drive_tasks=True)
+    with pytest.raises(ValueError, match='requires a result owner'):
+        ProcedureRhythmConfig.model_validate(driving | {'owner': None})
+    # An organisation rhythm drives tasks from its procedure run.
+    assert ProcedureRhythmConfig.model_validate(
+        driving | {'input': 'repositories/app/main', 'workdir': '/srv/org'}).drive_tasks
 
 
 def test_conversation_sources_wake_capture_and_followthrough_without_task_authority(tmp_path):

@@ -49,7 +49,12 @@ chmod -R go-w "$scratch"
 if [ "$#" = 0 ]; then
     set -- tests/test_boundary_acceptance.py tests/test_linux_deployment_acceptance.py tests/test_host_ownership.py tests/test_git_metadata.py tests/test_git_operation_paths.py
 fi
-systemd-run --quiet --pipe --wait --collect --unit="$unit" \
+# PrivateTmp as production services use it: executions are transient units
+# outside this namespace, so nothing they share may live in its /tmp. Test
+# fixtures they share go beneath the host-visible scratch instead.
+mkdir -m 1777 "$scratch/tmp"
+systemd-run --quiet --pipe --wait --collect --unit="$unit" -p PrivateTmp=yes \
     -p "WorkingDirectory=$scratch" -p "Environment=PYTHONPATH=$scratch/src" \
+    -p "Environment=TMPDIR=$scratch/tmp" \
     -p 'Environment=PYTHONDONTWRITEBYTECODE=1' \
     "$python" -m pytest -q -s -p no:cacheprovider "$@"

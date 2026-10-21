@@ -543,7 +543,10 @@ release identity, current admission state, and accepted execution separately.
 
 By default the turn cannot propose or steer tasks. With `drive_tasks: true`,
 a world rhythm with a configured owner can submit repository tasks and use
-answer, retry and note on that owner's tasks. New tasks belong to the configured
+answer, retry and note on that owner's tasks. An organisation (`workdir`)
+rhythm with `drive_tasks: true` and an owner can submit from its procedure run;
+the key belongs to the rhythm, so a later run submitting the same key gets the
+admitted task back rather than a duplicate. New tasks belong to the configured
 owner, so normal result delivery and assessment continue the work there.
 It cannot cancel tasks or resume cancelled work; unowned and other-topic tasks
 remain inaccessible. Repository allowlists, source receipts, session fences,

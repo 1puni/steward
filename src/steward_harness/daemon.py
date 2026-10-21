@@ -659,6 +659,7 @@ class StewardDaemon:
             poll_seconds=self.config.controller.poll_seconds,
             actor_name=self.config.identity.name,
             telegram_admin=telegram_admin,
+            driving_rhythms=frozenset(name for name, rhythm in self.config.rhythms.items() if rhythm.drive_tasks),
         )
         incidents = IncidentProbeLoop(
             state,
