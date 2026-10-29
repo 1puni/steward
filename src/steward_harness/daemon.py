@@ -656,7 +656,6 @@ class StewardDaemon:
             # every other configured adapter eligible in declared order.
             provider_fallbacks=self.config.provider.family_order,
             timeout_seconds=self.config.provider.timeout_seconds,
-            poll_seconds=self.config.controller.poll_seconds,
             actor_name=self.config.identity.name,
             telegram_admin=telegram_admin,
         )

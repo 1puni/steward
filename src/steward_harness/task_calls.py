@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler
 from threading import Thread
 
 from steward_harness.state import ConversationId, TaskAction, TaskId, TaskSpec, TaskOriginKind, TaskStatus
-from steward_harness.task_store import PREFIX
+from steward_harness.task_store import PREFIX, OfferRejected
 
 
 def _digest(value):
@@ -282,8 +282,8 @@ class TaskCallServer:
                     return
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < size <= 128_000:
-                        raise ValueError("request must contain 1-128000 bytes")
+                    if not 0 < size <= 1_600_000:
+                        raise ValueError("request must contain 1-1600000 bytes")
                     request = json.loads(self.rfile.read(size))
                     result = calls(request)
                     status = 200
@@ -374,14 +374,18 @@ class TaskExecutionCalls:
         self.telegram_admin = telegram_admin
         task = state.tasks.get(task_id)
         self.owner = task.owner
+        self.understanding = not task.procedure
+        self.baseline = task.revision
         # A task's result is its report. Only a rhythm's task, whose finished
         # result is recorded rather than sent, speaks to its owner by notify.
         self.notifies = bool(task.procedure and task.procedure.event.startswith("rhythm:"))
         self.query = OwnershipCalls(state.tasks, task_id, repositories)
         self.start_writer()
 
-    def start_writer(self):
+    def start_writer(self, *, baseline=None):
         """A replacement native invocation cannot inherit pending closure intent."""
+        if baseline is not None:
+            self.baseline = baseline
         self.execution = uuid.uuid4().hex
         self.intent = None
         self.conflicted = False
@@ -402,6 +406,36 @@ class TaskExecutionCalls:
         decision = self.intent[1] if self.intent else TickClosure(
             "steward: complete native task execution", "idle")
         return replace(decision, findings=findings or "")
+
+    def _understanding(self, request):
+        required = {"operation", "key", "body", "base"}
+        if (not self.understanding or set(request) != required
+                or not all(isinstance(value, str) for value in request.values())):
+            raise ValueError("ordinary task understanding requires key, body and base")
+        key, body = request["key"], request["body"]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", key):
+            raise ValueError("invalid understanding key")
+        if not body.strip() or len(body.encode("utf-8")) > 256 * 1024:
+            raise ValueError("account body must contain 1-262144 UTF-8 bytes")
+        if re.match(r"---\n.*?\n---(?:\n|$)", body.lstrip(), re.S):
+            raise ValueError("task authority is not offerable; supply body without frontmatter")
+        identity = hashlib.sha1(json.dumps(["understanding", str(self.task_id), key]).encode()).hexdigest()
+        tasks = self.state.tasks
+        try:
+            revision, created = tasks.accept_understanding(
+                self.task_id, identity, request["base"], body)
+        except OfferRejected as error:
+            result = dict(operation="understanding", key=key, accepted=False, error=str(error))
+            if error.revision:
+                result.update(base=error.revision, account=tasks.read(self.task_id, error.revision)[2],
+                              changes=error.changes)
+            return result
+        # Replay recovers only this request's accepted revision, never a newer
+        # task tip whose account or inputs this writer has not reconciled.
+        if created or tasks.git("rev-parse", revision + "^1") == self.baseline:
+            self.baseline = revision
+        return dict(operation="understanding", key=key, task_id=str(self.task_id),
+                    accepted=True, replayed=not created, revision=revision, base=revision)
 
     def _close(self, request):
         from steward_harness.landing.checkpoint import TickClosure
@@ -431,6 +465,8 @@ class TaskExecutionCalls:
                 "message": "Intent recorded for this execution only. Acceptance requires writer teardown and a settled checkpoint."}
 
     def __call__(self, request):
+        if isinstance(request, dict) and request.get("operation") == "understanding":
+            return self._understanding(request)
         if isinstance(request, dict) and request.get("operation") == "telegram":
             if (set(request) != {"operation", "action", "key", "text"}
                     or not all(isinstance(value, str) for value in request.values())):

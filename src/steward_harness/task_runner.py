@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import re
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import RepositoryConfig
-from steward_harness.git import run_agent_git, hardened_git_argv
+from steward_harness.git import run_agent_git
 from steward_harness.git_transport import ControllerGitTransport, GitTransportError
 from steward_harness.landing.checkpoint import (
     TickClosure,
@@ -38,7 +36,6 @@ from steward_harness.task_calls import TaskCallServer, TaskExecutionCalls
 from steward_harness.task_lock import task_lock
 from steward_harness.lease import Busy
 from steward_harness.task_store import Task
-from steward_harness.task_store import PREFIX, OfferRejected
 
 log = logging.getLogger(__name__)
 
@@ -59,52 +56,20 @@ def _boundary_failed(error: BaseException) -> bool:
         pending.extend(link for link in (error.__cause__, error.__context__) if link is not None)
     return False
 
-#: The one task-local ref a native parent points at its current account offer.
-OFFER_REF = "refs/steward/understanding/{task_id}"
-OFFER_LIMIT = 256 * 1024
-_OFFER = re.compile(r"\ASteward-Base: ([0-9a-f]{40})\n\n(.*)\Z", re.S)
-_REPLY_LIMIT = 100_000
-# Runs as the execution identity: read at most limit + 1 bytes of one object,
-# so an oversized or swapped object cannot make the controller read without bound.
-_READ_OFFER = """
-import subprocess, sys
-limit = int(sys.argv[1])
-with subprocess.Popen(sys.argv[2:], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as git:
-    data = git.stdout.read(limit + 1)
-    if len(data) > limit:
-        git.kill()
-    code = git.wait()
-sys.stdout.buffer.write(data)
-sys.exit(0 if len(data) > limit else code)
-"""
-
-
 @dataclass(eq=False)
 class _LiveTask:
     """One running native turn: its input channel and accepted account baseline.
 
     ``baseline`` is the accepted revision whose body the native account was
-    last reconciled with: the slice's opening, then each account it offered
-    and had accepted. Closure reconciles against it, so an accepted offer is
-    the owner's own earlier word rather than a concurrent edit.
+    last reconciled with: the rendered account, then each accepted update.
+    Closure reconciles against it, so the owner's own earlier account is not
+    mistaken for a concurrent edit.
     """
 
-    worktree: Path
     baseline: str
     consumed: set[str]
     attempted: set[str]
     send: Callable[[RuntimeInput], None] | None = None
-    # Offer replies, by offer: delivered (answered, or reported while its decision
-    # is still pending), waiting to be (re)sent, or sent and awaiting the provider.
-    answered: set[str] = field(default_factory=set)
-    reported: set[str] = field(default_factory=set)
-    outbox: dict[str, tuple[str, bool]] = field(default_factory=dict)
-    sent: dict[str, tuple[str, str, bool]] = field(default_factory=dict)
-    acknowledgements: set[str] = field(default_factory=set)
-    ended: threading.Event = field(default_factory=threading.Event)
-    # The native turn takes no more input, though it may still be working:
-    # offers are still decided, and their replies wait in the outbox.
-    closed: bool = False
 
 
 def _task_input(commit: str, kind: str, text: str, source: str) -> RuntimeInput:
@@ -118,6 +83,7 @@ def _task_input(commit: str, kind: str, text: str, source: str) -> RuntimeInput:
     else:
         origin, author = "controller", f"unverified:{source or 'unknown'}"
     return RuntimeInput(commit, f"{kind}: {text}", origin=origin, author=author)
+
 def session_state_prefixes(family: ProviderFamily) -> tuple[str, ...]:
     """Worktree paths the running provider writes its own session state into.
 
@@ -166,7 +132,6 @@ class TaskRunner:
         timeout_seconds: int,
         actor_name: str = "Steward",
         actor_email: str = "steward@localhost",
-        poll_seconds: float = 5,
         telegram_admin=None,
     ) -> None:
         self.telegram_admin = telegram_admin
@@ -182,7 +147,6 @@ class TaskRunner:
         self.cognition = cognition
         self.provider_fallbacks = provider_fallbacks
         self.timeout_seconds = timeout_seconds
-        self.poll_seconds = poll_seconds
         self.actor_name = actor_name
         self.actor_email = actor_email
         self._input_lock = threading.RLock()
@@ -225,138 +189,6 @@ class TaskRunner:
                     # A disappearing native turn is not proof of consumption.
                     # Leave its persisted message for the next task slice.
                     log.exception("live task input failed for %s", task_id)
-
-    def _watch_offers(self, task_id: TaskId, live: _LiveTask) -> None:
-        """Observe this turn's offer ref until the turn ends.
-
-        It lives exactly as long as the turn, off the daemon's loop, so a slow
-        or hostile untrusted repository can delay only its own task's offers.
-        """
-        while not live.ended.wait(self.poll_seconds):
-            if live.send is None:
-                continue
-            try:
-                self._accept_offer(task_id, live)
-            except NativeInputClosed:
-                # The end of the input channel, not of the turn. Keep deciding
-                # what the native parent offers; its replies have nowhere to go.
-                if not live.closed:
-                    log.info("task %s native input closed; offer replies are no longer delivered",
-                             task_id)
-                live.closed = True
-            except Exception:
-                log.exception("understanding offer check failed for %s", task_id)
-
-    def _accept_offer(self, task_id: TaskId, live: _LiveTask) -> None:
-        """Accept the account a running native parent offered, and say so.
-
-        Acceptance is the Git decision; the reply only names it. Every offer
-        gets a reply. An undelivered reply is sent again without deciding
-        again. An offer that could not be evaluated is reported once and then
-        evaluated again each poll until it has a decision.
-        """
-        found = run_agent_git(self.broker, "rev-parse", "--verify", "--quiet",
-                              OFFER_REF.format(task_id=task_id), cwd=live.worktree, timeout=30)
-        offer = found.stdout.strip()
-        with self._input_lock:
-            if found.returncode or offer in live.answered or any(
-                    offer == sent for sent, _, _ in live.sent.values()):
-                return
-            pending = live.outbox.pop(offer, None)
-            if live.closed:
-                # Only a decision is kept; an undecided offer is evaluated again.
-                if pending and pending[1]:
-                    live.outbox[offer] = pending
-                    return
-                pending = None
-        reply, decided = pending or self._decide_offer(task_id, live, offer)
-        with self._input_lock:
-            if live.closed:
-                if decided:
-                    live.outbox[offer] = (reply, decided)
-                return
-            if not decided and offer in live.reported:
-                return
-            # Each reply is its own source: adapters refuse a repeated source ID.
-            source_id = f"understanding-{offer}-{len(live.acknowledgements)}"
-            live.acknowledgements.add(source_id)
-            live.sent[source_id] = (offer, reply, decided)
-        try:
-            # The reply concerns the account, not the work: whatever the
-            # session says back must not replace the response that closed it.
-            live.send(RuntimeInput(source_id, reply, origin="controller", author="steward",
-                                   receipt=True))
-        except Exception:
-            self._offer_reply_result(live, RuntimeInputResult(source_id, "rejected"))
-            raise
-
-    def _offer_reply_result(self, live: _LiveTask, result: RuntimeInputResult) -> None:
-        """Only the provider's acceptance delivers a reply; otherwise send it again."""
-        with self._input_lock:
-            sent = live.sent.pop(result.source_id, None)
-            if sent is None:
-                return
-            offer, reply, decided = sent
-            if result.disposition == "accepted":
-                (live.answered if decided else live.reported).add(offer)
-            else:
-                live.outbox[offer] = (reply, decided)
-
-    def _decide_offer(self, task_id: TaskId, live: _LiveTask, offer: str) -> tuple[str, bool]:
-        """Return the reply to one offer and whether it records a decision."""
-        tasks = self.state.tasks
-        try:
-            if not re.fullmatch(r"[0-9a-f]{40}", offer):
-                raise OfferRejected("an offer must name one Git object")
-            base, body = self._read_offer(live.worktree, offer)
-            accepted, created = tasks.accept_understanding(task_id, offer, base, body)
-        except OfferRejected as error:
-            log.warning("task %s understanding offer %s rejected: %s", task_id, offer, error)
-            reply = f"Steward did not accept understanding offer {offer}: {error}. Nothing changed."
-            if error.revision:
-                if error.changes:
-                    reply += "\n\n" + error.changes[:_REPLY_LIMIT]
-                    if len(error.changes) > _REPLY_LIMIT:
-                        reply += "\n\n(truncated)"
-                reply += ("\n\nReconcile this, then offer again with "
-                          f"Steward-Base: {error.revision}.")
-            return reply, True
-        except Exception as error:
-            log.exception("task %s understanding offer %s could not be evaluated", task_id, offer)
-            return (f"Steward could not evaluate understanding offer {offer}: "
-                    f"{type(error).__name__}. Nothing was accepted yet; Steward will keep "
-                    "evaluating this offer and reply when it has a decision."), False
-        current = tasks.refs().get(PREFIX + str(task_id))
-        if created:
-            live.baseline = accepted
-        return (f"Steward accepted understanding offer {offer} as accepted revision {accepted}. "
-                + ("" if current == accepted else f"The current accepted revision is {current}. ")
-                + f"Use Steward-Base: {current} for your next offer."), True
-
-    def _read_offer(self, worktree: Path, offer: str) -> tuple[str, str]:
-        """Read one bounded offer and prove it is the blob its ID names."""
-        read = self.broker.run(
-            [self.broker.python_executable, "-I", "-c", _READ_OFFER, str(OFFER_LIMIT),
-             *hardened_git_argv("cat-file", "blob", offer)],
-            cwd=worktree, timeout=30, text=False)
-        raw = read.stdout
-        if read.returncode:
-            raise OfferRejected("an offer must be a blob in this repository")
-        if len(raw) > OFFER_LIMIT:
-            raise OfferRejected(f"an offer must be at most {OFFER_LIMIT} bytes")
-        if hashlib.sha1(b"blob %d\0" % len(raw) + raw).hexdigest() != offer:
-            raise OfferRejected("the offer's content does not match its object ID")
-        try:
-            match = _OFFER.match(raw.decode("utf-8"))
-        except UnicodeDecodeError:
-            match = None
-        if match is None or not match.group(2).strip():
-            raise OfferRejected("an offer is UTF-8 'Steward-Base: <accepted revision>', a blank "
-                                "line, then the nonblank account body")
-        if re.match(r"---\n.*?\n---\n", match.group(2).lstrip(), re.S):
-            raise OfferRejected("task authority is not offerable; offer the account body "
-                                "without frontmatter")
-        return match.group(1), match.group(2).strip()
 
     def prepare(self, task_id: TaskId) -> TaskId:
         """Hold this task's lock and run one execution slice.
@@ -436,7 +268,7 @@ class TaskRunner:
 
             _manager, worktree, checkpointer = self._open_worktree(task, repository)
             procedure = task.procedure
-            live = _LiveTask(worktree, opened_at, set(), set())
+            live = _LiveTask(opened_at, set(), set())
             disposition, detail, findings = self._work(
                 task, worktree, checkpointer, live
             )
@@ -571,11 +403,7 @@ class TaskRunner:
 
         def input_result(result: RuntimeInputResult) -> None:
             with self._input_lock:
-                # Acknowledgements are the controller's words, not operator
-                # input the checkpoint could consume.
-                if result.source_id in live.acknowledgements:
-                    self._offer_reply_result(live, result)
-                elif result.disposition == "accepted":
+                if result.disposition == "accepted":
                     live.consumed.add(result.source_id)
         execution_generation = lineage.generation
         execution_provider = lineage.provider
@@ -662,8 +490,7 @@ class TaskRunner:
                 event_id=execution_id,
                 operator_context=operator_context,
                 read_only=bool(procedure and procedure.access == "read-only"),
-                understanding=None if procedure else (
-                    OFFER_REF.format(task_id=task.task_id), live.baseline),
+                understanding=None if procedure else task.revision,
             ),
             cwd=execution_cwd,
             # Task cognition may work for days. A procedure run is a
@@ -693,17 +520,13 @@ class TaskRunner:
 
         task_calls = None
         calls = TaskExecutionCalls(self.state, task.task_id, self.repositories, telegram_admin=None if procedure else self.telegram_admin)
-        watcher = None if procedure else threading.Thread(
-            target=self._watch_offers, args=(task.task_id, live),
-            name=f"offers-{task.task_id}", daemon=True)
+        calls.baseline = task.revision
         with self._input_lock:
             self._executions.add(execution_id)
         try:
-            if watcher:
-                watcher.start()
             task_calls = TaskCallServer(calls)
             def writer_started(pid, unit):
-                calls.start_writer()
+                calls.start_writer(baseline=task.revision)
                 task_calls.bind(pid, unit)
             request = replace(request, task_call_socket=task_calls.path,
                               on_process_started=writer_started)
@@ -714,11 +537,9 @@ class TaskRunner:
             with self._input_lock:
                 self._executions.discard(execution_id)
                 self._native_inputs.pop(task.task_id, None)
-            # Wait out an acceptance in flight; none can follow, so closure
-            # reconciles against the last accepted account.
-            live.ended.set()
-            if watcher:
-                watcher.join()
+            # Server shutdown waited for any account update in flight.
+            # Closure uses the last account this writer reconciled.
+            live.baseline = calls.baseline
         if procedure and procedure.access == "read-only":
             after = GateRunner._snapshot(worktree, self.broker)
             if not isinstance(before, tuple) or not isinstance(after, tuple):

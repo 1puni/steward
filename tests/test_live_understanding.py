@@ -1,21 +1,9 @@
-"""A running native parent makes its account durable without ending execution.
-
-The offer is an immutable blob under one task-local ref in the untrusted
-repository. The turn's offer watcher reads it through the broker; acceptance is
-a body-only exact-base commit in accepted task Git, acknowledged through the
-live input channel. These tests use real Git and real processes with an
-in-process adapter; the native adapters' own wire paths are exercised in
-``test_live_understanding_adapters``.
-"""
-
-from __future__ import annotations
-
+"""An account becomes durable synchronously without ending native work."""
+import os
+import re
 import subprocess
 import sys
 import time
-import zlib
-from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
@@ -25,51 +13,35 @@ from steward_harness.config.schema import RepositoryConfig, StewardConfig, Untru
 from steward_harness.conversations import ConversationService
 from steward_harness.daemon import KernelCommands
 from steward_harness.git_transport import ControllerGitTransport
-from steward_harness.runtime.contracts import (
-    SESSION_WORKSPACE_CAPABILITIES,
-    NativeInputClosed,
-    RuntimeInputResult,
-)
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-from steward_harness.state import StateDatabase, TaskSpec, TaskStatus
-from steward_harness.task_runner import OFFER_LIMIT, OFFER_REF, TaskRunner
+from steward_harness.state import StateDatabase, TaskSpec
+from steward_harness.task_calls import TaskExecutionCalls
+from steward_harness.task_runner import TaskRunner
 from steward_harness.task_store import PREFIX, OfferRejected
-from steward_harness.web.tasks import TaskBoard
-from test_task_runner_kernel import EditingAdapter, _git, _repository, publish_task, task_status
+from test_task_calls import call
+from test_task_runner_kernel import EditingAdapter, _git, _repository
+
+def prompt_base(request):
+    return re.search(r"has base `([0-9a-f]{40})`", request.prompt).group(1)
 
 
-def offer(cwd: Path, task_id, base: str, body: str) -> str:
-    """What the native parent runs: hash an immutable offer, point the ref at it."""
-    return point(cwd, task_id, f"Steward-Base: {base}\n\n{body}\n".encode())
+class ParentAdapter(EditingAdapter):
+    def __init__(self, during):
+        super().__init__()
+        self.during = during
 
-
-def point(cwd: Path, task_id, content: bytes) -> str:
-    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=cwd, check=True,
-                          input=content, capture_output=True).stdout.decode().strip()
-    _git("update-ref", OFFER_REF.format(task_id=task_id), blob, cwd=cwd)
-    return blob
-
+    def execute(self, request):
+        request.on_process_started(os.getpid(), None)
+        try:
+            self.during(request)
+        except AssertionError as error:
+            # Ordinary adapter errors become retained blocked tasks; a test
+            # assertion must escape that production recovery path.
+            pytest.fail(str(error))
+        return super().execute(request)
 
 def tip(state, task_id) -> str:
     return state.tasks.refs()[PREFIX + str(task_id)]
-
-
-def eventually(predicate, timeout=15.0):
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        assert time.monotonic() < deadline, "condition not reached"
-        time.sleep(0.02)
-
-
-class _Statuses:
-    def refresh(self):
-        return self
-
-    def status(self, task):
-        return TaskStatus.RUNNING
-
-
-# -- the store's acceptance decision ------------------------------------------------
 
 
 def test_acceptance_changes_only_the_body_and_replays_its_first_decision(tmp_path):
@@ -122,32 +94,6 @@ def test_stale_offer_cannot_erase_operator_edits_or_cancellation(tmp_path):
     assert state.tasks.read(task.task_id)[1].hold == "cancelled"
 
 
-# -- a running parent with a working child ------------------------------------------
-
-
-class ParentAdapter(EditingAdapter):
-    """A native parent that keeps working while it offers its understanding."""
-
-    capabilities = replace(SESSION_WORKSPACE_CAPABILITIES, ongoing_input=True)
-
-    def __init__(self, during, *, deliver=True):
-        super().__init__()
-        self.during = during
-        self.deliver = deliver
-        self.delivered = []
-
-    def execute(self, request):
-        def send(message):
-            if not self.deliver:
-                raise RuntimeError("native turn gone")
-            self.delivered.append(message)
-            request.on_input_result(RuntimeInputResult(message.source_id, "accepted"))
-        request.on_input_ready(send)
-        request.on_session_started("claude-session")
-        self.during(request)
-        return super().execute(request)
-
-
 def make_runner(tmp_path, adapter):
     bare, clone = _repository(tmp_path)
     state = StateDatabase(tmp_path / "state.db")
@@ -165,17 +111,8 @@ def runner_for(tmp_path, state, adapter, clone, bare):
         worktrees_root=tmp_path / "worktrees",
         broker=UntrustedExecutionBroker(UntrustedExecutionConfig()),
         cognition=Cognition({"claude": adapter}),
-        provider_fallbacks=(), timeout_seconds=30, poll_seconds=0.05,
+        provider_fallbacks=(), timeout_seconds=30,
     )
-
-
-def messages(adapter):
-    return [m.text for m in adapter.delivered if m.origin == "controller"]
-
-
-def replies(adapter, count):
-    eventually(lambda: len(messages(adapter)) >= count)
-    return messages(adapter)
 
 
 def operator_show(tmp_path, runner, task_id):
@@ -191,319 +128,141 @@ def operator_show(tmp_path, runner, task_id):
     return commands("task", f"show {task_id}", 1, 7, 1)
 
 
-# The parent's own delegated worker: a separate process editing a product file.
-_CHILD = """
-import pathlib, sys, time
-draft, heartbeat = pathlib.Path('draft.py'), pathlib.Path(sys.argv[1])
-while True:
-    draft.write_text(f'# half written {time.time()}\\n')
-    heartbeat.write_text(str(time.time()))
-    time.sleep(0.05)
-"""
 
-
-def test_running_parent_offers_understanding_while_child_works(tmp_path):
-    seen = {}
-
+def test_running_parent_saves_account_without_touching_product_or_authority(tmp_path):
     def during(request):
-        cwd = request.cwd
-        task_id = seen["task"]
-        opened = tip(state, task_id)
-        assert f"it is {opened}" in request.prompt
-        assert OFFER_REF.format(task_id=task_id) in request.prompt
-        # The parent delegates: a child keeps editing product files. One change
-        # is staged by the parent, one is left dirty by the child.
-        heartbeat = tmp_path / "heartbeat"
-        child = subprocess.Popen([sys.executable, "-c", _CHILD, str(heartbeat)], cwd=cwd)
+        before, definition, _ = state.tasks.read(task_id)
+        (request.cwd / "selected.txt").write_text("selected")
+        _git("add", "selected.txt", cwd=request.cwd)
+        head = _git("rev-parse", "HEAD", cwd=request.cwd)
+        index = _git("write-tree", cwd=request.cwd)
+        child = subprocess.Popen([sys.executable, "-c",
+            "import pathlib,time; pathlib.Path('draft.py').write_text('unfinished'); time.sleep(30)"],
+            cwd=request.cwd)
         try:
-            eventually(heartbeat.exists)
-            (cwd / "staged.txt").write_text("staged, not committed\n")
-            _git("add", "staged.txt", cwd=cwd)
-            head, index = _git("rev-parse", "HEAD", cwd=cwd), _git("write-tree", cwd=cwd)
-
-            first = offer(cwd, task_id, opened, "## Understanding\n\nThe consumer is src/feed.py.")
-            [ack] = replies(adapter, 1)
-            accepted = tip(state, task_id)
-            assert accepted != opened
-            assert ack == (f"Steward accepted understanding offer {first} as accepted revision "
-                           f"{accepted}. Use Steward-Base: {accepted} for your next offer.")
-            # The operator inspects the accepted account while work runs.
-            assert "src/feed.py" in StateDatabase(state.path).tasks.get(task_id).brief
-            shown = operator_show(tmp_path, runner, task_id)
-            assert task_id.short in shown and "Running" in shown and "The consumer is src/feed.py." in shown
-            detail = TaskBoard(state).detail(task_id)
-            assert detail["status"] == "running" and "src/feed.py" in detail["brief"]
+            deadline = time.monotonic() + 5
+            while not (request.cwd / "draft.py").exists():
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+            receipt = call(request.task_call_socket, operation="understanding", base=prompt_base(request), key="consumer", body="The consumer is src/feed.py.")
+            assert receipt["accepted"]
             assert child.poll() is None
-            beat = float(heartbeat.read_text() or 0)
-            eventually(lambda: float(heartbeat.read_text() or 0) > beat)
-            assert _git("rev-parse", "HEAD", cwd=cwd) == head
-            assert _git("write-tree", cwd=cwd) == index
-            assert _git("status", "--porcelain", "--", "draft.py", cwd=cwd) == "?? draft.py"
-            # Nothing reached publication, and the product tree was not swept in.
-            definition = state.tasks.read(task_id)[1]
-            assert definition.work is None and state.tasks.get(task_id).landed is None
-            assert state.tasks.git("ls-tree", "--name-only", accepted) == "task.md"
-
-            # The same blob again: no second decision and no second reply.
-            _git("update-ref", "-d", OFFER_REF.format(task_id=task_id), cwd=cwd)
-            _git("update-ref", OFFER_REF.format(task_id=task_id), first, cwd=cwd)
-            time.sleep(0.3)
-            assert tip(state, task_id) == accepted and len(messages(adapter)) == 1
-
-            state.tasks.note(task_id, "check the archive consumer too")
-            runner.flush_inputs()
-            assert adapter.delivered[-1].text == "note: check the archive consumer too"
-            # An offer's reply is a receipt, so the session's answer to it
-            # never becomes the task's closure; a note is work and can be.
-            assert [m.receipt for m in adapter.delivered if m.author == "steward"] == [True]
-            assert adapter.delivered[-1].receipt is False
-            stale = offer(cwd, task_id, accepted, "## Understanding\n\nStale second offer.")
-            refused = replies(adapter, 2)[-1]
-            noted = tip(state, task_id)
-            assert refused.startswith(f"Steward did not accept understanding offer {stale}")
-            assert "check the archive consumer too" in refused
-            assert refused.endswith(f"Steward-Base: {noted}.")
-            assert "Stale second offer" not in state.tasks.get(task_id).brief
-
-            offer(cwd, task_id, noted, "## Understanding\n\nsrc/feed.py and the archive consumer.")
-            replies(adapter, 3)
-            assert "archive consumer" in state.tasks.get(task_id).brief
-            assert child.poll() is None
-            # The accepted account is canonical; no product-side prose copy exists.
-            assert not (cwd / "tasks" / f"{task_id}.md").exists()
-            state.tasks.note(task_id, "late note after the second offer")
-            runner.flush_inputs()  # delivered live; the closing checkpoint consumes it
+            fresh = StateDatabase(state.path)
+            revision, after, body = fresh.tasks.read(task_id)
+            assert revision != before and body == "The consumer is src/feed.py."
+            assert after == definition
+            assert "src/feed.py" in operator_show(tmp_path, runner, task_id)
+            assert state.tasks.git("ls-tree", "--name-only", revision) == "task.md"
+            assert _git("rev-parse", "HEAD", cwd=request.cwd) == head
+            assert _git("write-tree", cwd=request.cwd) == index
+            assert _git("status", "--porcelain", "--", "draft.py", cwd=request.cwd) == "?? draft.py"
         finally:
-            child.kill()
-            child.wait()
-        (cwd / "draft.py").unlink()
-
-    adapter = ParentAdapter(during)
-    state, runner, task_id, bare = make_runner(tmp_path, adapter)
-    seen["task"] = task_id
-
+            child.terminate()
+            child.wait(timeout=5)
+    state, runner, task_id, _ = make_runner(tmp_path, ParentAdapter(during))
     runner.prepare(task_id)
 
-    history = state.tasks.git("log", "--first-parent", "--format=%s", tip(state, task_id)).splitlines()
-    assert history.count("accept understanding") == 2
-    assert not any("reconcil" in subject.lower() for subject in history)
-    definition = state.tasks.read(task_id)[1]
-    assert definition.resume is None and definition.hold is None
-    body = state.tasks.get(task_id).brief
-    # Closure keeps the owner's account, the note it never wrote down, and its checkpoint.
-    assert body == "## Understanding\n\nsrc/feed.py and the archive consumer."
-    assert any("late note after the second offer" in item[2] for item in state.tasks.get(task_id).inputs)
-    assert "Concurrent task understanding" not in body
-    # Acknowledgements are controller words, never consumed operator input.
-    consumed = state.tasks.git("log", "-1", "--format=%(trailers:key=Steward-Consumed,valueonly)",
-                               tip(state, task_id))
-    assert "understanding-" not in consumed
-    # Natural closure still goes through ordinary gates and publication.
-    assert publish_task(runner) == task_id
-    assert task_status(runner, task_id) is TaskStatus.DONE
-    assert f"tasks/{task_id}.md" not in _git("ls-tree", "-r", "--name-only", "main", cwd=bare)
-    assert "archive consumer" in state.tasks.get(task_id).brief
+
+def execution(tmp_path):
+    state = StateDatabase(tmp_path / "state.db")
+    task = admit_task(state, TaskSpec("app", "Understand", "Find the consumer."))
+    return state, task.task_id, TaskExecutionCalls(state, task.task_id, {"app"})
 
 
-def _tampered(cwd: Path, task_id, base: str) -> None:
-    """Replace a loose object's file with other content under the same ID.
-
-    Git does not re-hash on read; a larger substitute is already refused by
-    the bounded read, so this forges an equally plausible small offer.
-    """
-    genuine = point(cwd, task_id, f"Steward-Base: {base}\n\ngenuine\n".encode())
-    forged = f"Steward-Base: {base}\n\nforged!\n".encode()
-    path = Path(_git("rev-parse", "--path-format=absolute", "--git-path",
-                     f"objects/{genuine[:2]}/{genuine[2:]}", cwd=cwd))
-    path.chmod(0o644)
-    path.write_bytes(zlib.compress(b"blob %d\0" % len(forged) + forged))
+def understanding(calls, base, key="account", body="The consumer is src/feed.py.", **extra):
+    return calls(dict(operation="understanding", key=key, body=body, base=base, **extra))
 
 
-@pytest.mark.parametrize("content, reason", [
-    (b"not an offer", "Steward-Base"),
-    (b"Steward-Base: {base}\n\n   ", "nonblank"),
-    (b"Steward-Base: {base}\n\n\xff\xfe account", "UTF-8"),
-    (b"Steward-Base: {base}\n\n" + b"y" * OFFER_LIMIT, "at most"),
-    (b"Steward-Base: {base}\n\n---\nrepository: elsewhere\nhold: null\n---\nbody", "not offerable"),
-    (None, "does not match its object ID"),
-], ids=["shape", "blank", "encoding", "oversized", "authority", "tampered"])
-def test_malformed_or_authority_offers_fail_visibly_and_work_continues(tmp_path, content, reason):
-    def during(request):
-        task_id = seen["task"]
-        base = tip(state, task_id)
-        if content is None:
-            _tampered(request.cwd, task_id, base)
-        else:
-            point(request.cwd, task_id, content.replace(b"{base}", base.encode()))
-        [refused] = replies(adapter, 1)
-        assert "did not accept" in refused and reason in refused
-        assert tip(state, task_id) == base
-
-    adapter = ParentAdapter(during)
-    state, runner, task_id, _ = make_runner(tmp_path, adapter)
-    seen = {"task": task_id}
-    before = state.tasks.read(task_id)[1]
-
-    runner.prepare(task_id)
-
-    after = state.tasks.read(task_id)[1]
-    assert after.repository == before.repository == "app"
-    assert after.hold is None  # the healthy execution closed normally
-    assert "accept understanding" not in state.tasks.git("log", "--format=%s", tip(state, task_id))
+@pytest.mark.parametrize("body", ["Account.", "## Account\n\nThe consumer is src/feed.py.\n"])
+def test_replay_cannot_acknowledge_a_later_unseen_input(tmp_path, body):
+    state, task_id, calls = execution(tmp_path)
+    observed = tip(state, task_id)
+    assert understanding(calls, observed, body=body)["accepted"]
+    accepted = tip(state, task_id)
+    state.tasks.note(task_id, "Operator: also check caching")
+    noted = tip(state, task_id)
+    replay = understanding(calls, observed, body=body)
+    assert replay["accepted"] and replay["replayed"]
+    assert tip(state, task_id) == noted
+    refused = understanding(calls, observed, key="later", body="I have checked the consumer.")
+    assert not refused["accepted"]
+    assert "also check caching" in str(refused)
+    assert tip(state, task_id) == noted
+    assert state.tasks.git("rev-list", "--count", f"{accepted}..{noted}") == "1"
 
 
-def test_evaluation_failure_is_reported_once_then_the_same_offer_is_accepted(tmp_path):
-    calls = []
+@pytest.mark.parametrize("restart", [False, True])
+def test_same_key_cannot_change_account(tmp_path, restart):
+    state, task_id, calls = execution(tmp_path)
+    observed = tip(state, task_id)
+    assert understanding(calls, observed)["accepted"]
+    accepted = tip(state, task_id)
+    if restart:
+        calls = TaskExecutionCalls(StateDatabase(state.path), task_id, {"app"})
+    with pytest.raises(ValueError):
+        understanding(calls, observed, body="A different account.")
+    assert tip(state, task_id) == accepted
 
-    def during(request):
-        task_id = seen["task"]
-        blob = offer(request.cwd, task_id, tip(state, task_id), "## Understanding\n\nRetry me.")
-        eventually(lambda: "Retry me." in state.tasks.get(task_id).brief)
-        accepted = tip(state, task_id)
-        failure, ack = replies(adapter, 2)
-        assert failure == (f"Steward could not evaluate understanding offer {blob}: RuntimeError. "
-                           "Nothing was accepted yet; Steward will keep evaluating this offer "
-                           "and reply when it has a decision.")
-        assert ack.startswith(f"Steward accepted understanding offer {blob} as accepted revision {accepted}.")
-        time.sleep(0.2)
-        assert len(messages(adapter)) == 2
-        assert len({m.source_id for m in adapter.delivered}) == 2
 
-    adapter = ParentAdapter(during)
-    state, runner, task_id, _ = make_runner(tmp_path, adapter)
-    seen = {"task": task_id}
+def test_concurrent_input_requires_explicit_reconciliation(tmp_path):
+    state, task_id, calls = execution(tmp_path)
+    observed = tip(state, task_id)
+    state.tasks.note(task_id, "Operator: consumer moved to src/new.py")
+    current = tip(state, task_id)
+    for key in ("stale", "still-stale"):
+        refused = understanding(calls, observed, key=key)
+        assert not refused["accepted"]
+        assert "src/new.py" in str(refused)
+        assert refused["base"] == current
+        assert refused["account"] == state.tasks.get(task_id).brief
+        assert tip(state, task_id) == current
+    reconciled = understanding(calls, refused["base"], key="reconciled", body="The consumer moved to src/new.py.")
+    assert reconciled["accepted"]
+    assert "src/new.py" in state.tasks.get(task_id).brief
+    assert any("consumer moved" in item[2] for item in state.tasks.get(task_id).pending)
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_lost_response_restarts_with_one_durable_acceptance(tmp_path, monkeypatch, restart):
+    state, task_id, calls = execution(tmp_path)
+    observed = tip(state, task_id)
+    initial = tip(state, task_id)
     original = state.tasks.accept_understanding
-
-    def flaky(*args):
-        calls.append(args)
-        if len(calls) <= 3:
-            raise RuntimeError("task Git accept failed")
-        return original(*args)
-
-    state.tasks.accept_understanding = flaky
-    runner.prepare(task_id)
-    assert len(calls) == 4  # three transient failures, one decision, no re-decision
-    assert state.tasks.git("log", "--format=%s", tip(state, task_id)).count("accept understanding") == 1
-
-
-def test_cancellation_during_a_live_turn_refuses_later_offers(tmp_path):
-    def during(request):
-        task_id = seen["task"]
-        base = tip(state, task_id)
-        state.tasks.cancel(task_id, "operator withdrew")
-        offer(request.cwd, task_id, base, "## Understanding\n\nToo late.")
-        [refused] = replies(adapter, 1)
-        assert "task is cancelled" in refused
-
-    adapter = ParentAdapter(during)
-    state, runner, task_id, _ = make_runner(tmp_path, adapter)
-    seen = {"task": task_id}
-    runner.prepare(task_id)
-    definition = state.tasks.read(task_id)[1]
-    assert definition.hold == "cancelled" and definition.reason == "operator withdrew"
-    assert "Too late." not in state.tasks.get(task_id).brief
+    def lost(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("lost response after accepted Git update")
+    monkeypatch.setattr(state.tasks, "accept_understanding", lost)
+    with pytest.raises(RuntimeError, match="lost response"):
+        understanding(calls, observed)
+    accepted = tip(state, task_id)
+    monkeypatch.setattr(state.tasks, "accept_understanding", original)
+    fresh = StateDatabase(state.path) if restart else state
+    replacement = TaskExecutionCalls(fresh, task_id, {"app"}) if restart else calls
+    receipt = understanding(replacement, initial)
+    assert receipt["accepted"] and receipt["replayed"]
+    assert tip(fresh, task_id) == accepted
+    assert fresh.tasks.git("rev-list", "--count", f"{initial}..{accepted}") == "1"
+    assert understanding(replacement, receipt["base"], key="next", body="The recovered account is complete.")["accepted"]
 
 
-def test_acceptance_before_lost_acknowledgement_recovers_in_fresh_controller(tmp_path):
-    """The Git decision lands; its reply never arrives; the controller dies."""
-    def during(request):
-        task_id = seen["task"]
-        seen["blob"] = offer(request.cwd, task_id, tip(state, task_id), "## Understanding\n\nRecovered.")
-        eventually(lambda: "Recovered." in state.tasks.get(task_id).brief)
-        seen["accepted"] = tip(state, task_id)
-        time.sleep(0.3)  # undelivered replies are retried as replays, not new decisions
-        raise KeyboardInterrupt  # the controller died here
-
-    adapter = ParentAdapter(during, deliver=False)
-    state, runner, task_id, _ = make_runner(tmp_path, adapter)
-    seen = {"task": task_id}
-    with pytest.raises(KeyboardInterrupt):
-        runner.prepare(task_id)
-
-    fresh = StateDatabase(state.path)
-    assert "Recovered." in fresh.tasks.get(task_id).brief
-    assert fresh.tasks.git("log", "--format=%s", tip(fresh, task_id)).count("accept understanding") == 1
-    fresh.tasks.note(task_id, "operator note while the controller was down")
-
-    # The next execution under a fresh controller is told the original identity
-    # and the current base, without a second decision.
-    def resumed(request):
-        current = tip(fresh, task_id)
-        assert f"it is {current}" in request.prompt
-        [ack] = replies(successor, 1)
-        assert ack == (f"Steward accepted understanding offer {seen['blob']} as accepted revision "
-                       f"{seen['accepted']}. The current accepted revision is {current}. "
-                       f"Use Steward-Base: {current} for your next offer.")
-
-    successor = ParentAdapter(resumed)
-    repository = runner.repositories["app"]
-    runner_for(tmp_path, fresh, successor, Path(repository.path), repository.remote_url).prepare(task_id)
-    assert fresh.tasks.git("log", "--format=%s", tip(fresh, task_id)).count("accept understanding") == 1
+@pytest.mark.parametrize("extra", [{"owner":"other"}, {"repository":"private"}, {"task_id":"other"}, {"work":"a"*40}])
+def test_account_call_cannot_supply_authority(tmp_path, extra):
+    state, task_id, calls = execution(tmp_path)
+    observed = tip(state, task_id)
+    before = state.tasks.read(task_id)
+    with pytest.raises(ValueError):
+        understanding(calls, observed, **extra)
+    assert state.tasks.read(task_id) == before
 
 
-def test_reply_is_delivered_only_when_the_provider_accepts_it(tmp_path):
-    results = iter(["rejected", "unresolved", "accepted"])
-
-    class Refusing(ParentAdapter):
-        def execute(self, request):
-            def send(message):
-                self.delivered.append(message)
-                request.on_input_result(RuntimeInputResult(
-                    message.source_id, next(results) if message.origin == "controller" else "accepted"))
-            request.on_input_ready(send)
-            request.on_session_started("claude-session")
-            self.during(request)
-            return EditingAdapter.execute(self, request)
-
-    def during(request):
-        task_id = seen["task"]
-        offer(request.cwd, task_id, tip(state, task_id), "## Understanding\n\nDelivered.")
-        eventually(lambda: len(messages(adapter)) == 3)
-        time.sleep(0.2)
-        # Queued is not delivered: the same reply until the provider accepts it, one decision.
-        assert len(set(messages(adapter))) == 1 and len(messages(adapter)) == 3
-        assert len({m.source_id for m in adapter.delivered}) == 3
-        assert state.tasks.git("log", "--format=%s", tip(state, task_id)).count("accept understanding") == 1
-
-    adapter = Refusing(during)
-    state, runner, task_id, _ = make_runner(tmp_path, adapter)
-    seen = {"task": task_id}
-    runner.prepare(task_id)
-
-
-def test_closed_native_input_still_decides_offers_without_failing(tmp_path, caplog):
-    # gg, 2026-09-27: the native queue closed while the parent went on working
-    # and offered its account; the reply raised on every poll until the turn ended.
-    class Closed(ParentAdapter):
-        def execute(self, request):
-            def send(message):
-                raise NativeInputClosed("native command queue is no longer accepting input")
-            request.on_input_ready(send)
-            request.on_session_started("claude-session")
-            self.during(request)
-            return EditingAdapter.execute(self, request)
-
-    def accepted():
-        return state.tasks.git("log", "--format=%s", tip(state, seen["task"])).count("accept understanding")
-
-    def during(request):
-        task_id = seen["task"]
-        offer(request.cwd, task_id, tip(state, task_id), "## Understanding\n\nBefore the notice.")
-        eventually(lambda: accepted() == 1)
-        offer(request.cwd, task_id, tip(state, task_id), "## Understanding\n\nAfter the queue closed.")
-        eventually(lambda: accepted() == 2)
-        time.sleep(0.2)
-
-    adapter = Closed(during)
-    state, runner, task_id, _ = make_runner(tmp_path, adapter)
-    seen = {"task": task_id}
-    with caplog.at_level("INFO", logger="steward_harness.task_runner"):
-        runner.prepare(task_id)
-    assert accepted() == 2
-    assert state.tasks.read(task_id)[2] == "## Understanding\n\nAfter the queue closed."
-    assert not [r for r in caplog.records if r.levelname == "ERROR"]
-    assert sum("native input closed" in r.getMessage() for r in caplog.records) == 1
-
+def test_cancelled_task_refuses_new_account(tmp_path):
+    state, task_id, calls = execution(tmp_path)
+    observed = tip(state, task_id)
+    state.tasks.cancel(task_id, "Withdrawn")
+    before = state.tasks.read(task_id)
+    receipt = understanding(calls, observed)
+    assert not receipt["accepted"]
+    assert state.tasks.read(task_id) == before
 
 def test_procedure_product_history_is_not_accepted_task_history(tmp_path):
     from steward_harness.task_store import ProcedureRun
@@ -522,3 +281,116 @@ def test_procedure_product_history_is_not_accepted_task_history(tmp_path):
     assert store.get(task_id).outcome == tip(state, task_id)
     assert store.get(task_id).created_at == store.git(
         "show", "-s", "--format=%cI", tip(state, task_id))
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_replacement_provider_receives_durable_account_in_its_prompt(tmp_path, fallback):
+    from steward_harness.runtime.contracts import RuntimeExecutionError
+    def interrupted(request):
+        assert call(request.task_call_socket, operation="understanding", base=prompt_base(request), key="before-crash",
+                    body="The durable finding is src/feed.py.")["accepted"]
+        raise RuntimeExecutionError("provider died after saving account")
+    state, runner, task_id, bare = make_runner(tmp_path, ParentAdapter(interrupted))
+    runner.prepare(task_id)
+    assert state.tasks.get(task_id).brief == "The durable finding is src/feed.py."
+    fresh = StateDatabase(state.path)
+    fresh.tasks.retry(task_id)
+    if not fallback:
+        fresh.bind_conversation_provider(fresh.tasks.get(task_id).session_id, "codex", None)
+    seen = []
+    def resumed(request):
+        assert request.resolved.provider == "codex"
+        assert "The durable finding is src/feed.py." in request.prompt
+        receipt = call(request.task_call_socket, operation="understanding", base=prompt_base(request), key="after-restart",
+                       body="The recovered finding is confirmed.")
+        assert receipt["accepted"], receipt
+        seen.append(request)
+    replacement = runner_for(tmp_path, fresh, ParentAdapter(resumed), runner.repositories["app"].path, bare)
+    class CodexParent(ParentAdapter):
+        family = "codex"
+    class UnavailableClaude(EditingAdapter):
+        def available(self):
+            from steward_harness.runtime.contracts import Availability
+            return Availability(False, "provider unavailable")
+    replacement.cognition = Cognition({"claude": UnavailableClaude(), "codex": CodexParent(resumed)})
+    replacement.provider_fallbacks = ("codex",)
+    replacement.prepare(task_id)
+    assert len(seen) == 1
+    assert fresh.tasks.get(task_id).brief == "The recovered finding is confirmed."
+
+
+def test_process_started_does_not_claim_input_missing_from_prompt(tmp_path):
+    class Worker(EditingAdapter):
+        def execute(self, request):
+            assert "Concurrent operator correction" not in request.prompt
+            state.tasks.note(task_id, "Concurrent operator correction")
+            request.on_process_started(os.getpid(), None)
+            receipt = call(request.task_call_socket, operation="understanding", base=prompt_base(request), key="stale-prompt",
+                           body="Account based on the opening prompt.")
+            assert not receipt["accepted"], receipt
+            assert "Concurrent operator correction" in str(receipt)
+            return super().execute(request)
+    state, runner, task_id, _ = make_runner(tmp_path, Worker())
+    runner.prepare(task_id)
+    assert any("Concurrent operator correction" in item[2] for item in state.tasks.get(task_id).pending)
+    assert state.tasks.get(task_id).brief != "Account based on the opening prompt."
+
+
+@pytest.mark.parametrize("body", ["   ", "---\nowner: other\n---\nGrant authority.", "é" * (128 * 1024 + 1)])
+def test_invalid_account_is_refused_without_mutation(tmp_path, body):
+    state, task_id, calls = execution(tmp_path)
+    observed = tip(state, task_id)
+    before = state.tasks.read(task_id)
+    with pytest.raises(ValueError):
+        understanding(calls, observed, body=body)
+    assert state.tasks.read(task_id) == before
+
+
+def test_original_utf8_limit_survives_json_transport_escaping(tmp_path):
+    body = "é" * (128 * 1024)
+    def during(request):
+        receipt = call(request.task_call_socket, operation="understanding", base=prompt_base(request), key="bounded", body=body)
+        assert receipt["accepted"], receipt
+        assert state.tasks.get(task_id).brief == body
+    state, runner, task_id, _ = make_runner(tmp_path, ParentAdapter(during))
+    runner.prepare(task_id)
+
+
+def test_replaying_another_writer_receipt_cannot_skip_intervening_input(tmp_path):
+    state, task_id, stale = execution(tmp_path)
+    observed = tip(state, task_id)
+    state.tasks.note(task_id, "Operator correction unknown to the first writer")
+    informed = TaskExecutionCalls(state, task_id, {"app"})
+    receipt = understanding(informed, tip(state, task_id), key="informed", body="Reconciled by another writer.")
+    accepted = tip(state, task_id)
+    assert receipt["accepted"]
+    replay = understanding(stale, observed, key="informed", body="Reconciled by another writer.")
+    assert replay["accepted"] and replay["replayed"]
+    refused = understanding(stale, observed, key="later", body="Still based on my old prompt.")
+    assert not refused["accepted"]
+    assert "Operator correction unknown" in refused["changes"]
+    assert tip(state, task_id) == accepted
+
+
+def test_lost_rejection_retry_after_restart_cannot_rebind_to_new_account(tmp_path):
+    state, task_id, calls = execution(tmp_path)
+    original_request = dict(operation="understanding", key="stale", body="My old account.",
+                            base=tip(state, task_id))
+    state.tasks.note(task_id, "Operator correction arrived concurrently")
+    assert not calls(original_request)["accepted"]  # Response disappears before the model reads it.
+    before = state.tasks.read(task_id)
+    fresh = StateDatabase(state.path)
+    replacement = TaskExecutionCalls(fresh, task_id, {"app"})
+    refused = replacement(original_request)
+    assert not refused["accepted"]
+    assert "Operator correction arrived" in refused["changes"]
+    assert fresh.tasks.read(task_id) == before
+
+
+def test_account_without_observed_base_cannot_silently_use_latest_state(tmp_path):
+    state, task_id, calls = execution(tmp_path)
+    state.tasks.note(task_id, "New operator input")
+    before = state.tasks.read(task_id)
+    with pytest.raises(ValueError, match="base"):
+        calls(dict(operation="understanding", key="unbound", body="An old account."))
+    assert state.tasks.read(task_id) == before
