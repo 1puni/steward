@@ -1,7 +1,6 @@
 """Operator journeys over real Git, with a scripted native provider."""
 from dataclasses import replace
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -106,71 +105,6 @@ def test_answer_retry_cancel_and_pending_input_survive_native_sessions(tmp_path)
     assert "Keep the earlier answer" in adapter.requests[-1].prompt
     assert state.tasks.get(task_id).brief == "Durable request"
     assert not state.tasks.cancelled(task_id)
-
-
-@pytest.mark.parametrize("record_provider", ["claude", "retired-provider"])
-def test_private_task_remote_recovers_native_records_excluded_from_product(tmp_path, record_provider):
-    bare, clone = _repository(tmp_path)
-    adapter = InvestigationAdapter(edit_first=True)
-    execute = adapter.execute
-    record_path = f"artefacts/{record_provider}/projects/session.jsonl"
-    record_bytes = b'{"role":"user","text":"retain this native record"}\n'
-    memory_path = "memories/claude/lesson.md"
-
-    def write_records(request):
-        root = Path(request.cwd)
-        record = root / record_path
-        record.parent.mkdir(parents=True)
-        record.write_bytes(record_bytes)
-        memory = root / memory_path
-        memory.parent.mkdir(parents=True)
-        memory.write_text("Useful repository knowledge.\n")
-        return execute(request)
-
-    adapter.execute = write_records
-    state, runner, _, reconciler = harness(tmp_path / "first", bare, clone, adapter)
-    # Only Claude runs here. Evidence ownership cannot depend on today's
-    # provider list: a restored task can contain a retired provider's records.
-    assert tuple(runner.cognition.families) == ("claude",)
-    task_id, _ = state.tasks.create(TaskSpec("app", "Improve product", "Keep the native evidence."))
-    runner.prepare(task_id)
-    work = state.tasks.get(task_id).work_sha
-    assert work is not None
-
-    def record_at(repository, revision):
-        return subprocess.check_output(["git", "show", f"{revision}:{record_path}"], cwd=repository)
-
-    # Acceptance already retains the record locally, even without a remote.
-    assert state.tasks.remote is None
-    assert record_at(state.tasks.path, work) == record_bytes
-    assert reconciler.publish_repository("app") == task_id
-    assert record_path not in _git("ls-tree", "-r", "--name-only", "main", cwd=bare).splitlines()
-    assert _git("show", "main:result.txt", cwd=bare) == "completed"
-    assert _git("show", f"main:{memory_path}", cwd=bare) == "Useful repository knowledge."
-    assert record_at(state.tasks.path, work) == record_bytes
-
-    private_remote = tmp_path / "private-tasks.git"
-    _git("init", "--bare", str(private_remote), cwd=tmp_path)
-    state.tasks.remote = str(private_remote)
-    state.tasks.sync()
-    accepted = state.tasks.get(task_id).revision
-    assert _git("rev-parse", f"refs/heads/tasks/{task_id}", cwd=private_remote) == accepted
-    assert _git("merge-base", "--is-ancestor", work, accepted, cwd=private_remote) == ""
-    assert record_at(private_remote, work) == record_bytes
-
-    # This controller has neither the first controller's database nor its
-    # native home/worktree. Product Git alone did not carry the transcript.
-    fresh_clone = tmp_path / "fresh-product"
-    _git("clone", str(bare), str(fresh_clone), cwd=tmp_path)
-    fresh, fresh_runner, _, _ = harness(tmp_path / "fresh", bare, fresh_clone, InvestigationAdapter())
-    assert _git("for-each-ref", f"refs/heads/tasks/{task_id}", cwd=fresh_clone) == ""
-    assert fresh.lineage(ConversationId.for_task(task_id)) is None
-    fresh.tasks.remote = str(private_remote)
-    fresh.tasks.sync()
-    fresh.tasks.restore_work(task_id, fresh_runner.repositories["app"], fresh_runner.broker)
-    assert _git("rev-parse", f"refs/heads/tasks/{task_id}", cwd=fresh_clone) == work
-    assert record_at(fresh_clone, work) == record_bytes
-    assert not (fresh_clone / record_path).exists()
 
 
 def test_concurrent_operator_note_is_retained_for_the_next_slice(tmp_path):

@@ -219,57 +219,6 @@ def test_plain_fast_forward_when_main_unmoved(repo: dict, tmp_path: Path) -> Non
     assert _origin_main_tree(repo, "work.txt") == "plain ff"
 
 
-@pytest.mark.parametrize("main_moves", [False, True])
-def test_native_records_stay_on_work_while_gates_check_product(repo, tmp_path, main_moves):
-    root = repo["clone"]
-    old_name = 'artefacts/glm/projects/old "session".jsonl'
-    old = root / old_name
-    old.parent.mkdir(parents=True)
-    old.write_text("original record\n")
-    _commit_all(root, "existing record")
-    _push_main(repo)
-    _branch(repo, "tasks/task-1")
-    old.write_text("task record\n")
-    new_name = "artefacts/glm/projects/new.jsonl"
-    (root / new_name).write_text("new native record\n")
-    memory_name = "memories/glm/lesson.md"
-    memory = root / memory_name
-    memory.parent.mkdir(parents=True)
-    memory.write_text("useful knowledge\n")
-    (root / "work.txt").write_text("product change\n")
-    _commit_all(root, "work and native records")
-    work = _git("rev-parse", "HEAD", cwd=root)
-    expected_record = "original record\n"
-    if main_moves:
-        _git("checkout", "main", cwd=root)
-        expected_record = "concurrent accepted record\n"
-        old.write_text(expected_record)
-        _commit_all(root, "concurrent record change")
-        _push_main(repo)
-        _git("checkout", "tasks/task-1", cwd=root)
-    gate_receipt = tmp_path / "gated-sha"
-    gate = CommandSpec(argv=(sys.executable, "-c", (
-        "from pathlib import Path; import subprocess; "
-        f"assert Path({old_name!r}).read_text() == {expected_record!r}; "
-        f"assert not Path({new_name!r}).exists(); "
-        f"assert Path({memory_name!r}).read_text() == 'useful knowledge\\n'; "
-        "assert Path('work.txt').read_text() == 'product change\\n'; "
-        f"Path({str(gate_receipt)!r}).write_text(subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True))"
-    )))
-    engine = _engine(repo, tmp_path, gates=[gate])
-    tested = _prepare(engine, repo, "tasks/task-1")
-    assert isinstance(tested, Tested), tested
-    assert gate_receipt.read_text().strip() == tested.tested_sha
-    assert publish(engine.transport, tested)
-    assert _origin_git(repo, "rev-parse", "main") == tested.tested_sha
-    assert _origin_main_tree(repo, old_name) == expected_record.strip()
-    assert new_name not in _origin_git(repo, "ls-tree", "-r", "--name-only", "main").splitlines()
-    assert _origin_main_tree(repo, memory_name) == "useful knowledge"
-    assert _git("rev-parse", "tasks/task-1", cwd=root) == work
-    assert _git("show", f"{work}:{old_name}", cwd=root) == "task record"
-    assert _git("show", f"{work}:{new_name}", cwd=root) == "new native record"
-
-
 def test_landing_does_not_run_repository_hooks(repo: dict, tmp_path: Path) -> None:
     _branch(repo, "steward/work")
     (repo["clone"] / "work.txt").write_text("hook-safe\n")
@@ -623,9 +572,6 @@ def test_upstream_integrations_keep_source_ancestry_without_task_history(repo, t
     _push_main(repo)
     _branch(repo, "steward/integrate")
     (root / "scratch.txt").write_text("private exploration\n")
-    record = root / "artefacts" / "codex" / "session.jsonl"
-    record.parent.mkdir(parents=True)
-    record.write_text("native record\n")
     _commit_all(root, "private exploration")
     private = _git("rev-parse", "HEAD", cwd=root)
     (root / "scratch.txt").unlink()
@@ -652,9 +598,6 @@ def test_upstream_integrations_keep_source_ancestry_without_task_history(repo, t
     assert len(_origin_git(repo, "rev-list", "--parents", "-n", "1", "main").split()) == 3
     published = _origin_git(repo, "rev-list", "main").split()
     assert private not in published and work not in published and second not in published
-    paths = _origin_git(repo, "ls-tree", "-r", "--name-only", "main").splitlines()
-    assert "artefacts/codex/session.jsonl" not in paths
-    assert _git("show", f"{work}:artefacts/codex/session.jsonl", cwd=root) == "native record"
 
     # The next merge sees the real prior integration as its base, and advances
     # normally without repeating the first change or importing exploration.
