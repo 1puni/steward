@@ -10,8 +10,9 @@ recurrence. Deployment targets have [their own page](automatic-deployment.md).
 A task is one controller-accepted Git ref and one Markdown document. Product work
 branches are execution output, not admission authority. The accepted document owns
 the durable request, owner, decisions and retained findings. Execution and publication
-are questions about its retained Git commits and live locks. Native sessions and
-transport receipts stay private and machine-local; neither is needed for discovery.
+are questions about its retained Git commits and live locks. Native session records
+stay in the private retained task graph; provider runtime state and transport
+receipts stay machine-local. None is needed for task discovery.
 
 Use a globally unique task ID, including across managed repositories. Controller
 storage is `<state_db>.tasks.git`, holding `refs/heads/tasks/<id>`.
@@ -129,6 +130,12 @@ acknowledged; an interrupted slice preserves unacknowledged input. A publication
 holds the decision lease at its final cancellation check: cancellation committed first
 prevents push, while a push already holding that lease may land before cancellation.
 
+Task acceptance establishes local controller custody. Off-host recovery of the
+task graph and its native records requires a configured private `tasks.remote_url`
+and a successful sync of the accepted ref. Sync is asynchronous; product
+publication does not wait for it. A published product alone cannot recover the
+private transcript, and no configured task remote means local custody only.
+
 Result identity follows the latest outcome-changing accepted commit and outcome
 kind. Priority changes and additional notes do not fabricate another completion.
 Transport receipts and assessment-source deduplication are private local facts.
@@ -136,8 +143,21 @@ Transport receipts and assessment-source deduplication are private local facts.
 ## Integration and automatic reconciliation
 
 A completed task's native tree is collapsed to one outcome commit before rebasing.
-After integration the final commit has exactly one parent: the observed destination
-base. Stable commit metadata makes the same work/base pair reproduce the same
+The native-record root `artefacts/` is restored to the destination's versions in that
+outcome: new records remain on the task ref, existing destination records are
+unchanged, and provider memories remain ordinary proposed product content.
+This ownership is independent of the currently configured providers. Product
+deliverables belong in the repository's ordinary product paths, outside this
+retained-evidence root.
+The projection runs before reconciliation so transcript changes cannot create a
+product conflict, and again before gates against the observed destination.
+Native exploration and every captured transcript version remain reachable through
+the private accepted task graph. This does not select arbitrary unstaged work;
+the checkpoint still captures the complete nonignored working tree.
+
+After integration the final commit has the observed destination as its first
+parent, plus any accepted configured-upstream ancestry described above.
+Stable commit metadata makes the same work/base pair reproduce the same
 candidate. Gates run on that candidate; configured publication reviews receive
 that exact candidate/base pair. The push is an exact-base lease after checking that
 the candidate descends from the base, so it cannot rewrite published history.

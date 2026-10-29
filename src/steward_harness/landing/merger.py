@@ -22,7 +22,7 @@ from steward_harness.git_reconcile import (
 from steward_harness.git_transport import ControllerGitTransport, GitTransportError
 from steward_harness.landing.gates import GateResult, GateRunner
 from steward_harness.landing.worktree import WorktreeManager
-from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
+from steward_harness.runtime.native_evidence import CAPTURED_ROOT, EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 
@@ -144,6 +144,18 @@ class PromotionEngine:
                            f"Steward-Base: {expected_base_sha}\n")
                 def collapse(parent, *other_parents):
                     tree = self._agent_git("rev-parse", "HEAD^{tree}", cwd=worktree)
+                    # Native records belong to the retained work, including
+                    # providers no longer configured. Project their owning root
+                    # before reconciliation so they cannot cause product conflicts.
+                    self._agent_git("read-tree", tree, cwd=worktree)
+                    self._agent_git("rm", "-r", "-q", "--cached", "--ignore-unmatch",
+                                    "--", CAPTURED_ROOT, cwd=worktree)
+                    kept = self._agent_git("ls-tree", "-r", "-z", "--full-tree",
+                                           parent, "--", CAPTURED_ROOT, cwd=worktree)
+                    if kept:
+                        agent_git(self.execution_broker, "update-index", "-z", "--index-info",
+                                  cwd=worktree, input_text=kept, timeout=120)
+                    tree = self._agent_git("write-tree", cwd=worktree)
                     sha = agent_git(self.execution_broker,
                         *steward_commit_argv("commit-tree", tree, "-p", parent,
                                              *(arg for sha in other_parents for arg in ("-p", sha))),
@@ -152,6 +164,8 @@ class PromotionEngine:
                     if self.execution_broker.path_exists(worktree / EVIDENCE_PENDING):
                         raise RuntimeExecutionError("native evidence preservation is pending; checkout retained")
                     self._agent_git("reset", "--hard", sha, cwd=worktree)
+                    self._agent_git("clean", "-f", "-d", "-q", "--",
+                                    CAPTURED_ROOT, cwd=worktree)
                     return sha
                 collapse(fork)
                 error = reconcile_git(
