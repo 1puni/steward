@@ -2757,3 +2757,31 @@ def _document(path):
 
 def _video(path):
     return (OutboundArtifact(ArtifactKind.VIDEO, str(path)),)
+
+
+def test_outbox_upload_refuses_a_symlink_swapped_after_resolution(tmp_path, monkeypatch):
+    root, outbox = tmp_path / 'delivery', tmp_path / 'outbox'
+    root.mkdir()
+    outbox.mkdir()
+    media = root / 'report.pdf'
+    media.write_bytes(b'public')
+    private = tmp_path / 'controller-only.pdf'
+    private.write_bytes(b'synthetic secret')
+    (outbox / '001.json').write_text(json.dumps({'document': str(media), 'thread_id': 8}))
+    service = _service(tmp_path, topics={'steward': 8}, delivery_roots=[str(root)],
+                       delivery_outbox_dir=str(outbox),
+                       delivery_quarantine_dir=str(tmp_path / 'quarantine'))
+    resolve = service._resolve_delivery_artifact
+    def swap_after_resolution(raw):
+        result = resolve(raw)
+        media.unlink()
+        media.symlink_to(private)
+        return result
+    monkeypatch.setattr(service, '_resolve_delivery_artifact', swap_after_resolution)
+    uploads = []
+    monkeypatch.setattr(service.api, '_request', lambda *a, **kw: uploads.append(kw) or {'message_id': 1})
+    # The ordinary quarantine alert is separate from the refused file upload.
+    monkeypatch.setattr(service.api, 'send_message', lambda *a, **kw: 1)
+    service._drain_delivery_outbox()
+    assert uploads == []
+    assert list((tmp_path / 'quarantine').glob('*.json'))
