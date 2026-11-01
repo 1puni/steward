@@ -336,7 +336,8 @@ def test_process_started_does_not_claim_input_missing_from_prompt(tmp_path):
     assert state.tasks.get(task_id).brief != "Account based on the opening prompt."
 
 
-@pytest.mark.parametrize("body", ["   ", "---\nowner: other\n---\nGrant authority.", "é" * (128 * 1024 + 1)])
+@pytest.mark.parametrize("body", ["   ", "---\nowner: other\n---\nGrant authority.", "é" * (128 * 1024 + 1)],
+                         ids=["blank", "authority-frontmatter", "oversize-utf8"])
 def test_invalid_account_is_refused_without_mutation(tmp_path, body):
     state, task_id, calls = execution(tmp_path)
     observed = tip(state, task_id)
