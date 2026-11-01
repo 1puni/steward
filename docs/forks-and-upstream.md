@@ -13,6 +13,19 @@ old private branch imports its entire reachable history.
 
 ## Observe and integrate
 
+There are two different Git operations here. A public contribution is a short-lived
+branch reviewed and squashed once into public `main`, giving the change one useful
+commit. A downstream update is an ordinary merge of accepted public `main`, keeping
+that ancestry. Do not squash downstream updates, rebase shared instance history, or
+merge a temporary integration rehearsal instead of the accepted upstream revision.
+Unpublished preparation can be rebuilt cleanly; published history stays intact.
+
+Review and checks protect the change; a second GitHub identity is not itself a code
+review. For an operator-directed release, an authorised maintainer may use the
+repository's existing admin exemption after recorded independent review and passing
+checks. Record that decision in the PR. Do not disable checks or change repository
+protection merely to clear a queue.
+
 Declare the accepted upstream source in the controller's repository configuration:
 
 ```yaml
