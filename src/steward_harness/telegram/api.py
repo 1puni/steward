@@ -6,12 +6,15 @@ import logging
 import mimetypes
 import os
 import uuid
+from tempfile import SpooledTemporaryFile
 from hashlib import sha256
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from steward_harness.telegram.admin import open_media_file
 
 # httpx logs full request URLs at INFO, and these URLs embed the bot token
 # (`.../bot<token>/...`). Quiet it so tokens never reach journald or log grep.
@@ -75,7 +78,9 @@ def _retry_after(response: httpx.Response) -> float | None:
 class TelegramAPI:
     """Synchronous HTTP client for Telegram Bot API."""
 
-    def __init__(self, token: str, base_url: str = "https://api.telegram.org") -> None:
+    def __init__(self, token: str, base_url: str = "https://api.telegram.org", *,
+                 media_max_bytes: int | None = None) -> None:
+        self.media_max_bytes = media_max_bytes
         self.token = token.strip()
         root = base_url.rstrip("/")
         self.base_url = f"{root}/bot{self.token}"
@@ -294,6 +299,47 @@ class TelegramAPI:
             timeout=600.0,
         )
 
+    def send_video(
+        self,
+        chat_id: int,
+        video_path: str | Path,
+        caption: str | None = None,
+        topic_id: int | None = None,
+    ) -> int:
+        """Upload a video that plays in the chat; a document must be downloaded first."""
+        path = Path(video_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Video file not found: {path}")
+
+        data: dict[str, Any] = {"chat_id": str(chat_id), "supports_streaming": "true"}
+        if topic_id and topic_id > 1:
+            data["message_thread_id"] = str(topic_id)
+        if caption:
+            data["caption"] = caption
+        media_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+        return self._send_file(
+            "sendVideo", "video", path, data, media_type=media_type, timeout=600.0
+        )
+
+    def send_voice(
+        self,
+        chat_id: int,
+        voice_path: str | Path,
+        caption: str | None = None,
+        topic_id: int | None = None,
+    ) -> int:
+        """Upload MP3, M4A or OGG/Opus as a playable Telegram voice message."""
+        path = Path(voice_path)
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if topic_id and topic_id > 1:
+            data["message_thread_id"] = str(topic_id)
+        if caption:
+            data["caption"] = caption
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return self._send_file(
+            "sendVoice", "voice", path, data, media_type=media_type, timeout=600.0
+        )
+
     def _send_file(
         self,
         endpoint: str,
@@ -304,9 +350,26 @@ class TelegramAPI:
         media_type: str,
         timeout: float,
     ) -> int:
-        with path.open("rb") as file_handle:
+        # Callers validate the resolved path against delivery_roots. Pin its
+        # components again at the actual read: the agent may still be writing.
+        with SpooledTemporaryFile(max_size=1024 * 1024) as snapshot:
+            try:
+                with open_media_file(path.absolute()) as source:
+                    size = 0
+                    while True:
+                        chunk = source.read(64 * 1024)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if self.media_max_bytes is not None and size > self.media_max_bytes:
+                            raise ValueError("media exceeds configured Telegram cap")
+                        snapshot.write(chunk)
+            except (OSError, ValueError) as exc:
+                # No request has started; this is a refusal, never an ambiguous send.
+                raise TelegramAPIError(str(exc), status_code=400) from exc
+            snapshot.seek(0)
             result = self._request(
                 "POST", endpoint, timeout=timeout, data=data,
-                files={field_name: (path.name, file_handle, media_type)},
+                files={field_name: (path.name, snapshot, media_type)},
             )
         return result.get("message_id", 0)

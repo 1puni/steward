@@ -37,10 +37,6 @@ from steward_harness.state import (
 Transport = Literal["telegram", "desk", "rhythm"]
 
 
-_TASK_MARKER = "TASK_PROPOSAL:"
-_ACTION_MARKER = "TASK_ACTION:"
-
-
 @dataclass(frozen=True, slots=True)
 class ConversationTurnResult:
     """The stable visible result of one accepted inbound event."""
@@ -56,20 +52,6 @@ class ConversationTurnResult:
     def transport_reply(self) -> str:
         """The execution owns final narration; attached sources share its receipt."""
         return self.reply_text if self.execution_turn_id is None else ""
-
-
-def _retired_task_markers(reply: str) -> tuple[str, str | None]:
-    """Hide retired control lines and refuse their authority, regardless of syntax.
-
-    Historical completed turns replay their accepted receipts. Unaccepted output
-    is only narration; parsing an old proposal cannot make it an operation.
-    """
-    lines = reply.rstrip().splitlines()
-    visible = [line for line in lines if not line.startswith((_TASK_MARKER, _ACTION_MARKER))]
-    rejection = None if len(visible) == len(lines) else (
-        "Final task markers are retired; use a live task call and its receipt. No operation was performed."
-    )
-    return "\n".join(visible).strip(), rejection
 
 
 class ConversationService:
@@ -463,7 +445,7 @@ class ConversationService:
         candidate_sha = checkpoint.retain(
             WorldTurnWorktree(checkpoint.workspace(ConversationId(row["conversation_id"]).workspace),
                               row["base_sha"]),
-            event_id, row["episode_input"], _retired_task_markers(row["output"])[0],
+            event_id, row["episode_input"], row["output"].strip(),
             row["source_event_key"],
         )
         self._state.record_candidate(event_id, candidate_sha)
@@ -593,9 +575,9 @@ class ConversationService:
             current = self._state.prepared_turn(event_id)
             if current["state"] == "completed":
                 return current
-            visible, rejection = _retired_task_markers(current["output"])
+            # Reply text is narration only: operations are live task calls.
             return self._state.accept_turn(
-                event_id, visible_reply=visible, spec=None, rejection=rejection,
+                event_id, visible_reply=current["output"].strip(), spec=None, rejection=None,
             )
 
         if fresh and row["world_root"] is not None:

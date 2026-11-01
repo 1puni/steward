@@ -154,7 +154,7 @@ def test_pending_action_replays_with_repository_authority(tmp_path, allowed):
     restarted._state.tasks.transports = {"app": facts}
     result = restarted.accept_prepared(str(turn.turn_id))
     assert restarted._state.prepared_turn(str(turn.turn_id))["state"] == "completed"
-    assert "markers are retired" in result.task_rejection
+    assert result.task_rejection is None
     notes = tuple((k, t) for _, k, t, _ in state.tasks.get(task_id).pending)
     assert not notes
     restarted.accept_prepared(str(turn.turn_id))
@@ -348,6 +348,16 @@ def test_a_long_task_record_cannot_push_its_result_past_the_prompt_bound():
     assert "more characters on the task's branch" in request
     short = build_result_assessment_request(admitted, "done")
     assert "task's branch" not in short
+
+
+def test_an_assessment_is_told_a_named_file_reaches_nobody_unless_it_sends_it():
+    """10-17: a conversation promised a finished video "when it lands"; nothing sent it."""
+    from steward_harness.prompts import build_result_assessment_request
+
+    request = build_result_assessment_request("Render the trailer.", "Artifact: trailer.mp4")
+
+    assert "as text only" in request
+    assert "only if you send it now, with the telegram operation" in request
 
 
 def _day_after(state, task_id, days=1):
