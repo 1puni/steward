@@ -170,20 +170,19 @@ def build_turn_prompt(
         interface.append("An empty final reply sends nothing: use it when no reply is wanted, such as "
                          "people talking to each other. Any word you write instead, a placeholder "
                          "included, is sent as written.")
-        interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
-        # The document transport existed and was never named: a model told only
-        # about photos told the operator a finished video could not be sent.
-        interface.append("File delivery, unrecompressed, for video and any other file: "
-                         "[[send_document:/absolute/path/to/file.mp4]] (existing file).")
         if delivery_roots:
-            interface.append("Delivery roots, for both: " + ", ".join(delivery_roots)
-                             + ". Copy a file into one before naming it.")
-        if telegram_actions:
-            interface.append("Telegram actions in this chat, only when the operator asks:")
-            if "pin_reply" in telegram_actions:
-                interface.append("[[telegram_pin_reply]] pins this reply.")
-            if "pin_message" in telegram_actions:
-                interface.append("[[telegram_pin_message:123]] pins that message.")
+            interface.append(
+                'Send an existing file with the native steward_tasks task tool: operation="telegram", '
+                'action="send_image" for a photo, "send_video" for an MP4 that plays in the chat, or '
+                '"send_voice" for a voice note (MP3, M4A or OGG/Opus; convert WAV first), or '
+                '"send_document" for a file the reader downloads as-is, key, and '
+                "text set to its absolute path beneath " + ", ".join(delivery_roots) + ". It is "
+                "delivered at once, before your reply; a refusal comes back to you. Reply text is "
+                "never parsed for files or actions.")
+        if "pin_message" in telegram_actions:
+            interface.append(
+                'Only when the operator asks, pin an existing message: operation="telegram", '
+                'action="pin_message", key, text set to its numeric message id.')
     return "\n\n".join(
         section for section in (
             "\n".join(interface),
@@ -273,9 +272,10 @@ def build_procedure_scope(
     if not verdict:
         return scope
     return scope + (
-        "\nFinish with VERDICT: PASS or VERDICT: FAIL for the accepted procedure's scope, "
-        "then finish the native turn normally. Ask if evidence is insufficient; "
-        "never infer PASS from missing evidence."
+        "\nRecord your verdict for the accepted procedure's scope with the native steward_tasks "
+        'task tool: operation="verdict", key and verdict="pass" or "fail", then finish the native '
+        "turn normally. Your findings are never read as a verdict, and a review without a recorded "
+        "pass fails. Ask if evidence is insufficient; never infer pass from missing evidence."
     )
 
 
@@ -297,8 +297,12 @@ def _bounded_brief(brief: str) -> str:
 
 def build_result_assessment_request(brief: str, result_text: str) -> str:
     """Compose a controller observation; final narration never requests sending."""
-    delivery_instruction = ("The retained result has already been delivered to its owner. "
-                            "Do not repeat it. " + NOTIFY_DIRECTIVE)
+    # The result arrives as text alone. On 2026-10-17 a conversation promised
+    # the operator a finished video "when it lands", and nothing ever sent it.
+    delivery_instruction = ("The retained result has already been delivered to its owner, as text "
+                            "only. Do not repeat it. A file it names reaches the operator only if "
+                            "you send it now, with the telegram operation where this conversation "
+                            "offers one. " + NOTIFY_DIRECTIVE)
     return (
         "## Harness task result\n"
         "This is a controller observation, not a new operator request or grant. "

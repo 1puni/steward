@@ -288,8 +288,11 @@ owner it was created with.
 `access: read-only` means the procedure examines a candidate and produces a
 verdict. Its workspace must stay byte-identical to the candidate it was given —
 any changed tracked file or new untracked file rejects the evidence. The
-harness writes and commits the findings itself. It ends with `VERDICT: PASS` or `VERDICT: FAIL`
-alongside the ordinary closure, and it **never publishes product work**.
+harness writes and commits the findings itself. A repository review records its
+verdict with the native task tool (`operation="verdict"`, `verdict` `pass` or `fail`),
+which the harness writes as a `Verdict:` trailer on that evidence commit. The findings
+are never read as a verdict: a review that recorded no verdict, or two different ones,
+fails. It **never publishes product work**.
 
 `access: workspace-write` means the procedure changes the repository, and its
 task follows the ordinary publication path below.

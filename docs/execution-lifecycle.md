@@ -119,12 +119,12 @@ problem. Final narration is retained as findings only. Idle is source completion
 it leaves the ordinary integration, gate and publication obligation. Operator
 outcome and exact-revision target health remain separate observations.
 
-Candidate review procedures still return one `VERDICT: PASS` or `VERDICT: FAIL`
-line as structured gate evidence. This is a separate candidate-bound review
-contract, with missing or duplicate verdicts failing the gate; it cannot select a
-task disposition or send a message. Replacing the review evidence schema is a
-separate gate-interface change. Ordinary procedures and rhythms have no verdict
-requirement.
+Candidate review procedures record their gate evidence with the native task tool's
+`verdict` operation (`pass` or `fail`), held as intent like `close` and written as a
+`Verdict:` trailer on the review's evidence commit. Findings are never parsed for a
+verdict. A missing or conflicting verdict fails the gate. The call cannot select a task
+disposition or send a message, and only read-only repository reviews may make it.
+Ordinary procedures and rhythms are not asked for one.
 
 Ordinary task cognition has no routine invocation deadline; it ends at native completion,
 cancellation, controller shutdown or containment. Procedure runs keep the provider

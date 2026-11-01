@@ -12,7 +12,6 @@ from steward_harness.telegram.commands import (
 from steward_harness.telegram.format import (
     ArtifactKind,
     OutboundArtifact,
-    extract_artifact_markers,
     format_markdown_chunks,
     sanitize_markdown_for_telegram,
 )
@@ -29,7 +28,6 @@ __all__ = [
     "TelegramAPI",
     "TelegramAPIError",
     "TelegramService",
-    "extract_artifact_markers",
     "format_markdown_chunks",
     "parse_inbound_text",
     "sanitize_markdown_for_telegram",

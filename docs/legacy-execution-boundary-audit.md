@@ -27,8 +27,8 @@ recommendations below; their revision-scoped evidence stays historical.
 | C: interrupted rhythms | `768d757a` retains interval obligations; `eeaaf067` reconciles continuation with callable notifications. | Uncertain external effects require explicit continuation, not inferred success. |
 | E: native task completion | `eb15d7b2`/`d5d875a5` removed suffix parsing but required typed close. The current change derives idle after correlated native completion and teardown, including no-diff/empty-reply turns, and removes revision-after-close repair for accepted understanding. | Optional ask/continue supplies state the adapters cannot yet map. Native question callbacks and provider goals need a separate direct mapping; prose is not scored. |
 | F: ordinary world completion | Successful empty replies now retain and accept their own world work and action receipts by default, just like automatic turns. | Low-level embedding callers can still explicitly require output. Truncation, errors, missing native completion and cancellation remain failures. |
-| F: notification instructions | `eb15d7b2` removed silence/notification markers. Finance's remaining `NOTIFY:` instruction now uses the shared native notification interface; reflection and security-review instructions no longer demand close. Retired task markers are refused without enforcing their obsolete syntax. | Notification is an explicit send decision, never inferred from completed cognition. |
-| Candidate reviews | One exact-candidate `VERDICT: PASS` or `VERDICT: FAIL` line remains gate evidence. It need not be the final line. | Native execution success does not tell whether a review passed. Missing/conflicting evidence still fails the gate. |
+| F: notification instructions | `eb15d7b2` removed silence/notification markers. Finance's remaining `NOTIFY:` instruction now uses the shared native notification interface; reflection and security-review instructions no longer demand close. Retired task markers are ordinary reply text. | Notification is an explicit send decision, never inferred from completed cognition. |
+| Candidate reviews | The `VERDICT:` line is retired: a review records `verdict` through the native task tool, written as a `Verdict:` trailer on its evidence commit. | Native execution success does not tell whether a review passed. Missing/conflicting evidence still fails the gate. |
 | Attachments and pins | Existing transport syntax names payloads and message-bound actions under path/permission checks. | Completion state cannot supply a file path or operator pin decision. |
 | G: persistent processes | Provider homes persist, but processes remain invocation-scoped. | Process reuse still needs writer exclusion and is outside this correction. |
 
@@ -380,17 +380,15 @@ queries and closure now use the native tool. The former `QUESTION: TASK_QUERY`
 fallback is removed. The separate candidate-review verdict remains structured
 gate evidence, with its reason for staying recorded in the closure contract.
 
-The final-prose sweep also found two transport representations that stay in this
-change. `[[send_image:...]]` and `[[send_document:...]]` name message attachments,
-subject to existing path and receipt checks; they do not decide whether an
-automatic run sends. Configured Telegram pin directives stay with the transport
-receipt because `pin_reply` needs the actual delivered message identity and
-pin retries share that message's durable delivery record. They retain the existing
-configured-chat permission checks and operator-request policy; they do not
-select execution closure or notification opt-in. Moving these actions to a separate API must preserve that
-message/receipt binding; this change does not introduce an independent pin queue.
-Retired `TASK_PROPOSAL`/`TASK_ACTION` lines are rejected uniformly without parsing
-payloads or demanding a final-line position. They cannot admit or steer work, including
+The final-prose sweep also found two transport representations that stayed in this
+change: `[[send_image:...]]`/`[[send_document:...]]` attachment markers and
+`[[telegram_pin_reply]]`/`[[telegram_pin_message:N]]` directives. Both have since
+moved to the native task tool's `telegram` operation, which sends or pins at once
+with its own keyed receipt, and reply text is no longer parsed. `pin_reply` was
+retired rather than moved: it needed the identity of a reply that does not exist
+while the turn asking for it runs, and no instance had used it.
+Retired `TASK_PROPOSAL`/`TASK_ACTION` lines are no longer recognised at all: a reply
+that still carries one is delivered as written and admits or steers nothing, including
 on recovery. The original raw output remains recorded. No `SILENT`, `QUESTION: NONE`, `DISPOSITION:` or
 `NOTIFY:` token controls execution or automatic sending.
 

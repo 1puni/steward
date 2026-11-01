@@ -16,7 +16,7 @@ from steward_harness.git import (
     steward_commit_argv,
 )
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-from steward_harness.task_lock import DISPOSITION_TRAILER, REASON_TRAILER
+from steward_harness.task_lock import DISPOSITION_TRAILER, REASON_TRAILER, VERDICT_TRAILER
 
 
 class WorktreeCheckpointError(RuntimeError):
@@ -32,6 +32,8 @@ class TickClosure:
     blocking_question: str | None = None
     # Final narration is evidence only, independent of the close operation.
     findings: str = ""
+    # A review's verdict call; its findings never stand in for one.
+    verdict: Literal["pass", "fail"] | None = None
 
 
 def _one_line(value: str) -> str:
@@ -116,11 +118,12 @@ class WorktreeCheckpointer:
         findings: str | None = None,
         execution: str | None = None,
         task_revision: str | None = None,
+        verdict: str | None = None,
     ) -> None:
         """Save the staged tree — and the slice with it.
 
         This commit is the whole record of the execution slice it closes.
-        `disposition` and `reason` are written as trailers and `findings` as
+        `disposition`, `reason` and a review's `verdict` are written as trailers and `findings` as
         the message body, so how the slice ended, why, and what it concluded
         are metadata about the commit rather than content in it, which the
         session cannot edit.
@@ -136,6 +139,8 @@ class WorktreeCheckpointer:
                 trailers += f"\nSteward-Task-Revision: {task_revision}"
             if reason and reason.strip():
                 trailers += f"\n{REASON_TRAILER}: {_one_line(reason)}"
+            if verdict is not None:
+                trailers += f"\n{VERDICT_TRAILER}: {verdict}"
             message += ("-m", trailers)
         self._git(
             *steward_commit_argv(

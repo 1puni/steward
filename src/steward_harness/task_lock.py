@@ -9,6 +9,8 @@ from steward_harness.lease import Lease
 #: The trailers the harness writes on every commit that closes a slice.
 DISPOSITION_TRAILER = "Disposition"
 REASON_TRAILER = "Reason"
+#: A read-only review's recorded call, never read off its findings.
+VERDICT_TRAILER = "Verdict"
 
 
 def task_lock(root: str | Path, task_id: object, *, timeout: float = 0) -> Lease:

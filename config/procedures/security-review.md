@@ -2,5 +2,6 @@ Review the complete exact candidate tree, including defects predating its latest
 Use the supplied base only as additional context, never as the boundary of the review.
 Inspect reachable execution paths, privilege boundaries, credential handling and
 external publication. Explain findings with concrete paths and impact. Do not modify
-inputs. If evidence is insufficient, ask a precise question. Otherwise include exactly
-one `VERDICT: PASS` or `VERDICT: FAIL` line. Finish the native turn normally; no close call is required.
+inputs. If evidence is insufficient, ask a precise question. Otherwise record one verdict
+with the native task tool (`operation="verdict"`, `pass` or `fail`) and finish the native
+turn normally; no close call is required.
