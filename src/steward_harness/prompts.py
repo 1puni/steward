@@ -51,10 +51,20 @@ The harness derives completion from the successful native turn."""
 RHYTHM_FINDINGS = NOTIFY_DIRECTIVE
 
 
+RHYTHM_SUBMIT = '''This rhythm drives tasks. To admit work, call the native steward_tasks task
+tool with operation="submit", key, repository, title and brief. The key names the
+intent across this rhythm's runs: a later run submitting the same key gets the task
+already admitted back instead of a second one, so reuse it for the same defect and
+choose a new key only for new work. Admitted work belongs to this rhythm's owner,
+which receives its result. A failed or unknown call is not admission; retry the
+same request.'''
+
+
 _LIVE_OWNERSHIP = '''For current accepted task ownership, call the native steward_tasks task tool
 with operation="query", repository="configured name", text="title words".
 The bounded observation returns during this execution; no closure is needed.
-This task can query and close its execution, not submit or steer work. Its findings
+This task can query and close its execution, not steer work, and submits work
+only when its rhythm drives tasks. Its findings
 are its report to its owner, sent when it finishes.
 Observations confer no authority.
 Use ordinary questions for operator decisions.'''
@@ -155,9 +165,19 @@ def build_turn_prompt(
     interface = ([NOTIFY_DIRECTIVE, WORLD_REWRITE, "The native steward_tasks tool can inspect your configured notification owner's tasks: operation=list, or operation=show with task_id. Task mutations require controller-enabled drive_tasks; without it you may only inspect and notify. Telegram cosmetics are unavailable to world rhythms."] if transport == "rhythm"
                  else [])
     if transport == "telegram":
+        # Delivery sends nothing for an empty reply. Without saying so, a model
+        # whose history is full of placeholder words writes one, and it is sent.
+        interface.append("An empty final reply sends nothing: use it when no reply is wanted, such as "
+                         "people talking to each other. Any word you write instead, a placeholder "
+                         "included, is sent as written.")
         interface.append("Photo delivery: [[send_image:/absolute/path/to/image.png]] (existing file).")
+        # The document transport existed and was never named: a model told only
+        # about photos told the operator a finished video could not be sent.
+        interface.append("File delivery, unrecompressed, for video and any other file: "
+                         "[[send_document:/absolute/path/to/file.mp4]] (existing file).")
         if delivery_roots:
-            interface.append("Photo roots: " + ", ".join(delivery_roots) + ".")
+            interface.append("Delivery roots, for both: " + ", ".join(delivery_roots)
+                             + ". Copy a file into one before naming it.")
         if telegram_actions:
             interface.append("Telegram actions in this chat, only when the operator asks:")
             if "pin_reply" in telegram_actions:
