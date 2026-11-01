@@ -21,7 +21,7 @@ from steward_harness.landing.checkpoint import (
 )
 from steward_harness.landing.worktree import WorktreeError, WorktreeManager
 from steward_harness.runtime.native_evidence import CAPTURED_ROOT
-from steward_harness.prompts import RHYTHM_FINDINGS, build_task_prompt, build_procedure_scope
+from steward_harness.prompts import RHYTHM_FINDINGS, RHYTHM_SUBMIT, build_task_prompt, build_procedure_scope
 from steward_harness.provider_types import ProviderFamily
 from steward_harness.runtime.contracts import (
     NativeInputClosed, RuntimeExecutionError, RuntimeInput, RuntimeInputResult, RuntimeUnavailable,
@@ -168,8 +168,10 @@ class TaskRunner:
         actor_email: str = "steward@localhost",
         poll_seconds: float = 5,
         telegram_admin=None,
+        driving_rhythms: frozenset[str] = frozenset(),
     ) -> None:
         self.telegram_admin = telegram_admin
+        self.driving_rhythms = driving_rhythms
         self.state = state
         self.repositories = dict(repositories)
         self.transports = dict(transports)
@@ -644,8 +646,12 @@ class TaskRunner:
                 "Discover relevant evidence through their files and Git history. "
                 "Return findings and missing evidence, not a gate verdict."
             )
+        drives = bool(procedure and procedure.event.startswith("rhythm:")
+                      and procedure.event.split(":")[1] in self.driving_rhythms)
         if procedure and procedure.event.startswith("rhythm:"):
             procedure_prompt = f"{procedure_prompt}\n\n{RHYTHM_FINDINGS}".strip()
+            if drives:
+                procedure_prompt += f"\n\n{RHYTHM_SUBMIT}"
         request = CognitionRequest(
             execution_id=execution_id,
             native_owner=str(task.session_id),
@@ -692,7 +698,8 @@ class TaskRunner:
             return request
 
         task_calls = None
-        calls = TaskExecutionCalls(self.state, task.task_id, self.repositories, telegram_admin=None if procedure else self.telegram_admin)
+        calls = TaskExecutionCalls(self.state, task.task_id, self.repositories, telegram_admin=None if procedure else self.telegram_admin,
+                                   drive_tasks=drives)
         watcher = None if procedure else threading.Thread(
             target=self._watch_offers, args=(task.task_id, live),
             name=f"offers-{task.task_id}", daemon=True)

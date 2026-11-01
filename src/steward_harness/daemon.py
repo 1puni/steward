@@ -402,7 +402,7 @@ class KernelCommands:
             rhythm = self.config.rhythms[parts[1]]
             if rhythm.input == "world":
                 return self.procedures.continue_world_rhythm(parts[1])
-            repository, candidate, base, activity = self.procedures.observe(rhythm)
+            repository, candidate, base, activity = self.procedures.observe(rhythm, name=parts[1])
             task = self.procedures.request(rhythm.procedure, repository, candidate, base,
                                           event=f"rhythm:{parts[1]}:manual:{uuid.uuid4().hex}",
                                           owner=rhythm.owner, activity=activity,
@@ -659,6 +659,7 @@ class StewardDaemon:
             poll_seconds=self.config.controller.poll_seconds,
             actor_name=self.config.identity.name,
             telegram_admin=telegram_admin,
+            driving_rhythms=frozenset(name for name, rhythm in self.config.rhythms.items() if rhythm.drive_tasks),
         )
         incidents = IncidentProbeLoop(
             state,

@@ -78,7 +78,11 @@ Conversation task calls use the [native MCP task tool](git-native-tasks.md#live-
 Its Unix socket is controller-owned. Linux `SO_PEERCRED` identifies the connecting
 process, whose cgroup must equal the provider's owned invocation. The endpoint
 is unavailable until the process launcher binds it and is closed when execution
-returns. Socket-path knowledge alone grants no authority. macOS local development
+returns. Socket-path knowledge alone grants no authority. A root controller under
+systemd creates it beneath `/run`: the provider runs in a transient unit outside
+the service's mount namespace, so a `PrivateTmp=` service's `/tmp` is invisible to
+it. A provider that cannot reach the socket reports the connection error in the
+tool result. macOS local development
 uses [Darwin peer PID](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/un.h)
 and the provider process session; it does not establish Linux host isolation.
 
