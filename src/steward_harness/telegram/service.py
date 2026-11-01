@@ -184,7 +184,8 @@ class TelegramService:
     ) -> None:
         self.config = config
         token = self._read_token(config.token_path)
-        self.api = TelegramAPI(token, base_url=config.botapi_base or "https://api.telegram.org")
+        self.api = TelegramAPI(token, base_url=config.botapi_base or "https://api.telegram.org",
+                               media_max_bytes=config.media_max_mb * 1024 * 1024)
         self.admin = ChatAdministration(config, self.api, state_db.path.parent / "telegram-admin")
         self.allowed_users = frozenset(config.allowed_users)
         self.allow_group_administrators = config.allow_group_administrators

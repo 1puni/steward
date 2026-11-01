@@ -214,3 +214,86 @@ def test_pin_message_is_opt_in_and_safe_to_repeat(tmp_path):
     api.pin_chat_message = lambda chat, message_id: api.calls.append(('pinChatMessage', chat, message_id))
     assert admin('telegram:7', request('pin_message', '42'))['message_id'] == 42
     assert api.calls == [('pinChatMessage', -123, 42)]
+
+
+@pytest.mark.parametrize('action,suffix', [
+    ('send_image', '.png'), ('send_document', '.pdf'),
+    ('send_video', '.mp4'), ('send_voice', '.mp3'),
+])
+@pytest.mark.parametrize('swap_parent', [False, True])
+def test_live_send_cannot_follow_a_link_swapped_after_validation(tmp_path, monkeypatch, action, suffix, swap_parent):
+    from steward_harness.telegram import admin as admin_module
+    from steward_harness.telegram.api import TelegramAPI
+
+    admin, _, root = setup(tmp_path, ())
+    public = root / 'public'
+    public.mkdir()
+    media = public / ('report' + suffix)
+    media.write_bytes(b'public')
+    private = tmp_path / 'controller-only'
+    private.mkdir()
+    (private / media.name).write_bytes(b'synthetic secret')
+    admin.api = TelegramAPI('unused', media_max_bytes=1024 * 1024)
+    uploads = []
+    monkeypatch.setattr(admin.api, '_request', lambda *a, **kw: uploads.append(kw) or {'message_id': 1})
+    write = admin_module.write_receipt
+    def swap(path, receipt):
+        write(path, receipt)
+        if 'result' not in receipt:
+            if swap_parent:
+                public.rename(root / 'old-public')
+                public.symlink_to(private, target_is_directory=True)
+            else:
+                media.unlink()
+                media.symlink_to(private / media.name)
+    monkeypatch.setattr(admin_module, 'write_receipt', swap)
+    try:
+        with pytest.raises(ValueError, match='following links'):
+            admin('telegram:7', request(action, str(media)))
+        assert uploads == []
+    finally:
+        admin.api.close()
+
+
+def test_live_send_rechecks_cap_after_file_growth(tmp_path, monkeypatch):
+    from steward_harness.telegram import admin as admin_module
+    from steward_harness.telegram.api import TelegramAPI
+
+    admin, _, root = setup(tmp_path, ())
+    media = root / 'report.pdf'
+    media.write_bytes(b'public')
+    admin.api = TelegramAPI('unused', media_max_bytes=1024 * 1024)
+    uploads = []
+    monkeypatch.setattr(admin.api, '_request', lambda *a, **kw: uploads.append(kw) or {'message_id': 1})
+    write = admin_module.write_receipt
+    def grow(path, receipt):
+        write(path, receipt)
+        if 'result' not in receipt:
+            media.write_bytes(b'x' * (1024 * 1024 + 1))
+    monkeypatch.setattr(admin_module, 'write_receipt', grow)
+    try:
+        with pytest.raises(ValueError, match='configured Telegram cap'):
+            admin('telegram:7', request('send_document', str(media)))
+        assert uploads == []
+    finally:
+        admin.api.close()
+
+
+def test_live_send_uploads_snapshot_when_source_changes_during_request(tmp_path, monkeypatch):
+    from steward_harness.telegram.api import TelegramAPI
+
+    admin, _, root = setup(tmp_path, ())
+    media = root / 'report.pdf'
+    media.write_bytes(b'accepted bytes')
+    admin.api = TelegramAPI('unused', media_max_bytes=1024 * 1024)
+    uploads = []
+    def upload(*args, **kwargs):
+        media.write_bytes(b'later content')
+        uploads.append(kwargs['files']['document'][1].read())
+        return {'message_id': 1}
+    monkeypatch.setattr(admin.api, '_request', upload)
+    try:
+        assert admin('telegram:7', request('send_document', str(media)))['accepted']
+        assert uploads == [b'accepted bytes']
+    finally:
+        admin.api.close()

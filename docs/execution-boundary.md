@@ -198,7 +198,10 @@ conversation calls its native task tool (`operation="telegram"`, `send_image`,
 `send_video`, `send_voice`, `send_document`, or opted-in `pin_message`), and the controller resolves the file beneath
 `delivery_roots`, fixes the destination to configured `chat_id` and the conversation's
 own topic, and uses the token itself. A refusal returns to the model in the same call;
-reply text is never parsed for files or actions. Extend this pattern instead of making
+reply text is never parsed for files or actions. At upload, the controller opens every
+path component without following links and copies a bounded snapshot from that same
+descriptor. A concurrent agent cannot redirect the upload by swapping a file or parent
+for a symlink, or grow the upload past the configured cap. Extend this pattern instead of making
 secrets readable to the agent account.
 
 `send_voice` uploads an MP3, M4A or OGG/Opus file through Telegram's

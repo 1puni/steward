@@ -7,37 +7,46 @@ import os
 import re
 import stat
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from steward_harness.receipts import write_receipt
 
 
-def read_photo(path, roots):
-    """Open every component without following links, then read bounded bytes.
-
-    Agent-writable parents may change concurrently; descriptor-relative traversal
-    prevents a rename or symlink swap from turning this into a privileged read.
-    """
+@contextmanager
+def open_media_file(path):
+    """Pin every path component without following links, including during races."""
     candidate = Path(path)
     if not candidate.is_absolute() or '..' in candidate.parts:
-        raise ValueError('photo must be an absolute path without parent traversal')
-    if not any(candidate.is_relative_to(Path(root)) for root in roots):
-        raise ValueError('photo is outside configured delivery_roots')
+        raise ValueError('media must be an absolute path without parent traversal')
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    stream = None
     try:
         for part in candidate.parts[1:-1]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = child
-        image_fd = os.open(candidate.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-        with os.fdopen(image_fd, 'rb') as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                raise ValueError('photo must be a regular file')
-            data = stream.read(5 * 1024 * 1024 + 1)
+        media_fd = os.open(candidate.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        stream = os.fdopen(media_fd, 'rb')
     except OSError:
-        raise ValueError('photo cannot be read without following links') from None
+        if stream is not None:
+            stream.close()
+        raise ValueError('media cannot be read without following links') from None
     finally:
         os.close(fd)
+    with stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('media must be a regular file')
+        yield stream
+
+
+def read_photo(path, roots):
+    """Read bounded photo bytes from the descriptor used to check the path."""
+    candidate = Path(path)
+    if not any(candidate.is_relative_to(Path(root)) for root in roots):
+        raise ValueError('photo is outside configured delivery_roots')
+    with open_media_file(candidate) as stream:
+        data = stream.read(5 * 1024 * 1024 + 1)
     if len(data) > 5 * 1024 * 1024:
         raise ValueError('photo exceeds 5 MB')
     if not (data.startswith(b'\x89PNG\r\n\x1a\n') or data.startswith(b'\xff\xd8\xff')):
