@@ -12,9 +12,10 @@ from test_task_calls import call
 
 class TaskOutput(str):
     def __new__(cls, text="", *, subject="test: inspect", disposition="idle", question=None, notify=None,
-                verdict=None):
+                submit=None, verdict=None):
         value = super().__new__(cls, text)
         value.notify = notify
+        value.submit = submit
         value.verdict = verdict
         value.intent = dict(operation="close", key="finish", subject=subject, disposition=disposition)
         if question is not None:
@@ -36,6 +37,8 @@ class TaskAdapter:
             if result.output.notify:
                 receipt = call(request.task_call_socket, operation="notify", key="finding", text=result.output.notify)
                 assert receipt.get("accepted"), receipt
+            if result.output.submit:
+                result.output.receipts = [call(request.task_call_socket, operation="submit", **result.output.submit)]
             if result.output.verdict:
                 receipt = call(request.task_call_socket, operation="verdict", key="verdict",
                                verdict=result.output.verdict)

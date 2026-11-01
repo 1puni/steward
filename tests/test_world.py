@@ -204,3 +204,6 @@ def test_repository_orientation_names_no_world_and_states_the_read_only_boundary
     assert "episodes.md" not in orientation
     assert "read-only" in orientation
     assert "gated tasks" in orientation
+    # The checkout can trail the remote, so status is read from what was published.
+    assert "HEAD may lag published work" in orientation
+    assert "observed remote branch" in orientation

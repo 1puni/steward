@@ -137,6 +137,14 @@ def test_turn_replays_without_reinvoking_cognition(tmp_path: Path) -> None:
     assert "## Request\nPlease help" in request.prompt
 
 
+def test_an_empty_reply_completes_the_turn_and_sends_nothing(tmp_path: Path) -> None:
+    # The interface says so; this is what makes it true.
+    service = _service(tmp_path, FakeCognition([_reply("")]))
+    turn = _turn(service, "update-quiet", "Talking to each other")
+    assert turn.transport_reply == ""
+    assert service._state.get_turn(turn.turn_id).state == "completed"
+
+
 def test_turn_prompt_scopes_delivery_to_telegram(tmp_path: Path) -> None:
     cognition = FakeCognition([_reply("Done"), _reply("Desk reply", session="desk-session")])
     delivery_root = tmp_path / "world" / "artifacts" / "delivery"
