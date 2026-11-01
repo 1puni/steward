@@ -629,8 +629,8 @@ class TaskRunner:
         execution_cwd = Path(procedure.workdir) if procedure and procedure.workdir and not writes else worktree
         if procedure and procedure.workdir:
             # Organisation evidence is read from existing sibling repositories.
-            # Refresh their observed refs through the credential-free transfer;
-            # leave every working HEAD, index and local change in place.
+            # Refresh their `origin` through the credential-free transfer, which
+            # moves only checkouts that fast-forward without touching local work.
             for name, transport in self.transports.items():
                 transport.sync_remote_to_agent(self.repositories[name].path, self.broker)
             procedure_prompt = (

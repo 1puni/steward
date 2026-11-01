@@ -82,7 +82,7 @@ YAML is trusted policy. Each block owns one kind of decision:
 | `execution` | Untrusted execution identity and environment boundary |
 | `controller` | Polling, health listener and one background-worker budget |
 | `tasks` | Optional private remote for accepted `tasks/*` refs |
-| `repositories` | Trusted remotes, default branches, gates and publication requirements; configuring one is the authority to work in it |
+| `repositories` | Trusted remotes, default branches, optional [upstream sources](forks-and-upstream.md), gates and publication requirements; configuring one is the authority to work in it |
 | `pipelines`, `incident_policy` | Probes, failure confirmation and repair allowance |
 | `world` | The Git world for durable knowledge; optional named reconciliation procedure |
 | `procedures` | Accepted instructions, model and access settings |
@@ -387,8 +387,10 @@ push. Each external target has a separate convergence lock.
 Accepted Git task documents own the work. An idle workspace-write task owes a
 publication until the observed default branch holds a commit naming its current work
 (`Steward-Work`), or the work itself. Preparation collapses the task's outcome before integration, rebases onto
-the observed base, and fixes one single-parent candidate before every gate and
-required review. Gates must leave that candidate unchanged. Read-only procedures
+the observed base, and fixes one candidate before every gate and
+required review. With a configured upstream, accepted source ancestry actually
+integrated by the task remains as merge parents; exploration history stays private.
+See [downstream integration](forks-and-upstream.md). Gates must leave that candidate unchanged. Read-only procedures
 retain evidence without becoming product publication candidates.
 
 A conflict or actionable red gate returns its exact inputs and diagnostics to the

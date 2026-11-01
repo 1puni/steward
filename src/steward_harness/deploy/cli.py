@@ -13,7 +13,7 @@ import sys
 import httpx
 import yaml
 
-from steward_harness.config.loader import load_config
+from steward_harness.config.loader import load_known_config
 from steward_harness.deploy.config import SystemdReleaseConfig
 from steward_harness.deploy.engine import DeployEngine
 from steward_harness.deploy.health import HealthGate
@@ -107,7 +107,9 @@ def main(argv=None, *, worker_entry=None):
     parser.add_argument("--policy")
     args = parser.parse_args(argv)
     config_path, settings_path = Path(args.config).resolve(), Path(args.settings).resolve()
-    config = load_config(config_path)
+    config, ignored = load_known_config(config_path)
+    if ignored:
+        logging.warning("configuration newer than this driver; ignoring %s", ", ".join(ignored))
     settings = SystemdReleaseConfig.model_validate(yaml.safe_load(settings_path.read_text()))
     policy = hashlib.sha256(config_path.read_bytes() + settings_path.read_bytes()).hexdigest()
     request = dict(target=args.target, revision=args.revision) if args.operation == "worker" else json.load(sys.stdin)

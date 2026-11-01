@@ -1,4 +1,4 @@
-"""Controller-owned Git transport that never opens an agent repository."""
+"""Controller-owned Git transport that never trusts an agent repository."""
 
 from __future__ import annotations
 
@@ -19,13 +19,15 @@ from steward_harness.git import (
     controller_git_dir,
     hardened_git_argv,
     redact_command_output,
+    run_agent_git,
     validate_git_branch,
     validate_git_remote_url,
     validate_object_id,
 )
+from steward_harness.world_events import ExchangeDue
 
 if TYPE_CHECKING:
-    from steward_harness.config.schema import StewardConfig
+    from steward_harness.config.schema import StewardConfig, UpstreamConfig
     from steward_harness.runtime.execution import UntrustedExecutionBroker
 
 
@@ -57,9 +59,15 @@ class ControllerGitTransport:
         *,
         allow_local: bool = False,
         create: bool = True,
+        upstream: UpstreamConfig | None = None,
     ) -> None:
         validate_git_remote_url(remote_url, allow_local=allow_local)
         validate_git_branch(branch)
+        if upstream is not None:
+            validate_git_remote_url(upstream.remote_url, allow_local=allow_local)
+            validate_git_branch(upstream.branch)
+        self.upstream = upstream
+        self.upstream_exchange = ExchangeDue(fallback=300)
         self.repository = repository
         self.git_dir = controller_git_dir(state_db, repository)
         self.remote_url = remote_url
@@ -158,6 +166,45 @@ class ControllerGitTransport:
             )
         return value
 
+    def fetch_upstream(self, *, force: bool = False) -> str | None:
+        """Observe the configured source; agent remote names grant no authority."""
+        if self.upstream is None:
+            return None
+        with self._fetch_lock:
+            ref = f"refs/steward/upstream/{self.upstream.branch}"
+            if force or self.upstream_exchange.due(None):
+                self.upstream_exchange.begin()
+                try:
+                    self._run("fetch", "--no-tags", "--no-write-fetch-head", "--force", "--",
+                              self.upstream.remote_url, f"+refs/heads/{self.upstream.branch}:{ref}")
+                except GitTransportError:
+                    self.upstream_exchange.finish(None, False)
+                    raise
+                self.upstream_exchange.finish(None, True)
+            return validate_object_id(self._run("rev-parse", "--verify", f"{ref}^{{commit}}"))
+
+    def integrated_upstream_parents(self, agent_repo: str | Path, work: str, base: str,
+                                    fork: str, broker: UntrustedExecutionBroker) -> tuple[str, ...]:
+        """Retain source ancestry actually present in the authorized task graph.
+
+        The controller observes the source and inspects imported immutable objects.
+        An agent's upstream ref or claimed merge SHA cannot introduce other history.
+        Only source commits absent from the current destination need extra parents.
+        """
+        source = self.fetch_upstream(force=True)
+        if source is None:
+            return ()
+        self.import_candidate(agent_repo, work, fork, broker)
+        try:
+            result = self._run_result("merge-base", "--all", work, source)
+            if result.returncode == 1:
+                return ()
+            if result.returncode != 0:
+                raise GitTransportError("could not establish integrated upstream ancestry")
+            return tuple(sha for sha in result.stdout.split() if not self._contains(sha, base))
+        finally:
+            self.drop_candidate(work)
+
     def _expand_object_id(self, prefix: str) -> str:
         """Expand one abbreviation against the store this transport fetched into.
 
@@ -211,16 +258,46 @@ class ControllerGitTransport:
     def sync_remote_to_agent(
         self, agent_repo: str | Path, broker: UntrustedExecutionBroker
     ) -> str:
-        """Mirror the observed remote heads into an agent clone as labels.
+        """Make the agent clone's own Git names say what the remote says.
 
-        Source refs are convenience labels, never publication or deploy
-        authority. The fetch lock covers the push so concurrent polls cannot
-        regress refs; vanished heads are pruned.
+        The agent cannot fetch, so its `origin` is whatever the controller last
+        delivered: the configured URL, its observed heads as `origin/*`, and
+        the default-branch checkout fast-forwarded when Git can do so without
+        touching local work. A checkout that cannot fast-forward stays as it is,
+        and `git status` then reports it behind or diverged. These are labels,
+        never publication or deploy authority. The fetch lock covers the push so
+        concurrent polls cannot regress refs; vanished heads are pruned.
         """
         with self._fetch_lock:
             sha = self.fetch()
-            self.push_to_agent(agent_repo, broker, "+refs/steward/remote/*:refs/steward/remote/*",
+            repo = self._agent_repo_path(agent_repo)
+            # A clone's `origin/HEAD` symref would make the pruning push refuse
+            # an aliased update; it is restored to the default branch below.
+            run_agent_git(broker, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD", cwd=repo)
+            self.push_to_agent(agent_repo, broker, "+refs/steward/remote/*:refs/remotes/origin/*",
                                prune=True)
+            if self.upstream is not None:
+                self.fetch_upstream()
+                self.push_to_agent(agent_repo, broker,
+                    f"+refs/steward/upstream/{self.upstream.branch}:refs/remotes/upstream/{self.upstream.branch}")
+                for setting, value in (("remote.upstream.url", self.upstream.remote_url),
+                                       ("remote.upstream.fetch", f"+refs/heads/{self.upstream.branch}:refs/remotes/upstream/{self.upstream.branch}")):
+                    result = run_agent_git(broker, "config", "--replace-all", setting, value, cwd=repo)
+                    if result.returncode:
+                        raise GitTransportError(f"could not update agent {setting}: {redact_command_output(result.stderr)}")
+            for setting, value in (("remote.origin.url", self.remote_url),
+                                   ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")):
+                result = run_agent_git(broker, "config", "--replace-all", setting, value, cwd=repo)
+                if result.returncode:
+                    raise GitTransportError(f"could not update agent {setting}: {redact_command_output(result.stderr)}")
+            result = run_agent_git(broker, "symbolic-ref", "refs/remotes/origin/HEAD",
+                                   f"refs/remotes/origin/{self.branch}", cwd=repo)
+            if result.returncode:
+                raise GitTransportError(f"could not update agent origin/HEAD: {redact_command_output(result.stderr)}")
+            head = run_agent_git(broker, "symbolic-ref", "-q", "HEAD", cwd=repo)
+            if head.stdout.strip() == f"refs/heads/{self.branch}":
+                run_agent_git(broker, "merge", "--ff-only", "--no-autostash", "--no-squash", "--quiet",
+                              f"refs/remotes/origin/{self.branch}", cwd=repo)
             return sha
 
     def push_to_agent(self, agent_repo: str | Path, broker: UntrustedExecutionBroker,
@@ -457,6 +534,7 @@ def controller_transport(
         managed.default_branch,
         allow_local=config.execution.user is None,
         create=create,
+        upstream=managed.upstream,
     )
 
 

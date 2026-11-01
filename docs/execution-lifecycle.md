@@ -68,8 +68,8 @@ preserves exclusion across retries and publication.
 
 A task's live slice owns a retained checkout under its task lock. Native commits
 remain intact. Before each slice, the controller refreshes the repository's
-`refs/steward/remote/<default-branch>` observation, including for a retained
-checkout. Its HEAD and local work stay in place. Cognition can compare that work
+`origin/<default-branch>`, including for a retained checkout. The task's HEAD and
+local work stay in place. Cognition can compare that work
 with the fresh source and accepted steering; a refresh does not rebase the task
 or change a procedure's pinned candidate.
 

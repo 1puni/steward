@@ -347,8 +347,8 @@ def test_org_reflection_refreshes_sibling_refs_without_moving_local_work(tmp_pat
 
     def inspect(request):
         assert request.cwd == tmp_path
-        assert _git("rev-parse", "refs/steward/remote/main", cwd=sibling) == newer
-        assert _git("show", "refs/steward/remote/main:newer.txt", cwd=sibling) == "newer.txt"
+        assert _git("rev-parse", "refs/remotes/origin/main", cwd=sibling) == newer
+        assert _git("show", "refs/remotes/origin/main:newer.txt", cwd=sibling) == "newer.txt"
         assert _git("rev-parse", "HEAD", cwd=sibling) == local
         assert (sibling / "uncommitted.txt").read_text() == "preserve me"
         return execute(request)
@@ -756,3 +756,24 @@ def test_a_writing_run_that_changed_a_file_publishes_its_session_record_too(tmp_
     _git("fetch", "-q", "origin", cwd=clone)
     assert _git("show", "origin/main:launch.md", cwd=clone) == "Launch moved."
     assert _git("show", "origin/main:artefacts/claude/projects/run.jsonl", cwd=clone)
+
+
+def test_organisation_rhythm_observes_upstream_without_changing_instance_main(tmp_path):
+    from steward_harness.config.schema import UpstreamConfig
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    transport = runner.transports["app"]
+    source = tmp_path / "public.git"
+    _git("clone", "--bare", str(transport.remote_url), str(source), cwd=tmp_path)
+    transport.upstream = UpstreamConfig(remote_url=str(source))
+    rhythm = ProcedureRhythmConfig(owner=None, schedule={"quiet": 60},
+        procedure="security-one", input="repositories/app/main", workdir=str(tmp_path),
+        paths=("repositories/app/upstream",))
+    first = procedures.observe(rhythm)
+    _git("checkout", "-b", "source", cwd=clone)
+    sha = commit(clone, "upstream-only", push=False)
+    _git("push", str(source), "HEAD:main", cwd=clone)
+    transport.upstream_exchange.notify()  # The source webhook invalidates its observation.
+    second = procedures.observe(rhythm)
+    assert first[1] == second[1]  # Destination input has not moved.
+    assert first[3] != second[3]
+    assert second[3] == {"repositories/app/upstream/main": sha}

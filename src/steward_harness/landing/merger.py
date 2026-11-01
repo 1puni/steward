@@ -134,14 +134,19 @@ class PromotionEngine:
                 # Collapse the final task tree before replaying it. Native merge
                 # and exploration histories remain on the authorized task ref.
                 fork = self._agent_git("merge-base", expected_base_sha, authorized_work_sha)
+                upstream_parents = self.transport.integrated_upstream_parents(
+                    self.repo_path, authorized_work_sha, expected_base_sha, fork,
+                    self.execution_broker,
+                )
                 stamp = self._agent_git("show", "-s", "--format=%cI", authorized_work_sha)
                 message = (f"steward: accept {branch_name}\n\n"
                            f"Steward-Work: {authorized_work_sha}\n"
                            f"Steward-Base: {expected_base_sha}\n")
-                def collapse(parent):
+                def collapse(parent, *other_parents):
                     tree = self._agent_git("rev-parse", "HEAD^{tree}", cwd=worktree)
                     sha = agent_git(self.execution_broker,
-                        *steward_commit_argv("commit-tree", tree, "-p", parent),
+                        *steward_commit_argv("commit-tree", tree, "-p", parent,
+                                             *(arg for sha in other_parents for arg in ("-p", sha))),
                         cwd=worktree, input_text=message,
                         env={"GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp})
                     if self.execution_broker.path_exists(worktree / EVIDENCE_PENDING):
@@ -156,8 +161,8 @@ class PromotionEngine:
                 if error is not None:
                     return ValidationFailure(error)
 
-                # Canonical identity after rebase: one parent, stable metadata.
-                tested_sha = collapse(expected_base_sha)
+                # Collapse exploration, while keeping accepted source ancestry.
+                tested_sha = collapse(expected_base_sha, *upstream_parents)
                 self.transport.import_candidate(
                     worktree, tested_sha, expected_base_sha, self.execution_broker,
                 )

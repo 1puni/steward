@@ -14,6 +14,7 @@ import pytest
 from test_world_turn_checkpoint import _git_world as make_world
 from steward_harness.inbox import EventLog, Inbox, Source, settle
 from steward_harness.lease import Lease
+from steward_harness.world_events import ExchangeDue
 from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
 from steward_harness.runtime.contracts import NativeStorageDeferred, RuntimeExecutionError, RuntimeUnavailable
 from state_fixtures import (
@@ -885,7 +886,7 @@ def test_deferral_cause_leaves_an_error_without_captured_output_alone() -> None:
         "result transport unavailable"
     )
 
-def _result_pass(tmp_path, config, state):
+def _result_pass(tmp_path, config, state, checkpoint=None):
     """Real pass and receipt service, with a captured executor and no network."""
     daemon = StewardDaemon(config, tmp_path / "steward.yaml")
     queued = []
@@ -897,7 +898,7 @@ def _result_pass(tmp_path, config, state):
     daemon._result_dispatch = kernel.dispatch
     service = object.__new__(ConversationService)
     service._state = state
-    step = daemon._pass(state, service, kernel, SimpleNamespace(), None)
+    step = daemon._pass(state, service, kernel, SimpleNamespace(), None, checkpoint)
     return daemon, queued, step
 
 
@@ -1173,3 +1174,80 @@ def test_unadoptable_telegram_receipts_keep_only_telegram_off(tmp_path, monkeypa
             daemon.stop()
     assert "Telegram ingress NOT started" in caplog.text
     assert legacy.joinpath("90.json").read_text() == "{truncated"
+
+
+def test_world_notices_refresh_only_scoped_repository_labels(tmp_path, monkeypatch):
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        'repositories': {'company': {'path': str(tmp_path / 'company'),
+                                     'remote_url': 'git@github-company:one/org-world.git'}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    calls, callbacks = [], []
+    state.tasks.transports = {'company': SimpleNamespace(
+        remote_url='git@github-company:one/org-world.git', branch='main', upstream=SimpleNamespace(remote_url='https://github.com/public/core.git', branch='main'),
+        upstream_exchange=ExchangeDue(),
+        sync_remote_to_agent=lambda path, broker: calls.append(path) or 'abc')}
+    class Subscription:
+        def __init__(self, url, token, callback):
+            callbacks.append(callback)
+        def start(self):
+            return self
+    monkeypatch.setenv('STEWARD_WORLD_EVENTS_URL', 'https://example.test/events')
+    monkeypatch.setattr('steward_harness.daemon.Subscription', Subscription)
+    _, queued, step = _result_pass(tmp_path, config, state)
+    step()
+    assert not [key for key, _ in queued if key[0] == 'repository-reader']
+    callbacks[0]([{'repository': 'two/org-world', 'ref': 'refs/heads/main'},
+                  {'repository': 'one/org-world', 'ref': 'refs/heads/other'}])
+    queued.clear()
+    step()
+    assert not [key for key, _ in queued if key[0] == 'repository-reader']
+    callbacks[0]([{'repository': 'public/core', 'ref': 'refs/heads/main'}])
+    queued.clear()
+    step()
+    work = [work for key, work in queued if key == ('repository-reader', 'company')]
+    assert len(work) == 1
+    work[0]()
+    assert state.tasks.transports['company'].upstream_exchange.fallback == 3600
+    assert state.tasks.transports['company'].upstream_exchange.pending.is_set()
+    assert calls == [config.repositories['company'].path]
+    queued.clear()
+    step()
+    assert not [key for key, _ in queued if key[0] == 'repository-reader']
+
+
+def test_world_exchange_follows_remote_notices_and_new_local_commits(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    state = StateDatabase(config.provider.state_db)
+    callbacks, exchanges = [], []
+    head, remote = ['a'], ['a']
+    class Subscription:
+        def __init__(self, url, token, callback):
+            callbacks.append(callback)
+        def start(self):
+            return self
+    def converge():
+        exchanges.append(head[0])
+        remote[0] = head[0]
+    checkpoint = SimpleNamespace(
+        transport=SimpleNamespace(remote_url='git@github-webel:one/org-world.git',
+                                  branch='main', observed_tip=lambda: (remote[0], None)),
+        world=SimpleNamespace(input_cursor=lambda: head[0]), converge=converge)
+    monkeypatch.setenv('STEWARD_WORLD_EVENTS_URL', 'https://example.test/events')
+    monkeypatch.setattr('steward_harness.daemon.Subscription', Subscription)
+    _, queued, step = _result_pass(tmp_path, config, state, checkpoint)
+    def world_work():
+        queued.clear()
+        step()
+        return [work for key, work in queued if key == ('world', 'remote')]
+    world_work()[0]()
+    assert not world_work()
+    callbacks[0]([{'repository': 'unrelated/org-world', 'ref': 'refs/heads/main'}])
+    assert not world_work()
+    callbacks[0]([{'repository': 'one/org-world', 'ref': 'refs/heads/main'}])
+    world_work()[0]()
+    head[0] = 'b'
+    world_work()[0]()
+    assert exchanges == ['a', 'a', 'b']
+    assert not world_work()

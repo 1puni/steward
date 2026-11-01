@@ -14,6 +14,7 @@ from steward_harness.config.schema import (
     RepositoryConfig,
     StewardConfig,
     UntrustedExecutionConfig,
+    UpstreamConfig,
 )
 from steward_harness.git_transport import ControllerGitTransport
 from steward_harness.landing.merger import Tested
@@ -556,6 +557,57 @@ def test_reconciled_merge_collapses_before_gates_and_retains_native_history(repo
     assert _git('rev-parse', 'HEAD', cwd=root) == candidate
 
 
+def test_upstream_integrations_keep_source_ancestry_without_task_history(repo, tmp_path):
+    root = repo["clone"]
+    source = tmp_path / "upstream.git"
+    _git("clone", "--bare", str(repo["bare"]), str(source), cwd=tmp_path)
+    _git("checkout", "-b", "source", cwd=root)
+    (root / "shared.txt").write_text("upstream one\n")
+    _commit_all(root, "upstream one")
+    first = _git("rev-parse", "HEAD", cwd=root)
+    _git("push", str(source), "HEAD:main", cwd=root)
+    _git("checkout", "main", cwd=root)
+    (root / "instance.txt").write_text("private flavour\n")
+    _commit_all(root, "instance flavour")
+    _push_main(repo)
+    _branch(repo, "steward/integrate")
+    (root / "scratch.txt").write_text("private exploration\n")
+    _commit_all(root, "private exploration")
+    private = _git("rev-parse", "HEAD", cwd=root)
+    (root / "scratch.txt").unlink()
+    _commit_all(root, "remove exploration")
+    _git("merge", "--no-edit", "source", cwd=root)
+    work = _git("rev-parse", "HEAD", cwd=root)
+
+    # Upstream can advance while this integration waits; only what was merged
+    # belongs in its published ancestry.
+    _git("checkout", "source", cwd=root)
+    (root / "shared.txt").write_text("upstream two\n")
+    _commit_all(root, "upstream two")
+    second = _git("rev-parse", "HEAD", cwd=root)
+    _git("push", str(source), "HEAD:main", cwd=root)
+    _git("checkout", "steward/integrate", cwd=root)
+    engine = _engine(repo, tmp_path)
+    engine.transport.upstream = UpstreamConfig(remote_url=str(source))
+    tested = _prepare(engine, repo, "steward/integrate")
+    assert isinstance(tested, Tested), tested
+    assert publish(engine.transport, tested)
+    assert _origin_git(repo, "merge-base", "main", first) == first
+    assert _origin_main_tree(repo, "shared.txt") == "upstream one"
+    assert _origin_main_tree(repo, "instance.txt") == "private flavour"
+    assert len(_origin_git(repo, "rev-list", "--parents", "-n", "1", "main").split()) == 3
+    published = _origin_git(repo, "rev-list", "main").split()
+    assert private not in published and work not in published and second not in published
+
+    # The next merge sees the real prior integration as its base, and advances
+    # normally without repeating the first change or importing exploration.
+    _git("checkout", "-b", "steward/integrate-again", tested.tested_sha, cwd=root)
+    _git("merge", "--no-edit", "source", cwd=root)
+    assert _land(engine, repo, "steward/integrate-again") is None
+    assert _origin_git(repo, "merge-base", "main", second) == second
+    assert _origin_main_tree(repo, "shared.txt") == "upstream two"
+
+
 def test_clean_rebase_has_identity_in_fresh_agent_repo(repo, tmp_path):
     root = repo["clone"]
     _branch(repo, "steward/work")
@@ -608,3 +660,32 @@ def test_worktree_removal_refuses_pending_native_archive(repo, tmp_path):
     with pytest.raises(WorktreeError, match='native evidence preservation is pending'):
         manager.remove_worktree('native-pending')
     assert (path / 'native-result').read_text() == 'unique evidence'
+
+
+def test_upstream_parent_proof_ignores_agent_remote_and_private_merge_history(repo, tmp_path):
+    root = repo["clone"]
+    source = tmp_path / "upstream.git"
+    _git("clone", "--bare", str(repo["bare"]), str(source), cwd=tmp_path)
+    _branch(repo, "private-side")
+    (root / "private-note.txt").write_text("private exploration")
+    _commit_all(root, "private note")
+    private = _git("rev-parse", "HEAD", cwd=root)
+    _git("checkout", "main", cwd=root)
+    _branch(repo, "steward/work")
+    (root / "feature.txt").write_text("feature")
+    _commit_all(root, "feature")
+    _git("merge", "--no-edit", "private-side", cwd=root)
+    (root / "private-note.txt").unlink()
+    _commit_all(root, "final outcome")
+    work = _git("rev-parse", "HEAD", cwd=root)
+    engine = _engine(repo, tmp_path)
+    engine.transport.upstream = UpstreamConfig(remote_url=str(source))
+    base = engine.transport.sync_remote_to_agent(root, engine.execution_broker)
+    # A forged tracking ref after refresh cannot make its private parent trusted.
+    _git("update-ref", "refs/remotes/upstream/main", private, cwd=root)
+    tested = engine.prepare("steward/work", work, base)
+    assert isinstance(tested, Tested), tested
+    assert publish(engine.transport, tested)
+    assert private not in _origin_git(repo, "rev-list", "main").split()
+    assert len(_origin_git(repo, "rev-list", "--parents", "-n", "1", "main").split()) == 2
+    assert _origin_main_tree(repo, "feature.txt") == "feature"
