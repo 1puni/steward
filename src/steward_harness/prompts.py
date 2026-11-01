@@ -90,34 +90,18 @@ work. The harness waits for writer teardown before checkpointing.
 {ownership_query}"""
 
 
-def _understanding_block(understanding: tuple[str, str] | None) -> str:
-    if understanding is None:
+def _understanding_block(understanding: str | None) -> str:
+    if not understanding:
         return ""
-    ref, accepted = understanding
-    return f"""\
-## Durable understanding while you work
-You may work for a long time. Make your current understanding durable without
-ending this execution. The accepted brief above is the canonical task account.
-Offer its complete revised body: understanding, decisions and rationale, evidence,
-open questions, delegated work still running, and what should happen next after
-execution loss. Write an immutable Git blob with this exact envelope:
-
-    Steward-Base: {accepted}
-
-    <your full revised account body>
-
-Feed that envelope to `git hash-object -w --stdin`, then run
-`git update-ref {ref} <returned blob SHA>`. No task-prose file belongs in the
-product checkout; the accepted Git account is its one durable owner.
-
-Steward-Base is the accepted revision your account builds on; it is {accepted}
-now. The offer is the account body only, never frontmatter. The harness accepts it
-only if the accepted task has not changed since that base, and answers with a
-Steward message naming the accepted revision to use as your next base, or the
-reason it was not accepted. Writing the ref is a request, not an acknowledgement.
-Acceptance records understanding only: it does not commit product files, publish,
-or end this execution, and your subagents keep working. As parent,
-consolidate what your subagents report before offering it."""
+    return f"""## Durable task account
+Keep material understanding, decisions, evidence and next steps in the accepted
+account above. Update its complete body with steward_tasks operation="understanding",
+key, body and base. The account above has base `{understanding}`. Use the accepted
+response's base for your next update. Use a new key for each update; retry the
+identical request, including base, after a lost response. If rejected for a concurrent change, reconcile the
+returned account and inputs, then send a new update with the returned base token.
+The account contains prose, without authority frontmatter. Acceptance saves the
+account immediately; it does not publish files or end your work."""
 
 
 def _event_block(event_id: str | None) -> str:
@@ -201,7 +185,7 @@ def build_task_prompt(
     operator_context: tuple[str, ...] = (),
     *,
     read_only: bool = False,
-    understanding: tuple[str, str] | None = None,
+    understanding: str | None = None,
 ) -> str:
     """One accepted task execution in its retained worktree.
 

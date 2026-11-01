@@ -38,8 +38,8 @@ reader does not have, stop and ask rather than widening the reader's contract.
 ```
 
 The frontmatter is the controller's. The body is the task's account: it starts
-as the brief, and a running agent can revise it by offering a complete new body
-against the accepted revision it builds on (see
+as the brief, and a running agent can revise it through its existing task tool,
+which refuses an update over unseen concurrent changes (see
 [live task understanding](live-task-understanding.md)). Every decision about
 the task is a commit on that ref: an answer, a note, a cancellation, a retained
 publication candidate, a repair demand. Nothing about a task's progress is

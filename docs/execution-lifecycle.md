@@ -80,8 +80,8 @@ event and complete writer teardown before returning. Exit zero, silence, loss of
 a process, interruption, timeout and failed cleanup are not completion evidence.
 An unfinished reported native child also prevents successful Codex completion.
 
-The controller revokes the execution's native capability, joins the account
-watcher, stages the settled tree, and commits findings and disposition. The
+The controller revokes the execution's native capability, stages the settled
+tree, and commits findings and disposition. The
 checkpoint names the execution and its latest accepted account baseline. An
 understanding acceptance is bookkeeping, not a reason to repeat completed work.
 Only prompt inputs and acknowledged live inputs are consumed. Unresolved, rejected

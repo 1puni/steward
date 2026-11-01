@@ -95,7 +95,7 @@ def test_native_mcp_close_reports_pending_without_a_tool_error(tmp_path):
 
 @pytest.mark.parametrize("explicit", [False, True])
 def test_understanding_acceptance_after_intent_does_not_require_repair(tmp_path, explicit):
-    from test_live_understanding import ParentAdapter, make_runner, offer, replies, tip
+    from test_live_understanding import ParentAdapter, make_runner, prompt_base, tip
     from test_task_runner_kernel import publish_task
     accepted = []
 
@@ -104,8 +104,14 @@ def test_understanding_acceptance_after_intent_does_not_require_repair(tmp_path,
         if explicit:
             assert call(request.task_call_socket, operation="close", key="finish",
                         subject="feat: finish", disposition="idle")["pending"]
-        offer(request.cwd, task_id, tip(state, task_id), "Completed investigation; gates remain.")
-        replies(adapter, 1)
+        original = dict(operation="understanding", base=prompt_base(request), key="account",
+                        body="Completed investigation; gates remain.")
+        first = call(request.task_call_socket, **original)
+        assert first["accepted"]
+        latest = call(request.task_call_socket, operation="understanding", base=first["base"],
+                      key="updated-account", body="Investigation and follow-up complete; gates remain.")
+        assert latest["accepted"]
+        assert call(request.task_call_socket, **original)["replayed"]
         accepted.append(tip(state, task_id))
 
     class Worker(ParentAdapter):

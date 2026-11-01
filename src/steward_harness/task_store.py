@@ -482,9 +482,10 @@ class GitTaskStore:
 
         Only the body changes. The Definition, pending inputs, work and
         publication obligation are carried unchanged, so acceptance grants
-        nothing. The offer's blob identity is recorded, and replay returns the
+        nothing. The request identity is recorded, and replay returns the
         revision that first accepted it rather than deciding again.
         """
+        body = body.strip()
         validate_object_id(offer)
         validate_object_id(base)
         with self.lease:
@@ -493,6 +494,8 @@ class GitTaskStore:
                                  *self._history(old, definition)).splitlines():
                 revision, _, offered = line.partition(" ")
                 if offered.strip() == offer:
+                    if self.read(task_id, revision)[2] != body:
+                        raise ValueError("operation key already used with a different body")
                     return revision, False
             if definition.hold:
                 raise OfferRejected(f"task is {definition.hold}")
