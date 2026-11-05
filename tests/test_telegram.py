@@ -2785,3 +2785,15 @@ def test_outbox_upload_refuses_a_symlink_swapped_after_resolution(tmp_path, monk
     service._drain_delivery_outbox()
     assert uploads == []
     assert list((tmp_path / 'quarantine').glob('*.json'))
+
+
+def test_unfinished_old_reply_without_update_metadata_is_skipped_with_a_warning(tmp_path, caplog):
+    legacy = _legacy_receipts(tmp_path)
+    (legacy / "94.json").write_text(json.dumps({"reply": [1, 7, "remaining reply"],
+                                                "pieces": {"text:0": 5}}))
+    service = _service(tmp_path)
+    with caplog.at_level("WARNING"):
+        service._adopt_receipts()
+    assert "receipt 94.json is unfinished without its update; skipped" in caplog.text
+    assert _owed(service) == ["tg_91", "tg_92"]
+    assert service._offset == 95
