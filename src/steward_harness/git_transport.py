@@ -95,16 +95,18 @@ class ControllerGitTransport:
         exists to stop. Committer date is *when it hit the branch*, because
         landing rebases onto the observed default before pushing.
         """
-        line = self._run(
+        lines = self._run(
             "for-each-ref",
-            "--format=%(objectname) %(committerdate:unix)",
+            "--format=%(refname) %(objectname) %(committerdate:unix)",
             self.remote_ref,
         )
-        if not line:
-            return None
-        sha, _, stamp = line.partition(" ")
-        validate_object_id(sha)
-        return sha, datetime.fromtimestamp(int(stamp), UTC)
+        # for-each-ref also matches descendants: preview/topic is not preview.
+        for line in lines.splitlines():
+            name, sha, stamp = line.split(" ")
+            if name == self.remote_ref:
+                validate_object_id(sha)
+                return sha, datetime.fromtimestamp(int(stamp), UTC)
+        return None
 
     def landing(self, work: str, tip: str) -> str | None:
         """The commit on ``tip`` that landed this task work, or None.
