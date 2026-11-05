@@ -347,7 +347,12 @@ def test_task_runs_in_one_retained_worktree_and_lands_exact_tested_sha(
     subjects = _git(
         f"--git-dir={bare}", "log", "--format=%s", f"{original}..main", cwd=tmp_path
     ).splitlines()
-    assert subjects == [f"steward: accept {admitted.branch}"]
+    assert subjects == [f"steward: accept Add result [{admitted.branch}]"]
+    # The subject describes the work; the body keeps branch and trailers greppable.
+    body = _git(f"--git-dir={bare}", "log", "-1", "--format=%B", "main", cwd=tmp_path)
+    assert f"Steward-Branch: {admitted.branch}" in body
+    assert f"Steward-Work: {landed.work_sha}" in body
+    assert f"Steward-Base: {original}" in body
 
 
 

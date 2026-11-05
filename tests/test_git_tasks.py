@@ -302,8 +302,8 @@ def test_new_authority_after_gates_prevents_publication_at_unchanged_source(tmp_
     tested = []
     prepare = PromotionEngine.prepare
 
-    def steer_after_gates(engine, *args):
-        result = prepare(engine, *args)
+    def steer_after_gates(engine, *args, **kwargs):
+        result = prepare(engine, *args, **kwargs)
         assert isinstance(result, Tested)
         assert receipt.read_text().strip() == result.tested_sha
         tested.append(result.tested_sha)

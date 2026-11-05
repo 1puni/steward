@@ -82,7 +82,7 @@ Configuration refuses a prefix that names neither `tasks/` nor a configured
 repository, because it would match nothing and silence the rhythm.
 
 The steward's own bookkeeping cannot appear in that input. Task documents,
-their `steward: accept task` commits and holds live in the controller's task
+their task acceptance commits and holds live in the controller's task
 store, never in a repository remote. Procedure runs, a rhythm's own included,
 are excluded from task work, so a run's evidence can never make its successor
 fire. What does count is a real change to what the rhythm reads: a product

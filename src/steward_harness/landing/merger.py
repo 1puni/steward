@@ -13,6 +13,7 @@ from steward_harness.git import (
     agent_git,
     redact_command_output,
     run_agent_git,
+    steward_accept_subject,
     validate_object_id,
     steward_commit_argv,
 )
@@ -91,6 +92,8 @@ class PromotionEngine:
         branch_name: str,
         authorized_work_sha: str,
         expected_base_sha: str,
+        *,
+        title: str | None = None,
     ) -> Tested | ValidationFailure:
         """Return a retained, gated SHA or actionable failure evidence."""
         for role, sha in (
@@ -139,7 +142,8 @@ class PromotionEngine:
                     self.execution_broker,
                 )
                 stamp = self._agent_git("show", "-s", "--format=%cI", authorized_work_sha)
-                message = (f"steward: accept {branch_name}\n\n"
+                message = (f"{steward_accept_subject(title, branch_name)}\n\n"
+                           f"Steward-Branch: {branch_name}\n"
                            f"Steward-Work: {authorized_work_sha}\n"
                            f"Steward-Base: {expected_base_sha}\n")
                 def collapse(parent, *other_parents):

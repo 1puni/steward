@@ -217,6 +217,20 @@ def test_plain_fast_forward_when_main_unmoved(repo: dict, tmp_path: Path) -> Non
     result = _land(_engine(repo, tmp_path), repo, "steward/work")
     assert result is None
     assert _origin_main_tree(repo, "work.txt") == "plain ff"
+    # Without a task title the subject still names the accepted branch.
+    assert _origin_git(repo, "log", "-1", "--format=%s", "main") == "steward: accept steward/work"
+
+
+def test_accept_subject_describes_the_work_and_keeps_one_line() -> None:
+    from steward_harness.git import steward_accept_subject
+
+    assert steward_accept_subject("Add result", "tasks/task-x") == "steward: accept Add result [tasks/task-x]"
+    # A multi-line or padded title cannot leak a second subject line.
+    assert steward_accept_subject("  Add\n\nresult  now ", "tasks/task-x") == (
+        "steward: accept Add result now [tasks/task-x]"
+    )
+    assert steward_accept_subject(None, "tasks/task-x") == "steward: accept tasks/task-x"
+    assert steward_accept_subject("   ", "tasks/task-x") == "steward: accept tasks/task-x"
 
 
 def test_landing_does_not_run_repository_hooks(repo: dict, tmp_path: Path) -> None:
