@@ -10,6 +10,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -80,6 +81,8 @@ class ControllerGitTransport:
         }
         self._fetch_lock = threading.RLock()
         self._landed: tuple[str, dict[str, str | None]] | None = None
+        #: Told when the checkout's default branch holds commits the remote lacks.
+        self.on_unpublished: Callable[[str], None] | None = None
         self._open_store(create=create)
 
     @property
@@ -266,7 +269,8 @@ class ControllerGitTransport:
         delivered: the configured URL, its observed heads as `origin/*`, and
         the default-branch checkout fast-forwarded when Git can do so without
         touching local work. A checkout that cannot fast-forward stays as it is,
-        and `git status` then reports it behind or diverged. These are labels,
+        and `git status` then reports it behind or diverged; one whose branch
+        holds commits the remote lacks is also told to `on_unpublished`. These are labels,
         never publication or deploy authority. The fetch lock covers the push so
         concurrent polls cannot regress refs; vanished heads are pruned.
         """
@@ -300,6 +304,14 @@ class ControllerGitTransport:
             if head.stdout.strip() == f"refs/heads/{self.branch}":
                 run_agent_git(broker, "merge", "--ff-only", "--no-autostash", "--no-squash", "--quiet",
                               f"refs/remotes/origin/{self.branch}", cwd=repo)
+                # Behind fast-forwards quietly; ahead or diverged keeps local commits.
+                published = run_agent_git(broker, "merge-base", "--is-ancestor", "HEAD",
+                                          f"refs/remotes/origin/{self.branch}", cwd=repo)
+                if published.returncode and self.on_unpublished is not None:
+                    self.on_unpublished(
+                        f"⚠️ {self.repository}: the checkout's {self.branch} holds commits the "
+                        f"remote lacks, so it is not fast-forwarded to {sha[:12]}. "
+                        "Publish or reset them; nothing deploys from that checkout.")
             return sha
 
     def push_to_agent(self, agent_repo: str | Path, broker: UntrustedExecutionBroker,
