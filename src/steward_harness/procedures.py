@@ -405,6 +405,22 @@ class Procedures:
                             and claim is None), writer_active=writer_active)
         return observations
 
+    # Missed intervals in a row before an unconditional world rhythm's quiet
+    # counts as a stall rather than ordinary backpressure.
+    _STALL_INTERVALS = 4
+
+    def stalled_world_rhythms(self, observations: dict) -> list[str]:
+        """Name world rhythms owed a turn every interval that have produced none for several.
+
+        A rhythm gated by `after`, `paths`, `sources` or `watch` is quiet by design and is never listed.
+        """
+        return [name for name, value in observations.items()
+                if (rhythm := self.config.rhythms[name]).after is None
+                and not (rhythm.paths or rhythm.sources or rhythm.watch)
+                and isinstance(rhythm.schedule, int)
+                and value.get('evidence_age_seconds') is not None
+                and value['evidence_age_seconds'] > rhythm.schedule * self._STALL_INTERVALS]
+
     def due_world_rhythms(self, *, now=None):
         # Oldest captured interval first; configured order breaks ties (including
         # a night chain). A short-period rhythm cannot continually jump ahead

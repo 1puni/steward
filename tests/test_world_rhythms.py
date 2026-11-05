@@ -1307,3 +1307,48 @@ def test_configuration_refuses_a_misplaced_watch(rhythm, error):
     from steward_harness.config.schema import ProcedureRhythmConfig
     with pytest.raises(ValueError, match=error):
         ProcedureRhythmConfig(schedule=300, procedure="sleep", owner=None, **rhythm)
+
+
+def _stall_config(tmp_path, **x_posting):
+    instructions = tmp_path / "proc.md"
+    instructions.write_text("Do the thing.\n")
+    (tmp_path / "work").mkdir(exist_ok=True)
+    procedure = {"instructions": str(instructions), "provider": "codex",
+                 "model": {"model": "m", "effort": "low"}, "access": "workspace-write"}
+    return StewardConfig.model_validate({
+        "identity": {"name": "test", "slug": "test"},
+        "provider": {"state_db": str(tmp_path / "state.db"), "workdir": str(tmp_path / "work")},
+        "world": {"root": str(tmp_path / "world")},
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"operator": 3}},
+        "procedures": {"x-posting": procedure, "staging": procedure, "chaos": procedure},
+        "rhythms": {
+            "x-posting": {"schedule": 1800, "procedure": "x-posting", "input": "world",
+                          "owner": "telegram:3", **x_posting},
+            "staging": {"schedule": 300, "procedure": "staging", "input": "world",
+                        "paths": ["episodes/"], "owner": "telegram:3"},
+            "chaos": {"after": "staging", "procedure": "chaos", "input": "world",
+                      "owner": "telegram:3"},
+        },
+    })
+
+
+def test_unconditional_world_rhythm_long_silence_is_flagged_stalled(tmp_path):
+    procedures = Procedures(_stall_config(tmp_path), None, {})
+    stale, fresh = 1800 * 5, 1800 * 2  # past and within four missed intervals
+    observations = {
+        "x-posting": {"evidence_age_seconds": stale},
+        "staging": {"evidence_age_seconds": stale},  # paths-gated: quiet by design
+        "chaos": {"evidence_age_seconds": stale},  # after-gated: quiet by design
+    }
+    assert procedures.stalled_world_rhythms(observations) == ["x-posting"]
+    observations["x-posting"]["evidence_age_seconds"] = fresh
+    assert procedures.stalled_world_rhythms(observations) == []
+    # Never having run is not a stall; there is no cadence to miss yet.
+    observations["x-posting"]["evidence_age_seconds"] = None
+    assert procedures.stalled_world_rhythms(observations) == []
+
+
+@pytest.mark.parametrize("gate", [{"watch": "/opt/watch/x-posting-wake"}, {"sources": ["desk"]}])
+def test_a_watched_or_sourced_rhythms_silence_is_not_a_stall(tmp_path, gate):
+    procedures = Procedures(_stall_config(tmp_path, **gate), None, {})
+    assert procedures.stalled_world_rhythms({"x-posting": {"evidence_age_seconds": 1800 * 50}}) == []
