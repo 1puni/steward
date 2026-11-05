@@ -378,6 +378,25 @@ def test_notifications_are_independent_calls_and_final_reply_is_not_a_send(tmp_p
     assert {r['source_key'] for r in pending} == {r['receipt'] for r in receipts}
 
 
+@pytest.mark.parametrize('outcome, status', [
+    ({}, 'queued'),
+    ({'delivery_error': 'Telegram transport unavailable'}, 'deferred'),
+    ({'done': True}, 'delivered'),
+    ({'done': True, 'rejected': 'topic closed'}, 'rejected'),
+])
+def test_notify_replay_reports_where_the_queued_message_stands(tmp_path, outcome, status):
+    """The replay of a key is the caller's later read of its own delivery receipt."""
+    state = StateDatabase(tmp_path / 'state.db')
+    owner = state.open_conversation(ConversationId('telegram:owner'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(owner.conversation_id, 'event', 'harness:task-result', 'assess')
+    calls = TaskCalls(state, turn.turn_id)
+    first = calls(dict(operation='notify', key='book', text='Book closed'))
+    assert first['status'] == 'queued'
+    state.save_result_receipt(state.result_receipt(first['receipt']) | outcome)
+    replay = calls(dict(operation='notify', key='book', text='Book closed'))
+    assert (replay['replayed'], replay['status']) == (True, status)
+
+
 def test_an_operator_turn_has_one_voice_its_reply(tmp_path):
     """Its final reply is sent, so it is offered no second channel to the operator."""
     refused = []

@@ -38,9 +38,18 @@ NOTIFY_DIRECTIVE = """Final replies from automatic runs are recorded only. To no
 owner, call the native steward_tasks task tool with operation="notify", key and
 text. Use a distinct key per message; retry an identical request with the same
 key after a lost receipt. A receipt confirms durable queuing, not transport
-completion. You may call during execution. Without a working tool, keep findings
+completion; replaying the key reports the message's current delivery status
+(queued, deferred, delivered or rejected). You may call during execution. Without a working tool, keep findings
 in the final reply; they will not be sent. Most runs should notify no one."""
 
+
+
+_DELIVERY_WORDS = (("rejected", "rejected"), ("done", "delivered"), ("delivery_error", "deferred"))
+
+
+def delivery_status(receipt):
+    """One word for where a queued notification stands."""
+    return next((word for flag, word in _DELIVERY_WORDS if receipt.get(flag)), "queued")
 
 
 def queue_notification(state, *, owner, source, key, text, require_current=lambda: None):
@@ -63,14 +72,15 @@ def queue_notification(state, *, owner, source, key, text, require_current=lambd
             raise ValueError("notification key already used with different text")
     else:
         require_current()
-        state.save_result_receipt({
+        receipt = {
             "owner": str(owner), "task_id": None, "source_key": identity,
             "notification_source": source, "key": key,
             "result_text": text, "reply": text, "done": False,
             "recorded_at": time.time(),
-        })
-    return {"operation": "notify", "accepted": True, "receipt": identity,
-            "owner": str(owner), "source_id": source, "replayed": replayed}
+        }
+        state.save_result_receipt(receipt)
+    return {"operation": "notify", "accepted": True, "receipt": identity, "owner": str(owner),
+            "source_id": source, "replayed": replayed, "status": delivery_status(receipt)}
 
 
 class TaskCalls:
