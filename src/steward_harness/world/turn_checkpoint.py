@@ -25,7 +25,7 @@ from steward_harness.git import (
 )
 from steward_harness.git_reconcile import ResolveTurn, merge_git, reconcile_git
 from steward_harness.state import StateDatabase
-from steward_harness.runtime.native_evidence import CAPTURED_ROOT, EVIDENCE_PENDING
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING, held_paths
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.world.git_world import BASE_TRAILER, TURN_TRAILER, GitWorld
 from steward_harness.lease import Lease
@@ -126,7 +126,7 @@ class WorldTurnCheckpoint:
         return WorldTurnWorktree(path, sha)
 
     def _add_worktree(self, path: Path, sha: str) -> None:
-        """Check out `sha` without the provider records Git already holds.
+        """Check out `sha` without the records and `steward-held` paths Git already holds.
 
         Owner homes hold live records and capture them into the index, so no
         checkout needs every session the world ever kept. Skip-worktree, not
@@ -135,9 +135,10 @@ class WorldTurnCheckpoint:
         """
         self._git(self.world.root, "worktree", "add", "--no-checkout", "--detach", str(path), sha)
         self._git(path, "read-tree", sha)
-        records = self._git(path, "ls-files", "-z", "--", CAPTURED_ROOT).stdout
-        if records:
-            self._git(path, "update-index", "-z", "--skip-worktree", "--stdin", input_text=records)
+        held = held_paths(lambda *args, input_text=None: self._git(path, *args, input_text=input_text).stdout)
+        if held:
+            self._git(path, "update-index", "-z", "--skip-worktree", "--stdin",
+                      input_text="".join(f"{entry}\0" for entry in held))
         self._git(path, "checkout-index", "--all", "--index")
 
     def _leave_records_to_git(self, path: Path) -> None:
