@@ -15,7 +15,8 @@ from steward_harness.config.schema import (
 from steward_harness.provider_types import ModelChoice
 from steward_harness.runtime.contracts import RuntimeRequest, resolve_model
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-from steward_harness.runtime.providers import build_runtimes
+from steward_harness.runtime.providers import BUILTIN_RUNTIMES, build_runtimes
+from steward_harness.runtime.providers.claude import ClaudeRuntime
 from steward_harness.runtime.providers.codex_app_server import CodexAppServerRuntime
 
 
@@ -72,6 +73,42 @@ def test_factory_builds_only_selected_builtins_without_provisioning_homes(tmp_pa
     assert build_runtimes(ProviderConfig(
         default_family="custom-adapter", fallback_families=(),
     ), broker) == {}
+
+
+def test_registry_names_every_builtin_and_build_runtimes_reads_only_it(tmp_path, monkeypatch):
+    """Adding a family is one adapter module and one registry entry.
+
+    `build_runtimes` learns no family names of its own: the registry decides
+    which configured families are builtins, which of them need a native home,
+    and how each is instantiated.
+    """
+    assert set(BUILTIN_RUNTIMES) == {"claude", "codex", "glm"}
+    providers, _ = runtimes(tmp_path)
+    assert {name: type(runtime) for name, runtime in providers.items()} == {
+        "codex": CodexAppServerRuntime, "claude": ClaudeRuntime, "glm": ClaudeRuntime,
+    }
+    assert {name: runtime.family for name, runtime in providers.items()} == {
+        "codex": "codex", "claude": "claude", "glm": "glm",
+    }
+    seen = []
+
+    def build_fake(provider, controller, homes):
+        seen.append((provider, controller, homes))
+        return "fake runtime"
+
+    monkeypatch.setitem(BUILTIN_RUNTIMES, "fake", build_fake)
+    broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
+    config = ProviderConfig(default_family="fake", fallback_families=())
+    with pytest.raises(ValueError, match="Missing provider.native_homes.*fake"):
+        build_runtimes(config, broker)
+    config = ProviderConfig(
+        default_family="fake", fallback_families=(), native_homes={"fake": str(tmp_path)},
+    )
+    assert build_runtimes(config, broker) == {"fake": "fake runtime"}
+    (provider, controller, homes), = seen
+    assert provider is config
+    assert controller.broker is broker
+    assert homes == {"fake": tmp_path}
 
 
 def test_factory_threads_anthropic_router_configuration(tmp_path):

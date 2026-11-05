@@ -12,6 +12,7 @@ from dataclasses import replace
 from steward_harness.runtime.text_only import verify_text_request
 from threading import RLock
 
+from steward_harness.config.schema import ProviderConfig
 from steward_harness.runtime.contracts import (
     Availability,
     MissingProviderSession,
@@ -553,3 +554,15 @@ class _AppServerTurn:
             effective_model=self.model,
             provider_session_id=self.thread_id,
         )
+
+
+def build_codex(
+    provider: ProviderConfig, controller: ProcessController, homes: Mapping[str, Path],
+) -> CodexAppServerRuntime:
+    """Codex App Server in its own native home."""
+    return CodexAppServerRuntime(
+        Path(provider.codex_executable),
+        controller=controller,
+        native_home=homes["codex"],
+        credential_home=Path(provider.native_credential_homes.get("codex", homes["codex"])),
+    )

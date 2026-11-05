@@ -14,6 +14,7 @@ from threading import RLock
 from typing import Any, cast
 from uuid import uuid4
 
+from steward_harness.config.schema import ProviderConfig
 from steward_harness.runtime.contracts import (
     SESSION_WORKSPACE_CAPABILITIES,
     Availability,
@@ -827,3 +828,35 @@ class ClaudeRuntime:
 def _missing_saved_conversation(stderr: str, requested_session_id: str) -> bool:
     expected = f"No conversation found with session ID: {requested_session_id}"
     return stderr in (expected, f"{expected}\n", f"{expected}\r\n")
+
+
+def build_claude(
+    provider: ProviderConfig, controller: ProcessController, homes: Mapping[str, Path],
+) -> ClaudeRuntime:
+    """Claude Code against Anthropic, or a configured Anthropic-compatible gateway."""
+    return ClaudeRuntime(
+        Path(provider.claude_executable),
+        controller=controller,
+        native_home=homes["claude"],
+        credential_home=Path(provider.native_credential_homes.get("claude", homes["claude"])),
+        base_url=provider.claude_anthropic_base_url,
+        credential_path=(
+            Path(provider.claude_credential_path)
+            if provider.claude_credential_path is not None else None
+        ),
+    )
+
+
+def build_glm(
+    provider: ProviderConfig, controller: ProcessController, homes: Mapping[str, Path],
+) -> ClaudeRuntime:
+    """The same CLI routed to z.ai with its own home and credential."""
+    return ClaudeRuntime(
+        Path(provider.claude_executable),
+        controller=controller,
+        native_home=homes["glm"],
+        credential_home=Path(provider.native_credential_homes.get("glm", homes["glm"])),
+        base_url=provider.glm_anthropic_base_url,
+        credential_path=Path(provider.glm_credential_path),
+        family="glm",
+    )
