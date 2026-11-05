@@ -119,6 +119,9 @@ def _declines_turn(message: str) -> bool:
             "log out and sign in",
             "you've hit your session limit",
             "you've hit your usage limit",
+            # "API Error: 529 overloaded_error" — the Anthropic capacity refusal.
+            "api error: 529",
+            "overloaded_error",
         )
     )
 
