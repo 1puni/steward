@@ -881,12 +881,21 @@ class StewardDaemon:
             now = time.time()
             observations = (self._procedures.world_rhythm_observations(now=now)
                             if self.config.rhythms else {})
+            stalled = self._procedures.stalled_world_rhythms(observations) if observations else []
             self._rhythm_health = dict(
-                observed_at=now, paused=paused(), rhythms=observations,
+                observed_at=now, paused=paused(), rhythms=observations, stalled=stalled,
                 workers=self.config.controller.workers,
                 dispatch=dispatch.observation() if hasattr(dispatch, "observation") else None)
             if paused() or not self.config.rhythms:
                 return
+            # A pause explains a quiet rhythm; an unpaused stall means admission broke.
+            for name in stalled:
+                self._alert(
+                    f"rhythm-stalled:{name}",
+                    f"⚠️ World rhythm `{name}` has produced no turn in "
+                    f"{int(observations[name]['evidence_age_seconds'] // 60)} minutes despite an "
+                    f"unconditional {self.config.rhythms[name].schedule}s schedule. Admission may be "
+                    f"silently broken; check `/rhythm list` and the controller log.")
             yield ("rhythms",), self._procedures.advance_rhythms
             # One world writer; choose fresh due work when its queued slot runs.
             if any(value['eligible'] for value in observations.values()):

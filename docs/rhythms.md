@@ -507,7 +507,10 @@ input paths, logical obligation and latest attempt source keys, source
 admission/completion times and evidence age. A queued continuation's admission
 time precedes its provider execution. The snapshot derives from the same evaluator as dispatch; it
 never controls scheduling. It becomes stale after the greater of 60 seconds
-and three controller polls. A missing sample is unknown, not healthy.
+and three controller polls. A missing sample is unknown, not healthy. The sample also
+lists `stalled`: world rhythms gated by nothing (`after`, `paths`, `sources` or `watch`)
+whose latest evidence is older than four of their intervals; while not paused, the
+controller tells the operator about each of them once per alert period.
 
 `scheduled` means a result receipt settled this interval; `active` means a turn
 is running, and `receipt_pending` means acceptance needs its receipt completed.
