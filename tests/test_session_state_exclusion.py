@@ -17,8 +17,8 @@ def test_drops_the_running_provider_transcript():
 
 
 def test_keeps_another_providers_transcript():
-    # Only the family that ran is excused; a turn must not be able to rewrite
-    # some other provider's recorded history and call it bookkeeping.
+    # The filter excuses exactly the prefixes it is given; the read-only gate
+    # passes every configured family's, since capture alone writes there.
     status = " M artefacts/codex/sessions/rollout-x.jsonl\n"
     assert _without_session_state(status, GLM) == status.rstrip("\n")
 

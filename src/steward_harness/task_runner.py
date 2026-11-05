@@ -552,7 +552,7 @@ class TaskRunner:
             after = GateRunner._snapshot(worktree, self.broker)
             if not isinstance(before, tuple) or not isinstance(after, tuple):
                 raise RuntimeExecutionError("read-only procedure changed its input; evidence rejected")
-            owned = session_state_prefixes(result.resolved.provider)
+            owned = self.state.tasks.session_state  # every family: fallback attempts capture here too
             if before[0] != after[0] or (
                 _without_session_state(before[1], owned) != _without_session_state(after[1], owned)
             ):

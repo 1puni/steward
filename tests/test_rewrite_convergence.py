@@ -224,6 +224,7 @@ def _transcribing(adapter, *, also_write=None):
         projects.mkdir(parents=True, exist_ok=True)
         (projects / "session.jsonl").write_text('{"turn": 1}\n')
         if also_write is not None:
+            (Path(request.cwd) / also_write).parent.mkdir(parents=True, exist_ok=True)
             (Path(request.cwd) / also_write).write_text("review must not change product")
         return replace(result, output=TaskOutput('Reviewed.', subject='review', disposition='idle', verdict='pass'))
 
@@ -252,6 +253,20 @@ def test_read_only_procedure_accepts_its_own_session_transcript(tmp_path):
     assert "yours to write in as well" not in prompt
     assert "Commit cohesive progress" not in prompt
     assert "## Durable repository knowledge" not in prompt
+
+
+def test_read_only_procedure_accepts_a_fallback_attempts_transcript(tmp_path):
+    """A run that fell back leaves every attempted family's records in the one checkout."""
+    bare, clone = _repository(tmp_path)
+    adapter, codex = InvestigationAdapter(), InvestigationAdapter()
+    codex.family = "codex"
+    state, runner, _, _ = harness(tmp_path / "state", bare, clone, adapter, codex=codex)
+    _, procedures = setup_procedures(tmp_path, state, runner)
+    candidate = runner.transports["app"].fetch()
+    task = procedures.request("security-one", "app", candidate, candidate)
+    _transcribing(adapter, also_write="artefacts/codex/sessions/rollout.jsonl")
+    runner.prepare(task)
+    assert "changed its input" not in (state.tasks.get(task).reason or "")
 
 
 def test_read_only_procedure_still_rejects_product_mutation_beside_a_transcript(tmp_path):
