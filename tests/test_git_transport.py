@@ -174,10 +174,13 @@ def test_stale_clone_observes_current_main_through_its_own_git_names(tmp_path: P
         tmp_path / "state.db", "app", str(remote), "main", allow_local=True
     )
     broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
+    told = []
+    transport.on_unpublished = told.append
     assert _git("rev-parse", "main", cwd=agent) == base
 
     assert transport.sync_remote_to_agent(agent, broker) == newer
 
+    assert told == []  # Behind is ordinary: it fast-forwards and says nothing.
     for name in ("main", "origin/main", "origin", "HEAD"):
         assert _git("rev-parse", name, cwd=agent) == newer
     assert (agent / "newer.txt").read_text() == "newer.txt\n"
@@ -194,12 +197,33 @@ def test_diverged_clone_stays_put_and_reports_it(tmp_path: Path) -> None:
     transport = ControllerGitTransport(
         tmp_path / "state.db", "app", str(remote), "main", allow_local=True
     )
+    told = []
+    transport.on_unpublished = told.append
 
     transport.sync_remote_to_agent(agent, UntrustedExecutionBroker(UntrustedExecutionConfig()))
 
     assert _git("rev-parse", "HEAD", cwd=agent) == local
     assert _git("rev-parse", "origin/main", cwd=agent) == newer
     assert "diverged" in _git("status", cwd=agent)
+    # The fast-forward refusal is the signal: the operator hears about it.
+    assert len(told) == 1 and "app" in told[0] and "main holds commits the remote lacks" in told[0]
+
+
+def test_unpublished_local_commit_alone_is_reported_as_unpublished(tmp_path: Path) -> None:
+    remote, _source, base = _remote_repository(tmp_path)
+    agent = tmp_path / "agent"
+    _git("clone", "-q", str(remote), str(agent), cwd=tmp_path)
+    local = _commit(agent, "local.txt")
+    transport = ControllerGitTransport(
+        tmp_path / "state.db", "app", str(remote), "main", allow_local=True
+    )
+    told = []
+    transport.on_unpublished = told.append
+
+    assert transport.sync_remote_to_agent(agent, UntrustedExecutionBroker(UntrustedExecutionConfig())) == base
+
+    assert _git("rev-parse", "HEAD", cwd=agent) == local
+    assert len(told) == 1 and base[:12] in told[0]
 
 
 def test_refresh_does_not_autostash_overlapping_local_work(tmp_path: Path) -> None:
@@ -215,9 +239,12 @@ def test_refresh_does_not_autostash_overlapping_local_work(tmp_path: Path) -> No
     transport = ControllerGitTransport(
         tmp_path / "state.db", "app", str(remote), "main", allow_local=True
     )
+    told = []
+    transport.on_unpublished = told.append
 
     transport.sync_remote_to_agent(agent, UntrustedExecutionBroker(UntrustedExecutionConfig()))
 
+    assert told == []  # Uncommitted work is not an unpublished commit.
     assert _git("rev-parse", "origin/main", cwd=agent) == newer
     assert _git("rev-parse", "HEAD", cwd=agent) == base
     assert (agent / "file").read_text() == "unfinished local work\n"
