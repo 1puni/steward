@@ -18,7 +18,7 @@ wander, sleep, wake up, and propose changes. The harness keeps the keys.
 
 | Steward is | Steward is not |
 | --- | --- |
-| A controller around native agent CLIs (Claude Code, Codex, GLM) that bring their own reasoning loops, tools and subagents | An agent framework: no agent graph, role system or tool catalogue of its own |
+| A controller around native agent CLIs (Claude Code, Codex, GLM, DeepSeek) that bring their own reasoning loops, tools and subagents | An agent framework: no agent graph, role system or tool catalogue of its own |
 | Git as the durable world: tasks, decisions, findings and knowledge are files and commits | A memory service, vector store or proprietary session format |
 | One daemon with one worker budget, first asked, first served | A workflow engine, scheduler or message bus |
 | Exact-revision gates: the commit that was tested is the commit that is pushed | A CI system: gates are your repository's own test and build commands |
@@ -148,8 +148,8 @@ Everything else should justify its existence.
 - **Tasks.** One admitted intention, one controller-owned Git ref, one `task.md`
   document. Every decision is a commit. A task can work for days, ask a question
   and wait, be steered mid-flight, and survive the controller being killed.
-- **Native sessions.** The thinking is done by the real Codex (App Server) and
-  Claude Code CLIs, GLM included through Claude Code, in their own private homes,
+- **Native sessions.** The thinking is done by the real Codex (App Server),
+  Claude Code (GLM included) and DeepSeek (DSH) CLIs, in their own private homes,
   with their own tools and subagents. The harness does not reimplement an agent
   loop. It owns only the authority that loop cannot grant itself.
 - **A world.** A Git repository of durable knowledge the steward wakes up in:

@@ -65,6 +65,9 @@ provider:
   # Provision each selected provider's home as the execution account, including
   # its login and approved native settings/plugins. Remove unused providers
   # from fallback_families instead of relying on a personal-home fallback.
+  # Optional DeepSeek: add deepseek to fallback_families and provision its home.
+  # deepseek_executable: /usr/local/bin/dsh
+  # See docs/native-provider-runtime.md#deepseek-native-family for profiles.
   native_homes:
     codex: "/home/steward/native/codex"
     claude: "/home/steward/native/claude"

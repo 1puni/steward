@@ -1,9 +1,9 @@
 # Native provider runtime
 
 The harness does not reimplement an agent. It runs the real ones: Codex through
-App Server, and Claude Code (for both the Claude and GLM families) through its
-stream-json protocol, each over the untrusted process broker and each in its own
-private configuration home. Native tools, subagents and task decomposition stay
+App Server, Claude Code (for both the Claude and GLM families) through its
+stream-json protocol, and DeepSeek through DSH headless JSON, each over the
+untrusted process broker and each in its own private configuration home. Native tools, subagents and task decomposition stay
 provider-owned. What the harness owns is the boundary around them: which home,
 which identity, which input, and whether the result is accepted into Git.
 
@@ -65,6 +65,27 @@ use is observed. After a tool-use event, the adapter retains the failed operatio
 and session instead of replaying work through another provider. Ordinary failures
 remain terminal. The sole missing-session retry
 uses the same provider and current input under its existing provenance fence.
+
+## DeepSeek native family
+
+`deepseek` runs `@deepseek-ai/dsh` 0.2.0-rc.2 (`deepseek_executable`, default
+`/usr/local/bin/dsh`) as `dsh headless --patch <file> --json -` with `DSH_HOME`
+set to its launch home under `native_homes.deepseek`. That home holds the 0600
+`.credentials.yaml` DSH reads in place; `sessions/*/<session>/session.v4.jsonl*`
+records are captured beneath `artefacts/deepseek/sessions` and resume as
+`session-<UUID>` with `--session-id`. Only the seed's `cordis.patch.yml` and
+skills are shared into launch homes.
+
+| profile | model | effort |
+| --- | --- | --- |
+| fast | deepseek-flash | low |
+| balanced | deepseek-flash | high |
+| deep | deepseek-v4-pro | max |
+
+Effort is `low`, `high`, `max` or omitted. DSH headless has no image transport,
+no live input and no `text_only` isolation; the adapter advertises none and
+refuses such requests. Cancellation, deadlines and token exhaustion send SIGINT
+to DSH's main process so it flushes its session record before containment.
 
 ## Anthropic-compatible endpoint routing
 

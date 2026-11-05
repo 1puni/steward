@@ -7,7 +7,7 @@ from steward_harness.config.schema import ProviderConfig
 from steward_harness.runtime.contracts import CognitionAdapter, ProviderFamily
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.process import ProcessController
-from steward_harness.runtime.providers import claude, codex_app_server
+from steward_harness.runtime.providers import claude, codex_app_server, deepseek
 
 RuntimeFactory = Callable[
     [ProviderConfig, ProcessController, Mapping[str, Path]], CognitionAdapter
@@ -19,6 +19,7 @@ BUILTIN_RUNTIMES: dict[ProviderFamily, RuntimeFactory] = {
     "claude": claude.build_claude,
     "glm": claude.build_glm,
     "codex": codex_app_server.build_codex,
+    "deepseek": deepseek.build_deepseek,
 }
 
 

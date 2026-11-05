@@ -35,6 +35,8 @@ _GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 
 def record_mappings(family: str) -> dict[str, str]:
     """Each provider home directory that holds records, and its world path."""
+    if family == 'deepseek':
+        return {'sessions': 'artefacts/deepseek/sessions'}
     if family == 'codex':
         return {'sessions': 'artefacts/codex/sessions',
                 'archived_sessions': 'artefacts/codex/archived_sessions',

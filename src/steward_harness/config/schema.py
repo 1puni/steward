@@ -394,6 +394,7 @@ class ProviderConfig(BaseModel):
 
     claude_executable: str = "/usr/local/bin/claude"
     codex_executable: str = "/usr/bin/codex"
+    deepseek_executable: str = "/usr/local/bin/dsh"
     glm_credential_path: str = "/etc/steward/zai-token"
     # Anthropic-compatible endpoint the Claude CLI families target. Routing
     # through a gateway is one base URL plus a credential file; omit the pair
