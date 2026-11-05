@@ -295,7 +295,10 @@ class TelegramService:
                 offset = max(offset, update_id + 1)
                 receipt = self._read_receipt(path)
                 name = f"{update_id:012d}"
-                if receipt.get("done") or "update" not in receipt or self.inbox.holds(name):
+                if receipt.get("done") or self.inbox.holds(name):
+                    continue
+                if "update" not in receipt:
+                    log.warning("Telegram receipt %s is unfinished without its update; skipped", path.name)
                     continue
                 record = inbound_record(receipt["update"])
                 if record is None:
