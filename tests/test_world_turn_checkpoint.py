@@ -775,6 +775,26 @@ def test_checkouts_leave_provider_records_to_git(tmp_path):
     assert _git("status", "--porcelain", cwd=again.path) == ""
 
 
+def test_checkouts_leave_steward_held_paths_to_git(tmp_path):
+    """A repository marks what stays in Git; absence on disk is not a deletion."""
+    world = _git_world(tmp_path / "world")
+    panel = "projects/comic/panel.png"
+    (world.root / panel).parent.mkdir(parents=True)
+    (world.root / panel).write_bytes(b"\x89PNG first")
+    (world.root / "projects/comic/notes.md").write_text("draft\n")
+    (world.root / ".gitattributes").write_text("*.png steward-held\n")
+    _commit_all(world.root, "media and notes")
+    checkpoint = _checkpoint(world, tmp_path)
+    turn = checkpoint.checkout(workspace_id="conversation-media")
+    assert (turn.path / "projects/comic/notes.md").read_text() == "draft\n"
+    assert not (turn.path / panel).exists()
+    assert _git("ls-files", "-v", panel, cwd=turn.path) == f"S {panel}"
+    assert _git("status", "--porcelain", cwd=turn.path) == ""
+    (turn.path / "projects/comic/notes.md").write_text("draft\nrevised\n")
+    _finish(checkpoint, turn, "media-notes", "revise notes", "revised")
+    assert (world.root / panel).read_bytes() == b"\x89PNG first"
+
+
 def test_a_checkout_from_before_capture_gives_its_records_back(tmp_path):
     world = _git_world(tmp_path / "world")
     record = "artefacts/claude/projects/steward/session.jsonl"

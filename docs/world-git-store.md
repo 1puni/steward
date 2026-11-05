@@ -47,6 +47,20 @@ the log before deciding. Distinct turn IDs minutes apart, each appending a few l
 is the harness working; identical state seconds apart is a loop. The remaining cost is
 `git log` readability, not storage, and it does not justify a subsystem.
 
+## Paths left to Git
+
+A checkout holds what a turn or task works on, not everything the repository keeps.
+Provider records under `artefacts/` live in owner homes and reach Git by capture, so
+every checkout marks them skip-worktree and never writes them out. A repository
+extends that rule through its own `.gitattributes`: a line such as
+`brand/*.png steward-held` keeps those files in Git the same way, byte-exact in every
+commit and absent from every checkout, which is how a world keeps its images, PDFs and
+archives without paying for a copy per checkout. The absence is not a deletion; the
+next commit carries the file unchanged. To read a held file, run
+`git restore --ignore-skip-worktree-bits -- <path>` in the checkout; to change one,
+first `git update-index --no-skip-worktree -- <path>` so the commit takes the edit. A
+gate that needs a file on disk must not hold it.
+
 ## Diagnosing a store
 
 ```sh

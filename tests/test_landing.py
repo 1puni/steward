@@ -321,6 +321,71 @@ def test_new_worktree_requires_an_exact_base_sha(repo: dict, base: str | None) -
         )
 
 
+def test_new_worktree_leaves_records_and_held_paths_to_git(repo: dict) -> None:
+    """Provider records and `steward-held` paths stay in Git; other files check out."""
+    clone = repo["clone"]
+    (clone / "artefacts" / "codex" / "sessions").mkdir(parents=True)
+    (clone / "artefacts" / "codex" / "sessions" / "rollout.jsonl").write_text("{}\n")
+    logo = b"\x89PNG\r\n\x1a\nrelease logo bytes\n"
+    (clone / "brand").mkdir()
+    (clone / "brand" / "logo.png").write_bytes(logo)
+    (clone / "chart.png").write_bytes(b"not held\n")
+    (clone / ".gitattributes").write_text("brand/*.png steward-held\n")
+    _commit_all(clone, "records, held media and a chart")
+    _push_main(repo)
+    base = _git("rev-parse", "HEAD", cwd=clone)
+
+    manager = WorktreeManager(
+        repo["clone"], repo["worktrees"], execution_broker=_broker()
+    )
+    worktree = manager.create_worktree(
+        "task-1", branch_name="tasks/task-1", base_sha=base
+    )
+    try:
+        assert (worktree / "file.txt").read_text() == "base\n"
+        assert (worktree / "chart.png").read_bytes() == b"not held\n"
+        assert not (worktree / "artefacts").exists()
+        assert not (worktree / "brand").exists()
+        held = _git("ls-files", "-v", cwd=worktree).splitlines()
+        assert "S artefacts/codex/sessions/rollout.jsonl" in held
+        assert "S brand/logo.png" in held
+        assert "H chart.png" in held
+        assert subprocess.run(["git", "show", "HEAD:brand/logo.png"], cwd=worktree,
+                              check=True, capture_output=True).stdout == logo
+        assert _git("status", "--porcelain", cwd=worktree) == ""
+        assert _git("rev-parse", "HEAD", cwd=worktree) == base
+    finally:
+        manager.remove_worktree("task-1")
+
+
+def test_recreated_worktree_also_leaves_records_to_git(repo: dict) -> None:
+    clone = repo["clone"]
+    (clone / "artefacts" / "glm" / "projects").mkdir(parents=True)
+    (clone / "artefacts" / "glm" / "projects" / "session.jsonl").write_text("{}\n")
+    _commit_all(clone, "records")
+    _push_main(repo)
+    base = _git("rev-parse", "HEAD", cwd=clone)
+
+    manager = WorktreeManager(
+        repo["clone"], repo["worktrees"], execution_broker=_broker()
+    )
+    first = manager.create_worktree(
+        "task-1", branch_name="tasks/task-1", base_sha=base
+    )
+    (first / "work.txt").write_text("task work\n")
+    _commit_all(first, "task work")
+    manager.remove_worktree("task-1")
+
+    recovered = manager.create_worktree("task-1", branch_name="tasks/task-1")
+    try:
+        assert (recovered / "work.txt").read_text() == "task work\n"
+        assert not (recovered / "artefacts").exists()
+        assert _git("status", "--porcelain", cwd=recovered) == ""
+        assert _git("rev-parse", "HEAD", cwd=recovered) != base
+    finally:
+        manager.remove_worktree("task-1")
+
+
 def test_recreating_worktree_reuses_dirty_crash_leftover(repo: dict) -> None:
     manager = WorktreeManager(
         repo["clone"], repo["worktrees"], execution_broker=_broker()
