@@ -1,6 +1,8 @@
 """Native records reach Git from their home through the index; no private copies."""
+import os
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -153,3 +155,25 @@ def test_the_reserve_has_a_ceiling_on_large_disks(tmp_path, monkeypatch):
                         lambda _: type(usage)(2 * tera, 2 * tera - 9 * 1024 ** 3, 9 * 1024 ** 3))
     with pytest.raises(RuntimeError, match='storage reserve reached'):
         native_evidence.check_headroom([tmp_path])
+
+
+def test_capture_runs_once_at_start_then_waits_for_the_interval_or_force(tmp_path, world):
+    home = tmp_path / 'home'
+    (home / 'sessions').mkdir(parents=True)
+    (home / 'sessions' / 'rollout.jsonl').write_text('{"turn": 1}\n')
+    mapping = {'sessions': 'artefacts/codex/sessions'}
+    # A session's first invocation always reaches Git.
+    assert native_evidence.capture(home, mapping, world, force=False) == 1
+    [marker] = home.glob(native_evidence.CAPTURED_MARKER + '-*')
+    # The next invocation inside the interval does not, however much the transcript grew.
+    (home / 'sessions' / 'rollout.jsonl').write_text('{"turn": 1}\n{"turn": 2}\n')
+    assert native_evidence.capture(home, mapping, world, force=False) == -1
+    assert _git(world, 'show', ':artefacts/codex/sessions/rollout.jsonl') == '{"turn": 1}\n'
+    # The caller that knows the session ended captures regardless.
+    assert native_evidence.capture(home, mapping, world, force=True) == 1
+    assert _git(world, 'show', ':artefacts/codex/sessions/rollout.jsonl') == '{"turn": 1}\n{"turn": 2}\n'
+    # Once the interval has passed, a running session reaches Git again.
+    (home / 'sessions' / 'rollout.jsonl').write_text('{"turn": 1}\n{"turn": 2}\n{"turn": 3}\n')
+    old = time.time() - 2 * native_evidence.CAPTURE_INTERVAL
+    os.utime(marker, (old, old))
+    assert native_evidence.capture(home, mapping, world, force=False) == 1

@@ -15,6 +15,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 # Stop admitting native writers before generation growth exhausts disk.
 # This is admission backpressure, not a quota on an already-running provider.
@@ -61,14 +62,38 @@ def _git(workspace: Path, *args: str, input_text: str | None = None,
     return result.stdout
 
 
-def capture(home: Path, mappings: dict[str, str], workspace: Path) -> int:
+#: Touched after each capture into one repository (suffixed with that
+#: repository's tag, like the private index); its mtime is when the home's
+#: records last reached that repository's index.
+CAPTURED_MARKER = '.steward-records-captured'
+
+#: A running session's records reach a repository at most this often.
+CAPTURE_INTERVAL = 86400.0
+
+
+def captured_marker(home: Path, tag: str) -> Path:
+    return home / f'{CAPTURED_MARKER}-{tag}'
+
+
+def due(marker: Path, *, force: bool) -> bool:
+    """Whether this home's records should reach Git now.
+
+    A session's records are captured once when it starts (no marker yet), once
+    when it ends (`force`, from the caller that knows the session is over) and
+    otherwise at most once per `CAPTURE_INTERVAL`.
+    """
+    return force or not marker.exists() or time.time() - marker.stat().st_mtime >= CAPTURE_INTERVAL
+
+
+def capture(home: Path, mappings: dict[str, str], workspace: Path, *, force: bool = True) -> int:
     """Stage every record under home/<name> at <relative>/... in `workspace`'s index.
 
     Each mapping keeps a private Git index in the home, so Git's stat cache
     hashes only what changed since the last capture into this repository.
     Entries are marked skip-worktree: the checkout does not hold these files,
     and a later `git add --all` must not read their absence as deletion. Files
-    the provider removed stay in Git; capture only adds and updates.
+    the provider removed stay in Git; capture only adds and updates. Returns
+    -1 when the policy (see `due`) says not now.
     """
     roots = {name: home / name for name in mappings}
     if not any(files for root in roots.values() if root.is_dir() and not root.is_symlink()
@@ -78,6 +103,8 @@ def capture(home: Path, mappings: dict[str, str], workspace: Path) -> int:
     common = _git(workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip()
     # Blobs live in one repository; an index from another would name missing ones.
     tag = hashlib.sha256(common.encode()).hexdigest()[:16]
+    if not due(captured_marker(home, tag), force=force):
+        return -1
     entries: list[tuple[str, str, str]] = []
     for name, relative in mappings.items():
         root = home / name
@@ -108,6 +135,7 @@ def capture(home: Path, mappings: dict[str, str], workspace: Path) -> int:
         stale = workspace / target
         if Path(os.path.realpath(stale.parent)) == root / Path(target).parent and stale.is_file():
             stale.unlink()
+    captured_marker(home, tag).touch()
     return len(entries)
 
 
@@ -144,7 +172,8 @@ def leave_to_git(workspace: Path) -> int:
 
 
 if __name__ == '__main__':
-    operation, home, records, workspace = json.load(sys.stdin)
+    operation, home, records, workspace, *rest = json.load(sys.stdin)
+    policy = rest[0] if rest else {}
     if operation == 'check':
         try:
             check_headroom([Path(home), *map(Path, records.values())])
@@ -162,7 +191,7 @@ if __name__ == '__main__':
     elif operation == 'capture':
         # The marker fences the checkout until its records are in the index.
         if workspace:
-            capture(Path(home), records, Path(workspace))
+            capture(Path(home), records, Path(workspace), force=policy.get('force', True))
             (Path(workspace) / EVIDENCE_PENDING).unlink(missing_ok=True)
     elif operation == 'release':
         leave_to_git(Path(workspace))
