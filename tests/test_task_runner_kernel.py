@@ -1205,3 +1205,56 @@ def test_unverified_teardown_holds_task_without_committing_partial_work(tmp_path
     assert held.work_sha == prior_work
     assert state.get_conversation(held.session_id).provider_session_id == 'retained-native-session'
     assert not state.tasks.queued()
+
+
+class WatchingAdapter(EditingAdapter):
+    """A watch: looks, changes nothing, asks to look again."""
+
+    def execute(self, request: RuntimeRequest) -> RuntimeResult:
+        self.requests.append(request)
+        request.on_session_started("claude-session")
+        return RuntimeResult(
+            output=TaskOutput('Nothing changed on the vendor site.', subject='watch: nothing new', disposition='continue'),
+            resolved=request.resolved,
+            effective_model=request.resolved.model,
+            provider_session_id="claude-session",
+        )
+
+
+def test_continue_that_moved_nothing_commits_nothing_and_waits(tmp_path: Path) -> None:
+    bare, clone = _repository(tmp_path)
+    state = StateDatabase(tmp_path / "state.db")
+    admitted = admit_task(state, TaskSpec("app", "Watch the vendor", "Look again until the write-up appears."))
+    adapter = WatchingAdapter()
+    runner = TaskRunner(
+        state=state,
+        repositories={"app": RepositoryConfig(path=str(clone), remote_url=str(bare))},
+        transports={"app": ControllerGitTransport(tmp_path / "controller.db", "app", str(bare), "main", allow_local=True)},
+        worktrees_root=tmp_path / "worktrees",
+        broker=UntrustedExecutionBroker(UntrustedExecutionConfig()),
+        cognition=Cognition({"claude": adapter}),
+        provider_fallbacks=("claude",),
+        timeout_seconds=30,
+    )
+    # The first look has no slice before it, so it records itself.
+    assert run_task(runner) == admitted.task_id
+    first = state.tasks.get(admitted.task_id)
+    assert first.disposition == "continue" and first.work_sha
+    assert task_status(runner, admitted.task_id) is TaskStatus.QUEUED
+
+    # The second look moves nothing: no new slice commit, no ledger revision.
+    assert run_task(runner) == admitted.task_id
+    second = state.tasks.get(admitted.task_id)
+    assert second.work_sha == first.work_sha
+    assert second.revision == first.revision
+    assert len(adapter.requests) == 2
+
+    # And it is not asked again before the wait, though it still owes a look.
+    assert run_task(runner) == admitted.task_id
+    assert len(adapter.requests) == 2
+    assert task_status(runner, admitted.task_id) is TaskStatus.QUEUED
+
+    # New input ends the wait.
+    state.tasks.note(admitted.task_id, "The write-up is up.")
+    assert run_task(runner) == admitted.task_id
+    assert len(adapter.requests) == 3
