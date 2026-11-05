@@ -334,9 +334,9 @@ decision rather than burning attempts.
 checkpoint commit, empty when nothing changed, so a workspace-write task that
 changed no product file is still a commit ahead of the base. When it closes
 `idle`, that work goes through the gates and lands on your default branch as a
-`steward: accept tasks/<id>` commit with no file changes, carrying
-`Steward-Work` and `Steward-Base` trailers; `Steward-Work` names the checkpoint
-whose message holds the findings. This is deliberate: the findings are the
+`steward: accept <task title> [tasks/<id>]` commit with no file changes, carrying
+`Steward-Branch`, `Steward-Work` and `Steward-Base` trailers; `Steward-Work` names
+the checkpoint whose message holds the findings. This is deliberate: the findings are the
 product of an investigation, and a record kept only in controller-private
 storage is one nobody on the team can read. If every push to
 your default branch starts an expensive deployment, an investigation will start

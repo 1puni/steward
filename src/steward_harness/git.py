@@ -200,6 +200,15 @@ def steward_commit_argv(
     ]
 
 
+def steward_accept_subject(title: str | None, ref: str) -> str:
+    """One-line acceptance subject naming the work and, in brackets, its ref.
+
+    Whitespace collapses so a title never leaks a second line into the body.
+    """
+    cleaned = " ".join((title or "").split())
+    return f"steward: accept {cleaned} [{ref}]" if cleaned else f"steward: accept {ref}"
+
+
 def run_agent_git(
     broker: UntrustedExecutionBroker,
     *args: str,

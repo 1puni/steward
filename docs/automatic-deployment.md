@@ -103,7 +103,7 @@ waits a fresh full quiet period; input already captured stays covered, because
 coverage is read from accepted task Git. A controller with no finished run has
 covered nothing, so its first quiet period ends in one run over the current input.
 
-Steward bookkeeping is not input. Task documents, `steward: accept task`
+Steward bookkeeping is not input. Task documents, task acceptance
 commits, holds and procedure evidence live in the controller's task store, not
 in any repository remote, and every procedure task, the rhythm's own runs
 included, is excluded from task work. A rhythm's result therefore cannot
