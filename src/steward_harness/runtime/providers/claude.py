@@ -449,7 +449,11 @@ class ClaudeInputStream:
                     # turn of its own. That is this execution going on, and its
                     # result is the latest word, not a stray.
                     answers_receipt = False
-                    if not self._continuation(event):
+                    if self._continuation(event):
+                        # Only the continuation spends its notice; an ordinary
+                        # result racing ahead of it leaves the notice pending.
+                        self.notified = False
+                    else:
                         if (not isinstance(command, str) or command not in self.expected_results
                                 or command in self.results):
                             raise RuntimeExecutionError("native result has no offered command identity", session_id=self.session_id)
@@ -457,7 +461,6 @@ class ClaudeInputStream:
                             raise RuntimeExecutionError("native returned before active commands completed", session_id=self.session_id)
                         self.results.add(command)
                         answers_receipt = command in self.receipts
-                    self.notified = False
                 if self.interrupt_id is not None and event.get("type") == "result":
                     # Interrupted results are terminal evidence, never a usable
                     # reply. Drain command completion before closing transport.

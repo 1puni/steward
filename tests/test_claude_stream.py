@@ -209,13 +209,32 @@ def test_background_notice_turn_after_the_offered_result_continues_the_execution
     assert [(r.source_id, r.disposition) for r in receipts] == [("late", "rejected")]
 
 
-def test_second_result_needs_a_background_notice_since_the_last(tmp_path):
+def test_background_notice_racing_before_the_offered_result_still_opens_its_continuation(tmp_path):
     stream, _, root, _ = start(tmp_path)
-    notice(stream)  # during the parent's own turn: its result consumes it
+    notice(stream)  # arrives before the parent's own result; that result does not spend it
+    result(stream, root)
+    command(stream, root, "completed")
+    unattributed(stream, "final account")
+    stream.finish()
+    assert stream.lifecycle.finish()[0] == "final account"
+
+
+def test_stray_result_without_any_notice_is_rejected(tmp_path):
+    stream, _, root, _ = start(tmp_path)
     result(stream, root)
     command(stream, root, "completed")
     with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
         unattributed(stream, "stray")
+
+
+def test_second_continuation_needs_a_fresh_notice(tmp_path):
+    stream, _, root, _ = start(tmp_path)
+    notice(stream)
+    result(stream, root)
+    command(stream, root, "completed")
+    unattributed(stream, "first continuation")
+    with pytest.raises(RuntimeExecutionError, match="no offered command identity"):
+        unattributed(stream, "second continuation")
 
 
 def test_background_notice_cannot_repeat_an_offered_result(tmp_path):
