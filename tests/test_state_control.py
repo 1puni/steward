@@ -61,6 +61,21 @@ def test_pause_is_one_durable_boolean_singleton(tmp_path: Path) -> None:
     assert (path.parent / "paused").exists() is False
 
 
+def test_a_rhythm_pause_is_one_durable_marker_per_rhythm(tmp_path: Path) -> None:
+    """Pausing one rhythm names it alone and is not the global scheduler pause."""
+    path = tmp_path / "state.db"
+    state = StateDatabase(path)
+    assert not state.rhythm_paused("codex")
+    state.set_rhythm_paused("codex", True)
+    assert state.rhythm_paused("codex")
+    assert not state.rhythm_paused("claude")
+    assert not state.paused()
+    assert StateDatabase(path).rhythm_paused("codex")
+    state.set_rhythm_paused("codex", True)  # Setting a set bit is a no-op, like /pause.
+    state.set_rhythm_paused("codex", False)
+    assert not (path.parent / "rhythms-paused" / "codex").exists()
+
+
 def test_conversation_queries_profile_clear_and_concrete_turn_cancel(
     tmp_path: Path,
 ) -> None:

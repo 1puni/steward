@@ -849,6 +849,34 @@ def test_rhythm_list_shows_quiet_policy_and_configured_runs_without_history(tmp_
     assert commands("rhythm", "list", 1, 42, 7).count("automatic admission paused") == 2
 
 
+def test_rhythm_pause_and_resume_stop_one_rhythm_without_touching_the_rest(tmp_path):
+    """`/rhythm pause <name>` is durable, names one rhythm and refuses a manual run."""
+    from steward_harness.config.schema import ProcedureRhythmConfig
+
+    commands = _status_commands(tmp_path)
+    commands.config.rhythms["light"] = ProcedureRhythmConfig(
+        schedule={"quiet": 300}, procedure="reflect", input="repositories/app/main", owner=None)
+    commands.config.rhythms["daily"] = ProcedureRhythmConfig(
+        schedule=86400, procedure="consolidate", input="repositories/app/main", owner=None)
+
+    paused = commands("rhythm", "pause light", 1, 42, 7)
+    assert "light paused" in paused and "/rhythm resume light" in paused
+    listing = commands("rhythm", "list", 1, 42, 7)
+    assert listing.count("; paused") == 1
+    assert next(line for line in listing.splitlines() if line.startswith("light:")).endswith("; paused")
+    assert StateDatabase(commands.state.path).rhythm_paused("light")
+    assert not commands.state.rhythm_paused("daily")
+    refused = commands("rhythm", "run light", 1, 42, 7)
+    assert "paused" in refused and "resume" in refused
+    commands.state.set_paused(True)
+    assert commands("rhythm", "list", 1, 42, 7).count("automatic admission paused") == 2
+
+    assert "light resumed" in commands("rhythm", "resume light", 1, 42, 7)
+    assert not commands.state.rhythm_paused("light")
+    assert commands.state.paused()  # Resuming one rhythm leaves the global bit alone.
+    assert commands("rhythm", "pause nosuch", 1, 42, 7).startswith("Usage: /rhythm")
+
+
 def test_deferral_cause_names_the_subprocess_failure() -> None:
     """A deferral must be able to state why, not just that a command exited."""
     from steward_harness.daemon import deferral_cause

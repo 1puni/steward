@@ -52,7 +52,7 @@ _BUILTIN_COMMANDS: Mapping[str, tuple[CommandArgumentMode, str]] = {
         # This string is published through setMyCommands, so it is the operator's
         # menu. Advertise only what `_rhythm` accepts: schedules are edited in
         # controller configuration, not through a command.
-        "Inspect scheduled cognition: list, or run <name>.",
+        "Inspect scheduled cognition: list, run <name>, or pause/resume <name>.",
     ),
     "clear": (
         CommandArgumentMode.NONE,
