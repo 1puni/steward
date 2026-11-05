@@ -79,11 +79,12 @@ def test_native_mcp_close_reports_pending_without_a_tool_error(tmp_path):
                 dict(jsonrpc='2.0', id=2, method='tools/call', params=dict(name='task', arguments=dict(
                     operation='close', key='finish', subject='feat: finish', disposition='idle'))),
             ]
-            child = subprocess.run([sys.executable, '-c', CLIENT, request.task_call_socket],
+            child = subprocess.run([sys.executable, '-c', CLIENT, request.task_call_socket, ','.join(request.task_call_operations)],
                 input=''.join(json.dumps(m) + '\n' for m in messages), capture_output=True,
                 text=True, check=True, timeout=10)
             listed, called = [json.loads(line)['result'] for line in child.stdout.splitlines()]
             assert listed['tools'][0]['inputSchema']['properties']['disposition']['enum'] == ['continue', 'idle', 'ask']
+            assert listed['tools'][0]['inputSchema']['properties']['operation']['enum'] == ['query', 'close', 'understanding']
             assert called['isError'] is False
             receipt = json.loads(called['content'][0]['text'])
             assert receipt['pending'] and not receipt['accepted']

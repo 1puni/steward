@@ -233,6 +233,7 @@ class RuntimeRequest:
     sandbox_mode: SandboxMode = "read-only"
     writable_roots: tuple[Path, ...] = ()
     task_call_socket: str | None = None
+    task_call_operations: tuple[str, ...] = ()
     on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None
     on_session_started: Callable[[str], None] = lambda _session_id: None
     on_started: Callable[[Callable[[], None]], None] | None = None

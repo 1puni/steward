@@ -249,14 +249,14 @@ def test_task_tool_is_bound_to_the_real_provider_invocation():
         controller = ProcessController(broker)
         try:
             replies = []
-            controller.run(['/usr/bin/python3', '-c', CLIENT, server.path], cwd=workdir,
+            controller.run(['/usr/bin/python3', '-c', CLIENT, server.path, ','.join(server.operations)], cwd=workdir,
                            env={}, timeout_seconds=30, stdin_text=request,
                            on_process_started=server.bind, on_stdout_line=replies.append)
             receipt = json.loads(json.loads(replies[0])['result']['content'][0]['text'])
             assert receipt['accepted']
             replies.clear()
             # Same socket, request and UID, but a different owned service.
-            controller.run(['/usr/bin/python3', '-c', CLIENT, server.path], cwd=workdir,
+            controller.run(['/usr/bin/python3', '-c', CLIENT, server.path, ','.join(server.operations)], cwd=workdir,
                            env={}, timeout_seconds=30, stdin_text=request, on_stdout_line=replies.append)
             assert json.loads(replies[0])['result']['isError']
             assert len(state.tasks.all()) == 1

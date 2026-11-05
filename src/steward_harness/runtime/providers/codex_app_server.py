@@ -154,7 +154,7 @@ class CodexAppServerRuntime:
                 output = self._controller.run(
                     [str(self.executable), "app-server", "--stdio", "-c",
                      "sqlite_home=" + json.dumps(str(workspace.home)),
-                     *(["--strict-config"] if request.text_only else codex_arguments(request.task_call_socket))],
+                     *(["--strict-config"] if request.text_only else codex_arguments(request.task_call_socket, request.task_call_operations))],
                     cwd=request.cwd,
                     storage_paths=(workspace.home, request.cwd),
                     env=environment,
