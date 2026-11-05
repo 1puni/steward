@@ -21,7 +21,7 @@ from steward_harness.deploy.release import ReleaseError, ReleaseManager
 from steward_harness.deploy.systemd import (
     ServiceError,
 )
-from steward_harness.git_transport import ControllerGitTransport
+from steward_harness.git_transport import ControllerGitTransport, GitTransportError
 from steward_harness.runtime.execution import BoundaryStatus, UntrustedExecutionBroker
 
 
@@ -1091,6 +1091,19 @@ def test_observed_tip_reads_the_mirror_and_does_not_fetch(
     assert transport.observed_tip()[0] == first
     assert transport.fetch() != first
     assert transport.observed_tip()[0] == transport.fetch()
+
+
+def test_observed_tip_ignores_descendant_refs(tmp_path: Path, git_repo: Path) -> None:
+    """`refs/steward/remote/preview/topic` is not the tip of `preview`."""
+    subprocess.run(["git", "checkout", "-q", "-b", "preview/topic"], cwd=git_repo, check=True)
+    _commit(git_repo, "topic work")
+    transport = ControllerGitTransport(
+        tmp_path / "state.db", "repo", str(git_repo), "preview", allow_local=True
+    )
+    with pytest.raises(GitTransportError):
+        transport.fetch()
+
+    assert transport.observed_tip() is None
 
 
 # --- Correction 6: what last worked is not what is pointed at ---------------
