@@ -310,6 +310,8 @@ class Procedures:
         for name, rhythm in self.config.rhythms.items():
             if rhythm.input == "world":
                 continue  # A world turn, not a task: see `due_world_rhythms`.
+            if self.state.rhythm_paused(name):
+                continue  # A pause stops admission only; an open run finishes.
             prefix = f"rhythm:{name}:"
             runs = [task for task in tasks if task.procedure and task.procedure.event.startswith(prefix)]
             # Cancellation ends recurrence's obligation once native execution
@@ -411,7 +413,7 @@ class Procedures:
         # of an hourly/daily rhythm while both are due. No catch-up buckets.
         observations = self.world_rhythm_observations(now=now)
         for name, value in sorted(observations.items(), key=lambda item: item[1]['due_at']):
-            if value['eligible']:
+            if value['eligible'] and not self.state.rhythm_paused(name):
                 yield name, value['event']
 
     def advance_world_rhythm(self, conversations):
