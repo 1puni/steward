@@ -1,15 +1,25 @@
 """Configured provider adapters, each with its own stewardship-owned native home."""
 
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from steward_harness.config.schema import ProviderConfig
 from steward_harness.runtime.contracts import CognitionAdapter, ProviderFamily
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.process import ProcessController
-from steward_harness.runtime.providers.claude import ClaudeRuntime
-from steward_harness.runtime.providers.codex_app_server import CodexAppServerRuntime
+from steward_harness.runtime.providers import claude, codex_app_server
 
-BUILTIN_FAMILIES = frozenset({"claude", "codex", "glm"})
+RuntimeFactory = Callable[
+    [ProviderConfig, ProcessController, Mapping[str, Path]], CognitionAdapter
+]
+
+#: Every built-in family and the adapter module factory that instantiates it.
+#: A new provider is one adapter module and one entry here.
+BUILTIN_RUNTIMES: dict[ProviderFamily, RuntimeFactory] = {
+    "claude": claude.build_claude,
+    "glm": claude.build_glm,
+    "codex": codex_app_server.build_codex,
+}
 
 
 def build_runtimes(
@@ -18,8 +28,8 @@ def build_runtimes(
 ) -> dict[ProviderFamily, CognitionAdapter]:
     """Instantiate configured builtins only from their declared native homes."""
     homes = {name: Path(path) for name, path in provider.native_homes.items()}
-    selected = provider.family_order
-    missing = [name for name in selected if name in BUILTIN_FAMILIES and name not in homes]
+    selected = [name for name in provider.family_order if name in BUILTIN_RUNTIMES]
+    missing = [name for name in selected if name not in homes]
     if missing:
         raise ValueError(
             "Missing provider.native_homes for configured builtins: " + ", ".join(missing)
@@ -27,34 +37,4 @@ def build_runtimes(
             "providers from the configured provider order."
         )
     controller = ProcessController(execution_broker)
-    runtimes: dict[ProviderFamily, CognitionAdapter] = {}
-    if "claude" in selected:
-        runtimes["claude"] = ClaudeRuntime(
-            Path(provider.claude_executable),
-            controller=controller,
-            native_home=homes["claude"],
-            credential_home=Path(provider.native_credential_homes.get("claude", homes["claude"])),
-            base_url=provider.claude_anthropic_base_url,
-            credential_path=(
-                Path(provider.claude_credential_path)
-                if provider.claude_credential_path is not None else None
-            ),
-        )
-    if "glm" in selected:
-        runtimes["glm"] = ClaudeRuntime(
-            Path(provider.claude_executable),
-            controller=controller,
-            native_home=homes["glm"],
-            credential_home=Path(provider.native_credential_homes.get("glm", homes["glm"])),
-            base_url=provider.glm_anthropic_base_url,
-            credential_path=Path(provider.glm_credential_path),
-            family="glm",
-        )
-    if "codex" in selected:
-        runtimes["codex"] = CodexAppServerRuntime(
-            Path(provider.codex_executable),
-            controller=controller,
-            native_home=homes["codex"],
-            credential_home=Path(provider.native_credential_homes.get("codex", homes["codex"])),
-        )
-    return runtimes
+    return {name: BUILTIN_RUNTIMES[name](provider, controller, homes) for name in selected}
