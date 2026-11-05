@@ -142,7 +142,7 @@ def test_native_task_can_query_ownership_before_closure_without_steering(tmp_pat
         assert 'operation="query"' in request.prompt
         assert 'QUESTION: TASK_QUERY:' not in request.prompt
         request.on_process_started(os.getpid(), None)
-        child = subprocess.Popen(['python3', '-c', CLIENT, request.task_call_socket],
+        child = subprocess.Popen(['python3', '-c', CLIENT, request.task_call_socket, ','.join(request.task_call_operations)],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         def call(arguments):
             child.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',

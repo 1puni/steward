@@ -805,7 +805,7 @@ class ClaudeRuntime:
                 *(["--effort", request.resolved.reasoning_effort] if request.resolved.reasoning_effort else [])]
         if request.task_call_socket:
             command.extend(("--mcp-config", json.dumps({"mcpServers": {
-                "steward_tasks": server_config(request.task_call_socket)}})))
+                "steward_tasks": server_config(request.task_call_socket, request.task_call_operations)}})))
         for root in request.writable_roots:
             command.extend(("--add-dir", str(root)))
         if session_id is not None:
