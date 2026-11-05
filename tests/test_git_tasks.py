@@ -16,7 +16,7 @@ from test_task_no_changes import InvestigationAdapter
 from test_task_runner_kernel import _git, _repository
 
 
-def harness(root, bare, clone, adapter):
+def harness(root, bare, clone, adapter, **fallback_adapters):
     root.mkdir(exist_ok=True)
     state = StateDatabase(root / "state.db")
     state.tasks.default_provider = "claude"
@@ -24,7 +24,7 @@ def harness(root, bare, clone, adapter):
     transport = ControllerGitTransport(root / "state.db", "app", str(bare), "main", allow_local=True)
     broker = UntrustedExecutionBroker(UntrustedExecutionConfig())
     runner = TaskRunner(state=state, repositories={"app": repository}, transports={"app": transport},
-                        broker=broker, worktrees_root=root / "worktrees", cognition=Cognition({"claude": adapter}),
+                        broker=broker, worktrees_root=root / "worktrees", cognition=Cognition({"claude": adapter, **fallback_adapters}),
                         provider_fallbacks=(), timeout_seconds=30)
     reconciler = RepositoryReconciler(state=state, repositories=runner.repositories,
                                      transports=runner.transports, broker=broker,
