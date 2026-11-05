@@ -574,6 +574,9 @@ class StewardDaemon:
             name: controller_transport(self.config, name)
             for name in self.config.repositories
         }
+        for name, transport in transports.items():
+            transport.on_unpublished = lambda text, name=name: self._alert(
+                f"default-branch-drift:{name}", text, quiet_seconds=86400)
         cognition = Cognition(
             self.adapters if self.adapters is not None else build_runtimes(self.config.provider, self.broker),
             self.config.provider.models,
