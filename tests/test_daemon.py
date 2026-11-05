@@ -1251,3 +1251,48 @@ def test_world_exchange_follows_remote_notices_and_new_local_commits(tmp_path, m
     world_work()[0]()
     assert exchanges == ['a', 'a', 'b']
     assert not world_work()
+
+
+def test_rhythm_lane_alerts_the_operator_once_when_an_unconditional_rhythm_stalls(tmp_path) -> None:
+    instructions = tmp_path / "x.md"
+    instructions.write_text("Evaluate x-posting.\n")
+    world = make_world(tmp_path / "world")
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "world": {"root": str(world.root)},
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"incidents": 42}},
+        "procedures": {"x": {"instructions": str(instructions), "provider": "codex",
+                             "model": {"model": "m", "effort": "low"},
+                             "access": "workspace-write"}},
+        "rhythms": {"x-posting": {"schedule": 1800, "procedure": "x", "input": "world",
+                                  "owner": "telegram:42"}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    daemon = StewardDaemon(config, tmp_path / "steward.yaml")
+    sent: list[tuple[int, int, str]] = []
+    daemon._telegram = SimpleNamespace(
+        config=config.telegram,
+        send_reply=lambda chat_id, topic_id, text: sent.append((chat_id, topic_id, text)))
+    daemon._procedures = SimpleNamespace(
+        world_rhythm_observations=lambda *, now=None: {
+            "x-posting": {"evidence_age_seconds": 1800 * 5, "eligible": False}},
+        stalled_world_rhythms=lambda observations: ["x-posting"],
+        advance_rhythms=lambda: None)
+    kernel = SimpleNamespace(
+        dispatch=SimpleNamespace(reap=lambda: None, submit=lambda *a, **k: None,
+                                 observation=lambda: None),
+        owners=lambda: (), tasks=SimpleNamespace(flush_inputs=lambda: None))
+    step = daemon._pass(state, SimpleNamespace(), kernel, SimpleNamespace(), None)
+    step()
+    step()  # The same key speaks once per quiet period.
+    [(chat_id, topic_id, text)] = sent
+    assert (chat_id, topic_id) == (1, 42)
+    assert "x-posting" in text and "silently broken" in text
+    assert daemon._rhythm_health["stalled"] == ["x-posting"]
+
+    # A pause explains the quiet: the sample still names it, nobody is alerted.
+    sent.clear()
+    daemon._alerted.clear()
+    state.set_paused(True)
+    step()
+    assert sent == [] and daemon._rhythm_health["stalled"] == ["x-posting"]

@@ -77,3 +77,17 @@ def test_health_names_stale_rhythm_evidence_without_changing_release_readiness(m
         assert body['world_rhythms']['observed_at'] == 100
     finally:
         server.stop()
+
+
+def test_health_names_stalled_unconditional_rhythms_in_the_rhythm_sample(monkeypatch):
+    monkeypatch.setenv('STEWARD_RELEASE_SHA', 'a' * 40)
+    sample = {'observed_at': 100, 'paused': False,
+              'rhythms': {'x-posting': {'progress': 'active'}}, 'stalled': ['x-posting']}
+    server = HealthServer('127.0.0.1:0', rhythms=lambda: sample, observation_max_age=60)
+    server.start()
+    try:
+        status, body = _get(server.port)
+        assert status == 200 and body['ok']
+        assert body['world_rhythms']['stalled'] == ['x-posting']
+    finally:
+        server.stop()
