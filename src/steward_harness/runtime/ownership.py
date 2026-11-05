@@ -54,10 +54,13 @@ class OwnedProcess(subprocess.Popen):
     def send_signal(self, sig: int) -> None:
         if self.poll() is not None:
             return
-        # Signals address the service, including descendants that escaped its leader.
+        # Termination owns the whole service. Cooperative native signals
+        # address only the main process, letting it wind down its own children.
         action = ["systemctl", "stop", "--no-block", self.unit]
         if sig == signal.SIGKILL:
             action = ["systemctl", "kill", "--kill-whom=" + self._kill_whom, "--signal=KILL", self.unit]
+        elif sig != signal.SIGTERM:
+            action = ["systemctl", "kill", "--kill-whom=main", f"--signal={sig}", self.unit]
         deadline = time.monotonic() + 15
         while self.poll() is None:
             result = subprocess.run(action, capture_output=True, timeout=15)

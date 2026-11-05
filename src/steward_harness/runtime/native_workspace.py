@@ -28,8 +28,10 @@ flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 # Config/auth remain private. Each invocation owns its links; no shared link
 # is retargeted when different worlds or concurrent conversations execute.
 persistent = owner is not None
-if session and str(uuid.UUID(session)) != session:
-    raise ValueError('native session must be a canonical UUID')
+deepseek = pattern.startswith('artefacts/deepseek/')
+identity = session.removeprefix('session-') if session and deepseek else session
+if session and (str(uuid.UUID(identity)) != identity or (deepseek and session != 'session-' + identity)):
+    raise ValueError('invalid native session identity')
 if persistent:
     launch = source / ('.steward-owner-' + owner['key'])
     try:
@@ -90,13 +92,15 @@ try:
         if entry.name.startswith(('.steward-launch-', '.steward-owner-', '.steward-evidence')) or entry.name in mappings or entry.name in {'skills', '.steward-tmp'}:
             continue
         # Durable runtime state belongs to this owner, never the seed home.
+        if deepseek and entry.name != 'cordis.patch.yml':
+            continue
         if persistent and entry.name not in owner['shared']:
             continue
         if '.sqlite' in entry.name:
             continue
         link(launch / entry.name, entry, entry.is_dir(),
              persistent and entry.name == '.claude.json')
-    # Both native providers discover skills beneath their configured home.
+    # Native providers discover skills beneath their configured home.
     # Overlay links per launch; never write through the instance's skills link.
     skills = launch / 'skills'
     skills.mkdir(exist_ok=True)
@@ -401,7 +405,8 @@ def native_workspace(
     evidence("check", home, {"workspace": str(request.cwd)})
     # Only a read-only, ownerless run with nowhere to commit uses the seed home
     # directly; given a record checkout it gets a launch home and is captured.
-    if request.sandbox_mode != "workspace-write" and request.native_owner is None and checkout is None:
+    if (request.sandbox_mode != "workspace-write" and request.native_owner is None
+            and checkout is None and request.resolved.provider != "deepseek"):
         prepare_temporary(home)
         yield NativeWorkspace(home, request.provider_session_id, deadline)
         return
@@ -438,6 +443,7 @@ def native_workspace(
                     "shared": ["auth.json", "config.toml", "requirements.toml", "plugins", "AGENTS.md",
                                "AGENTS.override.md", "rules", "prompts", "hooks.json", "agents"]
                     if request.resolved.provider == "codex" else
+                    ["cordis.patch.yml"] if request.resolved.provider == "deepseek" else
                     [".claude.json", "settings.json", "settings.local.json",
                      "plugins", "commands", "agents", "CLAUDE.md", "rules", "output-styles"],
                 },

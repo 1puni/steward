@@ -82,7 +82,7 @@ here because it is the **model the remaining members
 should follow**, not because it needs work.
 
 `ProviderCapabilities.ongoing_input` (`runtime/contracts.py`) is declared true
-by both built-in adapters — `providers/claude.py` and
+by the Claude/GLM and Codex adapters — `providers/claude.py` and
 `providers/codex_app_server.py` — and `cognition.py` wires the input path
 only when the capability is set, so an adapter cannot be asked for steering it
 cannot honour.
@@ -98,6 +98,9 @@ The semantics are deliberately **not** one message to one reply:
 - `RuntimeInputResult` (`runtime/contracts.py`) returns a disposition of
   `accepted`, `rejected` or `unresolved`, with the docstring *"Native delivery
   evidence; acceptance does not assert work completion."*
+
+DeepSeek headless has no ongoing-input transport and advertises this capability
+as false; its native limits are owned by the [runtime contract](native-provider-runtime.md#deepseek-native-family).
 
 Both execution lanes are wired, not just chat: conversations register a per
 conversation `send` in `_native_inputs` (`conversations.py`), and the
