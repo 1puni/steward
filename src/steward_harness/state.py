@@ -802,6 +802,16 @@ class StateDatabase:
     def set_paused(self, paused: bool) -> None:
         self._set_marker(self._pause_marker, paused)
 
+    def _rhythm_pause_marker(self, name: str) -> Path:
+        """One rhythm's pause bit, a marker named by its configured key."""
+        return self.path.parent / "rhythms-paused" / name
+
+    def rhythm_paused(self, name: str) -> bool:
+        return self._rhythm_pause_marker(name).exists()
+
+    def set_rhythm_paused(self, name: str, paused: bool) -> None:
+        self._set_marker(self._rhythm_pause_marker(name), paused)
+
     @staticmethod
     def _set_marker(marker: Path, present: bool) -> None:
         if present:

@@ -100,7 +100,9 @@ run likewise permits a future bucket once its live execution has stopped, but
 not a replacement in its own bucket. After downtime, only the current interval
 is considered. `/rhythm run <name>` is an explicit additional request on the
 current input, while `/rhythm list` shows configured schedules, accepted-run
-counts (including no recorded run) and admission pause state. Edit schedules in
+counts (including no recorded run) and admission pause state. `/rhythm pause
+<name>` stops one rhythm's admission until `/rhythm resume <name>`; a run in
+flight finishes and skipped buckets are not caught up. Edit schedules in
 controller configuration; there is no second persisted override.
 
 For Light-style reflection, use `schedule: {quiet: 300}`: the rhythm waits until

@@ -365,6 +365,7 @@ the external system actually serves.
 | `/task model_family <id> [provider]` | Inspect or switch that task's provider |
 | `/rhythm list` | Configured rhythms: schedule, procedure, input, owner, accepted-run count, pause state |
 | `/rhythm run <name>` | Request one extra run of that rhythm's procedure over the current input |
+| `/rhythm pause <name>` / `/rhythm resume <name>` | Stop or resume admitting runs of one rhythm; a run in flight finishes |
 | `/git retarget <id> <repo>` | Move never-started work to another managed repository |
 | `/git reconcile <repo>` | Publish whatever that repository owes, now |
 | `/git target <name>` | Converge a configured target and report the external observation |
@@ -383,7 +384,9 @@ One conversation can own several tasks. Its model controls and each task's model
 controls address separate sessions, so `/model` never silently retargets work
 you forgot was running.
 
-`/rhythm` accepts `list` and `run <name>`. Schedules are edited in controller
+`/rhythm` accepts `list`, `run <name>`, `pause <name>` and `resume <name>`. A pause
+is one durable marker per rhythm; it stops admission, not a run in flight, and
+`/rhythm run` refuses a paused rhythm. Schedules are edited in controller
 configuration; there is no second persisted override to drift from the YAML.
 
 Cancellation is durable and a live turn is signalled, but the two are different

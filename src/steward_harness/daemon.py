@@ -394,11 +394,19 @@ class KernelCommands:
                     history += (f"; obligation={observed['event']}, {observed['progress']}, observed_at={observed['observed_at']:.0f}, "
                                 f"due_at={observed['due_at']:.0f}, "
                                 f"overdue_seconds={observed['overdue_seconds']:.0f}")
-                pause = "; automatic admission paused" if self.state.paused() else ""
+                pause = ("; automatic admission paused" if self.state.paused()
+                         else "; paused" if self.state.rhythm_paused(name) else "")
                 lines.append(f"{name}: {schedule}, {rhythm.procedure}, {rhythm.input}, "
                              f"owner={rhythm.owner or 'retained only'}; {history}{pause}")
             return "\n".join(lines) or "No rhythms configured."
+        if len(parts) == 2 and parts[0] in {"pause", "resume"} and parts[1] in self.config.rhythms:
+            self.state.set_rhythm_paused(parts[1], parts[0] == "pause")
+            return (f"Rhythm {parts[1]} paused; an in-flight run finishes, and nothing new is "
+                    f"admitted until /rhythm resume {parts[1]}." if parts[0] == "pause"
+                    else f"Rhythm {parts[1]} resumed.")
         if len(parts) == 2 and parts[0] == "run" and parts[1] in self.config.rhythms:
+            if self.state.rhythm_paused(parts[1]):
+                return f"Rhythm {parts[1]} is paused; /rhythm resume {parts[1]} first."
             rhythm = self.config.rhythms[parts[1]]
             if rhythm.input == "world":
                 return self.procedures.continue_world_rhythm(parts[1])
@@ -408,7 +416,8 @@ class KernelCommands:
                                           owner=rhythm.owner, activity=activity,
                                           workdir=rhythm.workdir)
             return f"Queued {task}"
-        return "Usage: /rhythm list | run <name>. Edit schedules in controller configuration."
+        return ("Usage: /rhythm list | run <name> | pause <name> | resume <name>. "
+                "Edit schedules in controller configuration.")
 
     def _git(self, arg: str | None) -> str:
         parts = (arg or "").split()

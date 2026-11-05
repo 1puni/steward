@@ -270,6 +270,17 @@ def test_paused_controller_does_not_start_a_world_rhythm(tmp_path):
     assert not [key for key, _ in queued if key[0] in {"rhythm", "rhythms"}]
 
 
+def test_a_paused_world_rhythm_admits_nothing_until_resumed(tmp_path):
+    """The captured obligation stays; only admission stops, and no skipped bucket is backfilled."""
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path)
+    assert list(procedures.due_world_rhythms(now=NOW)) == [("sleep", "rhythm:sleep:20")]
+    state.set_rhythm_paused("sleep", True)
+    assert list(procedures.due_world_rhythms(now=NOW)) == []
+    state.set_rhythm_paused("sleep", False)
+    assert list(procedures.due_world_rhythms(now=NOW)) == [("sleep", "rhythm:sleep:20")]
+    assert list(procedures.due_world_rhythms(now=NOW + DAY)) == [("sleep", "rhythm:sleep:21")]
+
+
 def test_rhythm_command_reports_the_obligation_and_refuses_an_extra_run(tmp_path):
     from typing import cast
 

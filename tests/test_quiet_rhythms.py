@@ -855,3 +855,23 @@ def test_organisation_rhythm_observes_upstream_without_changing_instance_main(tm
     assert first[1] == second[1]  # Destination input has not moved.
     assert first[3] != second[3]
     assert second[3] == {"repositories/app/upstream/main": sha}
+
+
+def test_a_paused_rhythm_admits_no_new_input_and_leaves_its_open_run_alone(tmp_path):
+    """A pause stops admission on the next pass; a resume does not catch up skipped buckets."""
+    clone, state, runner, config, procedures, adapter = quiet_harness(tmp_path)
+    config.rhythms = {"hourly": ProcedureRhythmConfig(owner=None, schedule=100,
+        procedure="security-one", input="repositories/app/main")}
+    procedures.advance_rhythms(now=100)
+    first, = state.tasks.queued()
+    runner.prepare(first)  # A finished run leaves the next bucket open to admit.
+    state.set_rhythm_paused("hourly", True)
+    sha = commit(clone, "while-paused.txt")
+    refresh(runner)
+    for now in (200, 300, 400):
+        procedures.advance_rhythms(now=now)
+    assert len(state.tasks.all()) == 1
+    state.set_rhythm_paused("hourly", False)
+    procedures.advance_rhythms(now=460)
+    second = next(task.task_id for task in state.tasks.all() if task.task_id != first)
+    assert state.tasks.read(second)[1].procedure.candidate == sha
