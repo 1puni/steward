@@ -114,6 +114,7 @@ class ProcessController:
         on_input_ready: Callable[[ProcessInput], None] | None = None,
         on_started: Callable[[Callable[[], None]], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        interrupt_signal: int | None = None,
         on_process_started: Callable[[int, str | None], None] = lambda _pid, _unit: None,
         command_only: bool = False,
         over_budget: Callable[[], str | None] | None = None,
@@ -228,7 +229,12 @@ class ProcessController:
                             f"provider process timed out after {timeout_seconds}s"
                         )
                     )
-                    if on_stop is not None:
+                    if interrupt_signal is not None:
+                        # Signal-based native CLI shutdown still gets its full
+                        # cooperative drain before broker containment.
+                        process.send_signal(interrupt_signal)
+                        stop_deadline = now + _COOPERATIVE_GRACE_SECONDS
+                    elif on_stop is not None:
                         try:
                             on_stop()
                         except (RuntimeExecutionError, OSError):

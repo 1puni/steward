@@ -347,3 +347,23 @@ broker.run_controller_git(('rev-parse', '--show-toplevel'), cwd=sys.argv[1], tim
             except ProcessLookupError:
                 pass
         controller.communicate(timeout=12)
+
+
+def test_native_interrupt_addresses_only_owned_main_process(monkeypatch):
+    """Native DSH shutdown must precede whole-service termination."""
+    import signal
+    import subprocess
+    from steward_harness.runtime.ownership import OwnedProcess
+    process = object.__new__(OwnedProcess)
+    process.unit = 'native-probe.service'
+    process.returncode = None
+    monkeypatch.setattr(OwnedProcess, 'poll', lambda self: None)
+    commands = []
+    monkeypatch.setattr(subprocess, 'run', lambda argv, **kw: (
+        commands.append(argv) or subprocess.CompletedProcess(argv, 0)))
+    process.send_signal(signal.SIGINT)
+    assert commands == [['systemctl', 'kill', '--kill-whom=main', '--signal=2', process.unit]]
+    process.send_signal(signal.SIGTERM)
+    assert commands[-1] == ['systemctl', 'stop', '--no-block', process.unit]
+    # Avoid Popen's destructor trying to reap this non-launched fixture.
+    process.returncode = 0
