@@ -359,6 +359,24 @@ def test_source_receipt_replays_after_restart_but_cannot_authorize_new_work(tmp_
     assert len(state.tasks.all()) == int(operation == "submit")
 
 
+def test_offered_operations_are_exactly_what_the_run_may_call(tmp_path):
+    """A Telegram conversation whose reply is sent is not advertised notify."""
+    state = StateDatabase(tmp_path / 'state.db')
+    chat = state.open_conversation(ConversationId('telegram:5'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(chat.conversation_id, 'call', 'operator', 'Hello')
+    admin = lambda scope, request: {'accepted': True}
+    assert TaskCalls(state, turn.turn_id, reply_delivered=True).operations == (
+        'submit', 'list', 'show', 'answer', 'retry', 'note', 'cancel')
+    assert TaskCalls(state, turn.turn_id, telegram_admin=admin, reply_delivered=True).operations[0] == 'telegram'
+    assert TaskCalls(state, turn.turn_id).operations[0] == 'notify'
+    rhythm = state.open_conversation(ConversationId('rhythm:nightly'), provider='codex', profile='balanced')
+    turn, _ = state.start_turn(rhythm.conversation_id, 'event', 'harness:rhythm', 'Run')
+    assert TaskCalls(state, turn.turn_id).operations == ('notify',)
+    assert TaskCalls(state, turn.turn_id, notify_owner='telegram:5').operations == ('notify', 'list', 'show')
+    assert TaskCalls(state, turn.turn_id, notify_owner='telegram:5', drive_tasks=True).operations == (
+        'notify', 'submit', 'list', 'show', 'answer', 'retry', 'note')
+
+
 @pytest.mark.parametrize('count', [0, 1, 3])
 def test_notifications_are_independent_calls_and_final_reply_is_not_a_send(tmp_path, count):
     """A run whose final reply is recorded speaks only through its notifications."""
@@ -601,7 +619,7 @@ def test_bridge_names_the_failure_when_the_socket_is_unreachable():
     request = dict(jsonrpc='2.0', id=1, method='tools/call',
                    params=dict(name='task', arguments=dict(operation='list')))
     missing = f'/tmp/steward-missing-{uuid.uuid4().hex[:8]}/call.sock'  # AF_UNIX paths are short
-    result = subprocess.run(['python3', '-c', CLIENT, missing],
+    result = subprocess.run(['python3', '-c', CLIENT, missing, 'list'],
                             input=json.dumps(request) + '\n', text=True, capture_output=True, check=True)
     reply = json.loads(result.stdout)['result']
     assert reply['isError']

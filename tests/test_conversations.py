@@ -48,7 +48,7 @@ def _task_reply(payload, text="On it."):
     def reply(request):
         import os
         request.on_process_started(os.getpid(), None)
-        result = subprocess.run([sys.executable, '-c', CLIENT, request.task_call_socket],
+        result = subprocess.run([sys.executable, '-c', CLIENT, request.task_call_socket, ','.join(request.task_call_operations)],
             input=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
                               'params': {'name': 'task', 'arguments': payload}}) + '\n',
             capture_output=True, text=True, check=True)

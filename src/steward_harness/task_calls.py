@@ -108,6 +108,16 @@ class TaskCalls:
             raise ValueError("this conversation does not own that task")
         return task
 
+    @property
+    def operations(self):
+        """Exactly the operations `__call__` accepts for this run."""
+        rhythm = self.owner.kind == "rhythm"
+        steer, inspect = not rhythm or self.drive_tasks, not rhythm or bool(self.notify_owner)
+        offered = {"telegram": self.owner.kind == "telegram" and self.telegram_admin is not None,
+                   "notify": self.notifies, "submit": steer, "list": inspect, "show": inspect,
+                   "answer": steer, "retry": steer, "note": steer, "cancel": not rhythm}
+        return tuple(operation for operation, offered in offered.items() if offered)
+
     @staticmethod
     def _summary(task):
         return dict(task_id=str(task.task_id), repository=task.repository,
@@ -259,6 +269,7 @@ class TaskCallServer:
     def __init__(self, calls):
         self._invocation = None
         self._notifies = calls.notifies
+        self.operations = calls.operations
         def authorized(connection):
             if self._invocation is None:
                 return False
@@ -399,6 +410,15 @@ class TaskExecutionCalls:
         self.judges = task.read_only and task.procedure.workdir is None
         self.query = OwnershipCalls(state.tasks, task_id, repositories)
         self.start_writer()
+
+    @property
+    def operations(self):
+        """Exactly the operations `__call__` accepts for this execution."""
+        offered = {"query": True, "close": True, "understanding": self.understanding,
+                   "notify": self.notifies, "submit": self.drive_tasks, "verdict": self.judges,
+                   "telegram": self.telegram_admin is not None and bool(self.owner)
+                   and ConversationId(self.owner).kind == "telegram"}
+        return tuple(operation for operation, offered in offered.items() if offered)
 
     def start_writer(self, *, baseline=None):
         """A replacement native invocation cannot inherit pending closure intent."""

@@ -14,6 +14,8 @@ class Handler(urllib.request.HTTPHandler):
     def http_open(self, request):
         return self.do_open(Connection, request)
 url = 'http://localhost/task'
+OPERATIONS = ['submit', 'list', 'show', 'answer', 'retry', 'note', 'cancel', 'query', 'notify', 'close', 'verdict', 'telegram', 'understanding']
+offered = set(sys.argv[2].split(','))
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), Handler())
 for line in sys.stdin:
     message = {}
@@ -30,9 +32,9 @@ for line in sys.stdin:
             result = {}
         elif method == 'tools/list':
             result = {'tools': [{'name': 'task',
-                'description': 'Operate on authorized Steward tasks. Telegram: operation=telegram, action=info/send_image/send_video/send_voice/send_document/pin_message/set_photo/set_description, key, text (empty for info; absolute path beneath delivery_roots for send_image, send_video, send_voice and send_document, or set_photo; numeric message id for pin_message; description for set_description). send_voice uses MP3, M4A or OGG/Opus for the native voice-note player; convert WAV first. Sends and pins reach the topic of the calling conversation at once; reply text is never parsed for them. pin_message and set_* need controller opt-in; fixed group only. Notify queues text to the bound owner using a stable key, and is offered only to runs whose final reply is recorded rather than sent. Ordinary task executions also permit understanding (key, body, base from the task prompt or preceding account response) to save their task account immediately. Task executions permit query (repository, text), notify (key, text) for rhythm tasks only, submit (key, repository, title, brief) for rhythms that drive tasks, close (key, subject, disposition; question only for ask), and, for read-only repository reviews, verdict (key, verdict=pass or fail); final prose is never read as a verdict. Successful native task completion needs no close call. Use close for explicit ask or continue; idle is optional compatibility. Close returns pending intent, accepted only after successful native completion and writer teardown. Mutations require a stable, distinct key per intent; retry identical requests with the same key. Accepted Git receipts survive parent failure.',
+                'description': 'Operate on authorized Steward tasks. Telegram: operation=telegram, action=info/send_image/send_video/send_voice/send_document/pin_message/set_photo/set_description, key, text (empty for info; absolute path beneath delivery_roots for send_image, send_video, send_voice and send_document, or set_photo; numeric message id for pin_message; description for set_description). send_voice uses MP3, M4A or OGG/Opus for the native voice-note player; convert WAV first. Sends and pins reach the topic of the calling conversation at once; reply text is never parsed for them. pin_message and set_* need controller opt-in; fixed group only. Notify queues text to the bound owner using a stable key, and is offered only to runs whose final reply is recorded rather than sent. Ordinary task executions also permit understanding (key, body, base from the task prompt or preceding account response) to save their task account immediately. Task executions permit query (repository, text), notify (key, text) for rhythm tasks only, submit (key, repository, title, brief) for rhythms that drive tasks, close (key, subject, disposition; question only for ask), and, for read-only repository reviews, verdict (key, verdict=pass or fail); final prose is never read as a verdict. Successful native task completion needs no close call. Use close for explicit ask or continue; idle is optional compatibility. Close returns pending intent, accepted only after successful native completion and writer teardown. Mutations require a stable, distinct key per intent; retry identical requests with the same key. Accepted Git receipts survive parent failure. The operation enum lists exactly what this run may call.',
                 'inputSchema': {'type': 'object', 'required': ['operation'],
-                    'properties': {'operation': {'type': 'string', 'enum': ['submit', 'list', 'show', 'answer', 'retry', 'note', 'cancel', 'query', 'notify', 'close', 'verdict', 'telegram', 'understanding']},
+                    'properties': {'operation': {'type': 'string', 'enum': [op for op in OPERATIONS if op in offered]},
                         **{k: {'type': 'string'} for k in ['action', 'source_id', 'key', 'repository', 'title', 'brief', 'task_id', 'text', 'subject', 'question', 'body', 'base']},
                         'disposition': {'type': 'string', 'enum': ['continue', 'idle', 'ask']},
                         'verdict': {'type': 'string', 'enum': ['pass', 'fail']}},
@@ -58,13 +60,14 @@ for line in sys.stdin:
 '''
 
 
-def server_config(socket_path: str) -> dict:
-    return {"command": "python3", "args": ["-c", CLIENT, socket_path]}
+def server_config(socket_path: str, operations: tuple[str, ...]) -> dict:
+    """The child advertises only `operations`; the controller still judges each call."""
+    return {"command": "python3", "args": ["-c", CLIENT, socket_path, ",".join(operations)]}
 
 
-def codex_arguments(socket_path: str | None) -> list[str]:
+def codex_arguments(socket_path: str | None, operations: tuple[str, ...]) -> list[str]:
     import json
     if socket_path is None:
         return []
-    return [argument for key, value in server_config(socket_path).items()
+    return [argument for key, value in server_config(socket_path, operations).items()
             for argument in ("-c", f"mcp_servers.steward_tasks.{key}={json.dumps(value)}")]

@@ -343,6 +343,7 @@ class ConversationService:
             return CognitionRequest(
                 execution_id=event_id,
                 task_call_socket=task_calls.path,
+                task_call_operations=task_calls.operations,
                 on_process_started=task_calls.bind,
                 native_owner=str(conversation.conversation_id),
                 native_generation=lambda provider: lineage_generation + (provider != lineage_provider),

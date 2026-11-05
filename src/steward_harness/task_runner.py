@@ -536,7 +536,7 @@ class TaskRunner:
             def writer_started(pid, unit):
                 calls.start_writer(baseline=task.revision)
                 task_calls.bind(pid, unit)
-            request = replace(request, task_call_socket=task_calls.path,
+            request = replace(request, task_call_socket=task_calls.path, task_call_operations=task_calls.operations,
                               on_process_started=writer_started)
             result = self.cognition.run(prepared, execution_id=execution_id)
         finally:
