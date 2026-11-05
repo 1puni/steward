@@ -171,6 +171,8 @@ def test_pending_native_evidence_survives_reconciliation_failure(repo, failure):
 
     def resolve(turn):
         candidates.append(turn.worktree)
+        # Checkouts hold records only by exception, so a direct write makes its directory.
+        (turn.worktree / native_path).parent.mkdir(parents=True, exist_ok=True)
         (turn.worktree / native_path).write_text(written)
         (turn.worktree / EVIDENCE_PENDING).touch()
         if failure == 'snapshot':

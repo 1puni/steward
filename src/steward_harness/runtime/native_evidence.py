@@ -4,10 +4,11 @@ Executed by the execution broker. A retained owner home holds its provider's
 records as ordinary files. After each invocation they are staged into the
 writable checkout's index at their world paths, so the turn's commit carries
 them, Git deltas them, and every push replicates them. The checkout never has
-to materialize `artefacts/`; see `leave_to_git`.
+to materialize `artefacts/` or a `steward-held` path; see `held_paths`.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 import hashlib
 import json
 import os
@@ -23,6 +24,25 @@ EVIDENCE_PENDING = ".steward-native-evidence-pending"
 #: Provider-written records under this world path live in owner homes and are
 #: captured into Git; world checkouts leave the path out.
 CAPTURED_ROOT = "artefacts/"
+
+#: A repository's `.gitattributes` marks further tracked paths a checkout
+#: leaves to Git, like `brand/*.png steward-held`.
+HELD_ATTRIBUTE = "steward-held"
+
+
+def held_paths(run: Callable[..., str]) -> list[str]:
+    """Tracked paths a checkout leaves in Git: provider records and `steward-held` entries.
+
+    `run` executes git in the checkout and returns its stdout. Attributes are
+    read from the index, so a checkout not yet written is judged by its own tree.
+    """
+    listed = [path for path in run('ls-files', '-z').split('\0') if path]
+    if not listed:
+        return []
+    marks = run('check-attr', '--cached', '-z', '--stdin', HELD_ATTRIBUTE,
+                input_text=''.join(f'{path}\0' for path in listed)).split('\0')
+    held = {path for path, value in zip(marks[::3], marks[2::3]) if value == 'set'}
+    return [path for path in listed if path.startswith(CAPTURED_ROOT) or path in held]
 
 MIN_FREE_BYTES = 1024 ** 3
 MIN_FREE_FRACTION = 0.05

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from steward_harness.git import git_operation_paths, agent_git, run_agent_git, validate_object_id
-from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
+from steward_harness.runtime.native_evidence import EVIDENCE_PENDING, held_paths
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 
 
@@ -38,12 +38,13 @@ class WorktreeManager:
                 f"Agent could not create worktree root: {self.worktrees_root}"
             )
 
-    def _git(self, *args: str, cwd: Path | None = None) -> str:
+    def _git(self, *args: str, cwd: Path | None = None, input_text: str | None = None) -> str:
         return agent_git(
             self.execution_broker,
             *args,
             cwd=cwd or self.repo_path,
             timeout=60,
+            input_text=input_text,
             error=WorktreeError,
         )
 
@@ -74,7 +75,8 @@ class WorktreeManager:
         # task branch starts from the requested base; resetting here discards
         # commits preserved across a crashed lease.
         if self.has_branch(branch):
-            self._git("worktree", "add", str(target_path), branch)
+            self._git("worktree", "add", "--no-checkout", str(target_path), branch)
+            self._checkout_leaving_held_to_git(target_path, branch)
         else:
             try:
                 validate_object_id(base_sha or "")
@@ -82,8 +84,25 @@ class WorktreeManager:
                 raise WorktreeError(
                     "a new worktree requires an exact lowercase SHA-1 base"
                 )
-            self._git("worktree", "add", "-b", branch, str(target_path), base_sha)
+            self._git("worktree", "add", "--no-checkout", "-b", branch, str(target_path), base_sha)
+            self._checkout_leaving_held_to_git(target_path, base_sha)
         return target_path
+
+    def _checkout_leaving_held_to_git(self, path: Path, sha: str) -> None:
+        """Check out `sha` without the records and `steward-held` paths Git already holds.
+
+        Skip-worktree, not sparse-checkout: sparse mode lets an incoming path
+        overwrite an untracked local file instead of refusing.
+        """
+        def run(*args: str, input_text: str | None = None) -> str:
+            return self._git(*args, cwd=path, input_text=input_text)
+
+        run("read-tree", sha)
+        held = held_paths(run)
+        if held:
+            run("update-index", "-z", "--skip-worktree", "--stdin",
+                input_text="".join(f"{entry}\0" for entry in held))
+        run("checkout-index", "--all", "--index")
 
     def has_branch(self, branch: str) -> bool:
         """Return whether retained local work already owns this branch."""
