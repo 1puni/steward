@@ -186,6 +186,35 @@ def test_a_usage_limit_after_a_command_ran_fails_here_instead_of_replaying(tmp_p
     assert caught.value.session_id == SESSION
 
 
+def test_a_capacity_refusal_is_declining_the_turn_not_failing_it(tmp_path):
+    turn, wire, _ = start(tmp_path)
+    message = "Selected model is at capacity. Please try a different model."
+    event(turn, "turn/completed", turn={
+        "id": "parent-turn", "status": "failed",
+        "error": {"message": message, "codexErrorInfo": "server_overloaded"},
+    })
+    clean(turn)
+    with pytest.raises(RuntimeUnavailable) as caught:
+        turn.finish()
+    assert str(caught.value) == message
+    assert not isinstance(caught.value, RuntimeExecutionError)
+
+
+def test_a_capacity_refusal_after_a_command_ran_fails_here(tmp_path):
+    turn, wire, _ = start(tmp_path)
+    event(turn, "item/started", item={"type": "commandExecution", "command": "cat notes.md"})
+    event(turn, "turn/completed", turn={
+        "id": "parent-turn", "status": "failed",
+        "error": {"message": "Selected model is at capacity. Please try a different model."},
+    })
+    clean(turn)
+    with pytest.raises(RuntimeExecutionError) as caught:
+        turn.finish()
+    assert "at capacity" in str(caught.value)
+    assert not isinstance(caught.value, RuntimeUnavailable)
+    assert caught.value.session_id == SESSION
+
+
 def test_a_refused_request_is_declining_not_failing(tmp_path):
     turn = _AppServerTurn(
         RuntimeRequest(

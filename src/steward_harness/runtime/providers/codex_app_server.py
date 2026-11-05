@@ -63,6 +63,11 @@ def _declines_turn(message: str) -> bool:
             # token was revoked / was already used. Please log out and sign in."
             "access token could not be refreshed",
             "log out and sign in",
+            # "Selected model is at capacity. Please try a different model."
+            # with codexErrorInfo "server_overloaded".
+            "model is at capacity",
+            "please try a different model",
+            "server_overloaded",
         )
     )
 

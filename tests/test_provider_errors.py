@@ -215,6 +215,7 @@ def test_claude_session_limit_reaches_glm_only_before_tools_run(tmp_path, acted)
     "Failed to authenticate: OAuth session expired and could not be refreshed",
     "You've hit your session limit · resets 4pm (UTC)",
     "You've hit your usage limit",
+    "API Error: 529 overloaded_error",
 ])
 def test_an_expired_sign_in_or_quota_is_a_refusal_not_a_failed_turn(message):
     """A native refusal before tool use must reach the configured fallback."""
