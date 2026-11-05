@@ -17,7 +17,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from steward_harness.git import hardened_git_argv, validate_git_remote_url, validate_object_id
+from steward_harness.git import (
+    hardened_git_argv, steward_accept_subject, validate_git_remote_url, validate_object_id,
+)
 from steward_harness.state import (
     CheckpointDisposition, ConversationId, TaskCheckpointSummary, TaskId, TaskOriginKind,
     TaskSpec, TaskStatus,
@@ -465,7 +467,9 @@ class GitTaskStore:
             definition = Definition(repository=spec.repository, title=spec.title,
                                     origin=kind, source=source, owner=owner,
                                     priority=spec.priority, hold=hold, reason=reason, procedure=procedure)
-            self._commit(task_id, None, definition, spec.brief, "steward: accept task" + (f"\n\nSteward-Source: {source}" if source else ""),
+            self._commit(task_id, None, definition, spec.brief,
+                         steward_accept_subject(spec.title, f"tasks/{task_id}")
+                         + (f"\n\nSteward-Source: {source}" if source else ""),
                          (procedure.candidate,) if procedure else ())
         return task_id, True
 
