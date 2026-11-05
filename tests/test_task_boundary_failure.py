@@ -119,13 +119,14 @@ def test_failed_hold_write_propagates_without_claiming_a_block(caplog):
 def test_deferred_storage_leaves_the_task_queued_without_ending_the_controller(tmp_path, caplog):
     from steward_harness.runtime.contracts import NativeStorageDeferred
 
-    task = SimpleNamespace(repository='repo', dispatchable=True, revision='accepted-revision')
+    task = SimpleNamespace(repository='repo', dispatchable=True, pending=(), revision='accepted-revision')
     tasks = SimpleNamespace(get=Mock(return_value=task), locks_root=tmp_path, hold=Mock(),
                             finish_slice=Mock())
     runner = object.__new__(TaskRunner)
     runner.state = SimpleNamespace(tasks=tasks)
     runner.repositories = {'repo': object()}
     runner.transports = {'repo': object()}
+    runner._look_again_after = {}
     runner._run_owned = Mock(side_effect=NativeStorageDeferred('native evidence storage reserve reached'))
 
     assert runner.prepare('task') == 'task'

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -39,6 +40,9 @@ from steward_harness.lease import Busy
 from steward_harness.task_store import Task
 
 log = logging.getLogger(__name__)
+
+#: How long a `continue` that moved nothing waits before it is dispatched again.
+CONTINUE_WAIT_SECONDS = 900
 
 
 def _boundary_failed(error: BaseException) -> bool:
@@ -138,6 +142,9 @@ class TaskRunner:
     ) -> None:
         self.telegram_admin = telegram_admin
         self.driving_rhythms = driving_rhythms
+        # Task -> monotonic time before which a `continue` that moved nothing is
+        # not dispatched again; in memory, since a restart owes one look anyway.
+        self._look_again_after: dict[TaskId, float] = {}
         self.state = state
         self.repositories = dict(repositories)
         self.transports = dict(transports)
@@ -218,6 +225,8 @@ class TaskRunner:
             task = self.state.tasks.get(task_id)
             if not task.dispatchable:
                 return task_id
+            if not task.pending and self._look_again_after.get(task_id, 0.0) > time.monotonic():
+                return task_id  # A watch that found nothing waits before looking again.
             try:
                 return self._run_owned(task_id, task.revision)
             except Busy as error:
@@ -272,9 +281,11 @@ class TaskRunner:
             _manager, worktree, checkpointer = self._open_worktree(task, repository)
             procedure = task.procedure
             live = _LiveTask(opened_at, set(), set())
-            disposition, detail, findings = self._work(
-                task, worktree, checkpointer, live
-            )
+            outcome = self._work(task, worktree, checkpointer, live)
+            if outcome is None:
+                # Looked and found nothing: no slice commit, no ledger entry.
+                return task_id
+            disposition, detail, findings = outcome
             if self.state.tasks.cancelled(task_id):
                 # Withdrawn work is committed; its environment remains available
                 # for inspection, including ignored files and native records.
@@ -382,8 +393,12 @@ class TaskRunner:
         worktree: Path,
         checkpointer: WorktreeCheckpointer,
         live: _LiveTask,
-    ) -> tuple[CheckpointDisposition, str | None, str]:
-        """Run cognition and commit any changes; return (disposition, detail, findings)."""
+    ) -> tuple[CheckpointDisposition, str | None, str] | None:
+        """Run cognition and commit any changes; return (disposition, detail, findings).
+
+        None when a `continue` after a `continue` staged nothing beyond its own
+        session state: no commit, no ledger revision, and the task waits.
+        """
         task = self.state.tasks.get(task.task_id)
         lineage = self.state.get_conversation(task.session_id)
         procedure = task.procedure
@@ -575,9 +590,19 @@ class TaskRunner:
             capture_records(execution_id)
         # Staging rejects an unfinished Git operation or a switched branch.
         checkpointer.stage(expected_branch=task.branch)
-        # Every slice commits, a findings-only one included: the tip of a task
-        # branch is always the harness's own, so its trailers and message are
-        # always the ones this slice ended on.
+        if (closure_error is None and closure.disposition == "continue"
+                and task.disposition == "continue" and not task.pending
+                and not self._moved(worktree)):
+            # The tip already says `continue`, so the task stays owed and its
+            # staged session state waits for the next slice that does move.
+            self._look_again_after[task.task_id] = time.monotonic() + CONTINUE_WAIT_SECONDS
+            log.info("Task %s looked and found nothing; looking again in %ss",
+                     task.task_id, CONTINUE_WAIT_SECONDS)
+            return None
+        self._look_again_after.pop(task.task_id, None)
+        # Every slice that moved commits, a findings-only one included: the tip
+        # of a task branch is always the harness's own, so its trailers and
+        # message are always the ones this slice ended on.
         checkpointer.commit(
             closure.subject,
             disposition=closure.disposition,
@@ -634,6 +659,15 @@ class TaskRunner:
             execution_broker=self.broker,
         )
         return manager, worktree, checkpointer
+
+    def _moved(self, worktree: Path) -> bool:
+        """Did this slice stage anything beyond its own session state?"""
+        result = run_agent_git(self.broker, "diff", "--cached", "--name-only", "-z",
+                               cwd=worktree, timeout=60)
+        if result.returncode:
+            return True  # Not decidable here; a commit records whatever it was.
+        owned = self.state.tasks.session_state
+        return any(path and not path.startswith(owned) for path in result.stdout.split("\0"))
 
     def _reopen_review(self, task: Task, worktree: Path) -> None:
         """Make a read-only review's tree and index exactly its candidate.

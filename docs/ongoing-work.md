@@ -179,7 +179,9 @@ when its last slice said `continue`, when it has been answered or retried, or
 when it holds unconsumed input. That is the entire mechanism. There is no
 "long-running task" object, no scheduled next-run time on a task, and no
 per-task budget. A body of work stays ongoing exactly as long as its slices keep
-saying `continue` or you keep steering it.
+saying `continue` or you keep steering it. A `continue` that follows a `continue`
+and staged nothing beyond its own session state commits nothing, and the task is
+not dispatched again for fifteen minutes unless new input arrives.
 
 **Across restart.** Nothing needs recovering. Locks vanish with their processes;
 the accepted record and the work branch are on disk; an interrupted task is
