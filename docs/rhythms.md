@@ -566,8 +566,9 @@ An owner of `null` rejects sending while preserving the findings.
 
 The key distinguishes independent messages. Exact retries reuse the existing
 receipt; a changed payload under the same key is rejected. A receipt confirms
-durable queuing, not transport completion. Calls can occur anywhere during the
-execution, zero, one or several times. A provider failure after queuing does not
+durable queuing, not transport completion; the replay reply carries the message's
+current status (`queued`, `deferred`, `delivered` or `rejected`). Calls can occur
+anywhere during the execution, zero, one or several times. A provider failure after queuing does not
 withdraw the message. A provider without a working tool channel records its
 reply and sends nothing. Final markers, silence tokens and trailing narration
 have no notification meaning.
