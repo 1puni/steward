@@ -82,7 +82,7 @@ def test_registry_names_every_builtin_and_build_runtimes_reads_only_it(tmp_path,
     which configured families are builtins, which of them need a native home,
     and how each is instantiated.
     """
-    assert set(BUILTIN_RUNTIMES) == {"claude", "codex", "glm"}
+    assert set(BUILTIN_RUNTIMES) == {"claude", "codex", "deepseek", "glm"}
     providers, _ = runtimes(tmp_path)
     assert {name: type(runtime) for name, runtime in providers.items()} == {
         "codex": CodexAppServerRuntime, "claude": ClaudeRuntime, "glm": ClaudeRuntime,

@@ -45,6 +45,7 @@ _PROVIDER_ENVIRONMENT = frozenset(
         "CLAUDE_CODE_TMPDIR",
         "CLAUDE_SECURESTORAGE_CONFIG_DIR",
         "CODEX_HOME",
+        "DSH_HOME",
         "IS_SANDBOX",
         "OPENAI_API_KEY",
         "ZAI_AUTH_TOKEN",
