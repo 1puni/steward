@@ -19,6 +19,7 @@ from steward_harness.landing.checkpoint import (
 )
 from steward_harness.landing.worktree import WorktreeError, WorktreeManager
 from steward_harness.runtime.native_evidence import CAPTURED_ROOT
+from steward_harness.runtime.native_workspace import capture_records
 from steward_harness.prompts import RHYTHM_FINDINGS, RHYTHM_SUBMIT, build_task_prompt, build_procedure_scope
 from steward_harness.provider_types import ProviderFamily
 from steward_harness.runtime.contracts import (
@@ -569,6 +570,9 @@ class TaskRunner:
         if not writes:
             # Its excused session state is not work either.
             self._reopen_review(task, worktree)
+        if closure_error is None and closure.disposition != "continue":
+            # The work is over: its session records reach the branch with the closing commit.
+            capture_records(execution_id)
         # Staging rejects an unfinished Git operation or a switched branch.
         checkpointer.stage(expected_branch=task.branch)
         # Every slice commits, a findings-only one included: the tip of a task

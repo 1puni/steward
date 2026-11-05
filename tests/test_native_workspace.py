@@ -9,7 +9,7 @@ import pytest
 from steward_harness.config.schema import UntrustedExecutionConfig
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeRequest, resolve_model
 from steward_harness.runtime.execution import UntrustedExecutionBroker
-from steward_harness.runtime.native_workspace import native_workspace
+from steward_harness.runtime.native_workspace import capture_records, native_workspace
 
 SESSION = '11111111-1111-4111-8111-111111111111'
 
@@ -271,8 +271,29 @@ def test_owner_records_reach_the_index_not_the_checkout(setup):
         assert resumed.home == native.home
         assert resumed.resume == str(native.home / record)
         (native.home / record).write_text('original\nresumed\n')
+    # A running session's records are not re-captured after every invocation:
+    # the first reached Git, the next waits for the daily interval or the end.
+    assert _git(request.cwd, 'diff', '--cached', '--name-only') == ''
+    assert capture_records(request.execution_id)
     assert _git(request.cwd, 'diff', '--cached', '--name-only') == world_path + '\n'
     assert _git(request.cwd, 'show', ':' + world_path) == 'original\nresumed\n'
+    assert not capture_records(request.execution_id)  # consumed
+
+
+def test_a_superseded_home_is_captured_when_its_successor_starts(setup):
+    _, request, _ = setup
+    record = f'sessions/rollout-{SESSION}.jsonl'
+    world_path = 'artefacts/codex/' + record
+    with mapped(setup, native_owner='one') as first:
+        (first.home / record).write_text('first\n')
+    with mapped(setup, native_owner='one', provider_session_id=SESSION) as resumed:
+        (resumed.home / record).write_text('first\nsecond\n')
+    # Inside the interval a running session's growth waits.
+    assert _git(request.cwd, 'show', ':' + world_path) == 'first\n'
+    with mapped(setup, native_owner='one', native_generation=2) as successor:
+        assert successor.home != first.home
+        # Its successor's start ends the first home: the records are in the index.
+        assert _git(request.cwd, 'show', ':' + world_path) == 'first\nsecond\n'
 
 
 @pytest.mark.parametrize('checkout', ['released', 'uncaptured'])

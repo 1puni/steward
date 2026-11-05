@@ -7,7 +7,7 @@ import json
 import math
 import subprocess
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -298,6 +298,23 @@ except BaseException:
 '''
 
 
+#: Forced captures by execution id; only runs in flight need an entry.
+_captures: dict[str, Callable[[], None]] = {}
+
+
+def capture_records(execution_id: str) -> bool:
+    """Capture the records of the home that ran `execution_id` now.
+
+    The caller is whoever learns the session ended, such as a task slice
+    closing with anything but `continue`. Returns whether the id was known.
+    """
+    capture = _captures.pop(execution_id, None)
+    if capture is None:
+        return False
+    capture()
+    return True
+
+
 def _owner_prefix(owner: str) -> str:
     return ".steward-owner-" + hashlib.sha256(owner.encode()).hexdigest()[:32] + "-"
 
@@ -381,12 +398,12 @@ def native_workspace(
     checkout = request.record_checkout or (request.cwd if writable else None)
     evidence_script = Path(__file__).with_name("native_evidence.py").read_text()
 
-    def evidence(operation, native_home, records):
+    def evidence(operation, native_home, records, policy=None):
         result = broker.run(
             [broker.python_executable, "-I", "-c", evidence_script],
             cwd=request.cwd, timeout=300,
             input_text=json.dumps([operation, str(native_home), records,
-                                  str(checkout) if checkout else None]),
+                                  str(checkout) if checkout else None, policy or {}]),
         )
         if result.returncode == 75 and operation == "check":
             raise NativeStorageDeferred(result.stderr.strip()[-500:])
@@ -465,13 +482,25 @@ def native_workspace(
     record = json.loads(prepared.stdout)
     workspace = NativeWorkspace(Path(record["home"]), record["resume"], deadline)
     captured = {name: mappings[name] for name in owned} if checkout else {}
+    if captured and request.native_owner is not None:
+        # A superseded home of this owner (an earlier generation or provider) ends
+        # here: its last records reach this checkout so retention can retire it.
+        prefix = _owner_prefix(request.native_owner)
+        for sibling in broker.child_directories(home):
+            if sibling.name.startswith(prefix) and sibling != workspace.home:
+                evidence("capture", sibling, captured, {"force": True})
     prepare_temporary(workspace.home)
+    if request.execution_id:
+        _captures[request.execution_id] = lambda: evidence("capture", workspace.home, captured, {"force": True})
+        while len(_captures) > 64:
+            del _captures[next(iter(_captures))]
     try:
         yield workspace
     finally:
         # ProcessController has already torn down the provider and descendants.
-        # Homes are retained; Git now holds a copy, not the only one.
-        evidence("capture", workspace.home, captured)
+        # Homes are retained; records reach Git at the session's start, daily
+        # while it runs, and when the caller says it ended (`capture_records`).
+        evidence("capture", workspace.home, captured, {"force": False})
 
 
 @contextmanager
