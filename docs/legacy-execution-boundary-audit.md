@@ -302,8 +302,9 @@ lifecycle guide said rhythms had no separate world-turn path, despite
 
 These claims can send follow-up work toward already completed refactors or teach
 a model to repeat unnecessary output rituals. This audit corrects those current
-claims. [native-session-host.md](native-session-host.md) is a dated design and
-measurement record; its old observations are not present implementation facts.
+claims. The native session-host design, a private document that is not exported,
+is a dated design and measurement record; its old observations are not present
+implementation facts.
 Its future process-reuse design remains relevant. Documentation-link checking
 establishes links, not behavioral truth. Owner-home persistence, receipt-only
 results and world-rhythm fixture tests validate the corrected distinctions;
@@ -327,13 +328,13 @@ alone does not prove the provider will resume a job. This limits longer native
 workflows, but is not permission to keep writers alive during acceptance.
 
 **Current direction (2026-10-03).** The operator authorized extending stage
-three of the [session-host design](native-session-host.md), correcting any
+three of that session-host design, correcting any
 reading of this audit as a recommendation to keep per-invocation teardown as
 permanent policy. Preserve writer exclusion; replace its mechanism where proved.
 The cancelled lifecycle task is historical ownership, not a reason to defer the
 accepted work or create a second process-host project.
 
-The [stage-three evidence](native-session-host.md#stage-three-writer-exclusion-evidence)
+The design's stage-three writer-exclusion evidence
 now includes installed Codex and Claude Code with deliberately writing MCP
 fixtures: writes continued while idle and while the provider leader was stopped;
 Codex terminal cleanup also failed to stop those writes. Shared agent filesystem
