@@ -95,6 +95,8 @@ describe the visibility and network relationship.
 
 Review the entire contribution ancestry and diff. A merge of the private instance
 branch into public trunk would expose its history, including instance-only files
-that were later deleted. After a contribution lands upstream, merge upstream back
+that were later deleted. The public boundary check examines every reachable commit,
+including merge parents, and rejects private paths even if the final tree deleted
+them. It requires a complete Git history. After a contribution lands upstream, merge upstream back
 into the instance and reconcile any duplicate patch. Configuration that varies per
 installation should remain configuration; a shared capability belongs upstream.

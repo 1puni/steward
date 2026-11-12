@@ -17,12 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Refuse private-copy paths
+        with:
+          fetch-depth: 0
+      - name: Refuse private-copy history
         run: |
-          found=$(git ls-files -- instances tasks artefacts memories output \
-            | grep -v '^output/stewardship-flow/stewardship-flow.html$' || true)
+          test "$(git rev-parse --is-shallow-repository)" = false
+          history=$(git log --full-history --format= --name-only --root -m --no-renames HEAD -- \
+            instances tasks artefacts memories output)
+          found=$(printf '%s\n' "$history" | sort -u | sed '/^$/d' | grep -v '^output/stewardship-flow/stewardship-flow.html$' || true)
           if [ -n "$found" ]; then
-            echo "These paths belong to an instance's private copy:"
+            echo "These historical paths belong to an instance's private copy:"
             echo "$found"
             exit 1
           fi
