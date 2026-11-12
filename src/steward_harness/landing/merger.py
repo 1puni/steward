@@ -68,8 +68,14 @@ class PromotionEngine:
         *,
         transport: ControllerGitTransport,
         execution_broker: UntrustedExecutionBroker,
+        session_state: tuple[str, ...] = (),
     ) -> None:
         self.config = repo_config
+        # Paths publication leaves exactly as the base has them. Provider
+        # transcripts are evidence of a task: they stay on its ref, where the
+        # outcome commit's Steward-Work trailer finds them, and never reach
+        # the published branch.
+        self.session_state = session_state
         self.transport = transport
         self.repo_path = Path(repo_config.path).resolve()
         self.worktree_mgr = WorktreeManager(
@@ -86,6 +92,16 @@ class PromotionEngine:
             cwd=cwd or self.repo_path,
             timeout=120,
         )
+
+    def _without_session_state(self, tree: str, base: str, worktree: Path) -> str:
+        """`tree` with every session-state path exactly as `base` has it."""
+        self._agent_git("read-tree", tree, cwd=worktree)
+        self._agent_git("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *self.session_state, cwd=worktree)
+        kept = self._agent_git("ls-tree", "-r", "--full-tree", base, "--", *self.session_state, cwd=worktree)
+        if kept:
+            agent_git(self.execution_broker, "update-index", "--index-info", cwd=worktree,
+                      input_text=kept + "\n", timeout=120)
+        return self._agent_git("write-tree", cwd=worktree)
 
     def prepare(
         self,
@@ -146,8 +162,10 @@ class PromotionEngine:
                            f"Steward-Branch: {branch_name}\n"
                            f"Steward-Work: {authorized_work_sha}\n"
                            f"Steward-Base: {expected_base_sha}\n")
-                def collapse(parent, *other_parents):
+                def collapse(parent, *other_parents, published=False):
                     tree = self._agent_git("rev-parse", "HEAD^{tree}", cwd=worktree)
+                    if published and self.session_state:
+                        tree = self._without_session_state(tree, parent, worktree)
                     sha = agent_git(self.execution_broker,
                         *steward_commit_argv("commit-tree", tree, "-p", parent,
                                              *(arg for sha in other_parents for arg in ("-p", sha))),
@@ -156,6 +174,9 @@ class PromotionEngine:
                     if self.execution_broker.path_exists(worktree / EVIDENCE_PENDING):
                         raise RuntimeExecutionError("native evidence preservation is pending; checkout retained")
                     self._agent_git("reset", "--hard", sha, cwd=worktree)
+                    if published and self.session_state:
+                        # Dropped records would otherwise linger untracked.
+                        self._agent_git("clean", "-f", "-d", "-q", "--", *self.session_state, cwd=worktree)
                     return sha
                 collapse(fork)
                 error = reconcile_git(
@@ -166,7 +187,7 @@ class PromotionEngine:
                     return ValidationFailure(error)
 
                 # Collapse exploration, while keeping accepted source ancestry.
-                tested_sha = collapse(expected_base_sha, *upstream_parents)
+                tested_sha = collapse(expected_base_sha, *upstream_parents, published=True)
                 self.transport.import_candidate(
                     worktree, tested_sha, expected_base_sha, self.execution_broker,
                 )
