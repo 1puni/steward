@@ -125,6 +125,7 @@ def test_apply_resumes_condemned_rollback(tmp_path, monkeypatch, capsys, prior, 
     from steward_harness.deploy.engine import DeployEngine
 
     config, settings, pointer, initial, external, jobs, _ = installed(tmp_path, monkeypatch)
+    settings.write_text(settings.read_text() + "\nmin_release_interval_seconds: 1800\n")
     clone = tmp_path / "repo"
     _git("commit", "--allow-empty", "-qm", "broken release", cwd=clone)
     desired = _git("rev-parse", "HEAD", cwd=clone)
@@ -396,3 +397,43 @@ def test_release_bootstrap_worker_pins_core_and_vendor_after_pointer_moves(tmp_p
     assert report["dependency"] == "release-a"
     assert report["argv"] == worker[3:]
     assert not list(entries[0].parents[1].rglob("*.pyc"))
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+def test_release_batch_survives_fresh_driver_invocations_and_preserves_recovery(tmp_path, monkeypatch, healthy):
+    import os
+    import time
+
+    config, settings, pointer, initial, external, jobs, invoke = installed(tmp_path, monkeypatch)
+    settings.write_text(settings.read_text() + '\nmin_release_interval_seconds: 1800\n')
+    # First installation never waits for a prior release.
+    invoke("apply")
+    assert len(jobs) == 1
+    job = jobs.pop()
+    assert cli.main(job[job.index("--config"):]) == 0
+    assert external["revision"] == initial
+    clone = tmp_path / "repo"
+    desired = None
+    for label in ("first accumulated commit", "second accumulated commit"):
+        _git("commit", "--allow-empty", "-qm", label, cwd=clone)
+        desired = _git("rev-parse", "HEAD", cwd=clone)
+        _git("push", "-q", "origin", "main", cwd=clone)
+        monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps(
+            dict(target="production", revision=desired))))
+        assert cli.main(["--config", str(config), "--settings", str(settings), "apply"]) == 0
+        assert jobs == []
+    # Fresh invocations share only the durable activation pointer, not a timer
+    # in controller memory. An unhealthy process must still recover immediately.
+    if healthy:
+        activated = time.time() - 1801
+        os.utime(pointer, (activated, activated), follow_symlinks=False)
+    else:
+        external["revision"] = None
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps(
+        dict(target="production", revision=desired))))
+    assert cli.main(["--config", str(config), "--settings", str(settings), "apply"]) == 0
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job[job.index("--revision") + 1] == desired
+    assert cli.main(job[job.index("--config"):]) == 0
+    assert external["revision"] == desired

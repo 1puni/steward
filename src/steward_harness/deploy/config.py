@@ -14,6 +14,7 @@ class SystemdReleaseConfig(BaseModel):
     current_symlink: str = "/opt/steward-current"
     health_url: str | None = None
     timeout_seconds: int = Field(default=90, ge=10, le=600)
+    min_release_interval_seconds: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validates_paths(self) -> "SystemdReleaseConfig":

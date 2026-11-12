@@ -157,6 +157,21 @@ Remote platforms can instead consume an immutable artifact built by their own
 isolated builders. Observation must identify what the destination is actually
 serving or has durably received, rather than echo a requested revision.
 
+## Batching systemd releases
+
+The installed systemd driver's settings accept `min_release_interval_seconds`
+(default `0`, immediate deployment). Set it to `1800` to keep a healthy release
+running for at least thirty minutes before applying another. Commits continue to
+land normally; when the interval expires, the target resolves the latest branch
+tip and deploys that exact revision, including accumulated commits.
+
+The interval starts at activation, using the atomic `current` symlink's timestamp,
+so restarting the controller does not reset it. Health observation continues.
+First installation, unhealthy service recovery and condemned-release rollback do
+not wait for the interval. An explicit driver `worker` invocation also bypasses
+batching for operator recovery. This is a minimum interval between activations,
+not a fixed wall-clock schedule or a requirement that development become quiet.
+
 ## Observation feedback
 
 Only outcomes are delivered, never progress. A target has two outcomes at a

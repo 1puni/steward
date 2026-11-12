@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import httpx
 import yaml
@@ -153,6 +154,15 @@ def main(argv=None, *, worker_entry=None):
             return 0
         if result.ready and result.revision == revision:
             return 0
+        # The atomic pointer records the last activation across process restarts.
+        # Keep observing health during batching; failed releases and recovery do
+        # not wait. The controller resolves the latest desired ref on every pass.
+        if (settings.min_release_interval_seconds and result.ready
+                and not engine.releases.failed(revision)
+                and engine.releases.current_release() == result.revision):
+            activated = engine.releases.current_symlink.lstat().st_mtime
+            if time.time() < activated + settings.min_release_interval_seconds:
+                return 0
         worker = [sys.executable, "-B", str(Path(worker_entry).resolve())] if worker_entry else [sys.executable, "-B", "-m", "steward_harness.deploy.cli"]
         subprocess.run(["systemd-run", "--no-block", "--collect", *worker,
             "--config", str(config_path), "--settings", str(settings_path), "worker",
