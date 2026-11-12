@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -26,6 +27,9 @@ from steward_harness.landing.worktree import WorktreeManager
 from steward_harness.runtime.native_evidence import EVIDENCE_PENDING
 from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
+
+
+_NATIVE_EVIDENCE = (Path(__file__).parents[1] / "runtime" / "native_evidence.py").read_text()
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +181,16 @@ class PromotionEngine:
                     if published and self.session_state:
                         # Dropped records would otherwise linger untracked.
                         self._agent_git("clean", "-f", "-d", "-q", "--", *self.session_state, cwd=worktree)
+                    if published:
+                        # Rebase/reset can materialize retained base records.
+                        released = self.execution_broker.run(
+                            [self.execution_broker.python_executable, "-I", "-c", _NATIVE_EVIDENCE],
+                            cwd=worktree, timeout=300,
+                            input_text=json.dumps(["release", None, {}, str(worktree)]),
+                        )
+                        if released.returncode:
+                            raise RuntimeExecutionError("could not leave gate records in Git: "
+                                                        + released.stderr.strip()[-500:])
                     return sha
                 collapse(fork)
                 error = reconcile_git(

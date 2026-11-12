@@ -375,3 +375,40 @@ def test_remote_movement_after_gates_requires_new_integrated_gate_receipt(tmp_pa
     assert state.tasks.get(task_id).landed == second[0] == _git("rev-parse", "main", cwd=bare)
     assert _git("show", "main:base.txt", cwd=bare) == "after gates"
     assert _git("rev-parse", f"tasks/{task_id}", cwd=clone) == work
+
+
+@pytest.mark.parametrize("advance", [False, True])
+def test_gates_verify_committed_media_byte_exact_in_the_landing_worktree(tmp_path, advance):
+    """A gate worktree holds committed media; only records stay in Git."""
+    import sys
+    from steward_harness.config.schema import CommandSpec
+
+    bare, clone = _repository(tmp_path)
+    (clone / "brand").mkdir()
+    (clone / "brand" / "logo-horizontal.png").write_bytes(b"\x89PNG\r\n\x1a\nrelease logo\n")
+    (clone / "artefacts" / "codex" / "sessions").mkdir(parents=True)
+    (clone / "artefacts" / "codex" / "sessions" / "rollout.jsonl").write_text("{}\n")
+    _git("add", ".", cwd=clone)
+    _git("commit", "-m", "release media and records", cwd=clone)
+    _git("push", "origin", "main", cwd=clone)
+    state, runner, _, reconciler = harness(tmp_path / "state", bare, clone,
+                                           InvestigationAdapter(edit_first=True))
+    task_id, _ = state.tasks.create(TaskSpec("app", "Finish", "Create result.txt."))
+    runner.prepare(task_id)
+    if advance:
+        (clone / "artefacts" / "codex" / "sessions" / "later.jsonl").write_text("new base record\n")
+        _git("add", ".", cwd=clone)
+        _git("commit", "-m", "another session landed", cwd=clone)
+        _git("push", "origin", "main", cwd=clone)
+    gate = CommandSpec(argv=(sys.executable, "-c",
+        "from pathlib import Path; import subprocess; "
+        "held = subprocess.check_output(['git', 'show', 'HEAD:brand/logo-horizontal.png']); "
+        "assert Path('brand/logo-horizontal.png').read_bytes() == held; "
+        "assert not Path('artefacts').exists(), list(Path('artefacts').rglob('*'))"))
+    reconciler.repositories["app"] = runner.repositories["app"].model_copy(update={"gates": (gate,)})
+
+    assert reconciler.publish_repository("app") == task_id, reconciler.last_outcome
+    assert _git("show", "main:result.txt", cwd=bare).strip() == "completed"
+    assert _git("show", "main:artefacts/codex/sessions/rollout.jsonl", cwd=bare).strip() == "{}"
+    if advance:
+        assert _git("show", "main:artefacts/codex/sessions/later.jsonl", cwd=bare).strip() == "new base record"
