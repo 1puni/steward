@@ -22,7 +22,7 @@ jobs:
       - name: Refuse private-copy history
         run: |
           test "$(git rev-parse --is-shallow-repository)" = false
-          history=$(git log --format= --name-only --root -m --no-renames HEAD -- \
+          history=$(git log --full-history --format= --name-only --root -m --no-renames HEAD -- \
             instances tasks artefacts memories output)
           found=$(printf '%s\n' "$history" | sort -u | sed '/^$/d' | grep -v '^output/stewardship-flow/stewardship-flow.html$' || true)
           if [ -n "$found" ]; then
