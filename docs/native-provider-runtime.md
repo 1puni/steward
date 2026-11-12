@@ -392,8 +392,8 @@ them. Claude/GLM launches also set `CLAUDE_CODE_TMPDIR` in the environment and i
 settings to an owned 0700 `.steward-tmp` directory inside that home. Preparation
 rejects a redirected or non-private directory. Anonymous homes do not link to
 the seed's temp root. Anonymous launch homes survive setup and provider failures.
-A storage reserve stops new native admissions rather than filling the disk. See
-[native records in Git](native-session-host.md#native-records-in-git).
+A storage reserve stops new native admissions rather than filling the disk.
+Native records live in Git, captured as described below.
 
 Only native configuration, authentication and integration entries are linked in
 from the configured seed home. SQLite, caches, queues, goals and jobs stay
@@ -418,6 +418,13 @@ directories are rejected, and setup shares the execution deadline. Anonymous
 launch homes (conflict resolution) hold and capture their records the same way.
 Read-only runs capture every mapping, native memory included, into the record
 checkout their caller names.
+
+Capture and publication differ. Publication leaves every `artefacts/` path as the
+base has it: transcripts and rollouts are evidence of the task and stay on its task
+ref, one hop from the outcome commit's `Steward-Work` trailer. `memories/`
+publishes with the work, as the knowledge the next task starts from. Nothing
+leaves Git; the private tasks remote is where the task refs, transcripts included,
+become durable off-host.
 
 The home persists, the process does not. Every invocation starts a new provider
 process, and no provider process is kept between turns. Goals and jobs therefore
@@ -538,6 +545,6 @@ Credentials are never copied into per-call snapshots.
 Audited native option/version guards remove tools before inference. Tool events
 fail the call; a prompt asking the model not to use tools is not the boundary.
 Installed-binary dummy acceptance verifies the model-facing tool inventory
-against localhost endpoints. The [LLMPsych bridge contract](../instances/llmpsych/native-inference/README.md)
-owns its HTTP admission, identity checks, configured models, output validation,
+against localhost endpoints. The LLMPsych bridge contract, kept in that private
+instance, owns its HTTP admission, identity checks, configured models, output validation,
 installation and acceptance procedure.

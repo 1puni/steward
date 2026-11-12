@@ -395,6 +395,12 @@ integrated by the task remains as merge parents; exploration history stays priva
 See [downstream integration](forks-and-upstream.md). Gates must leave that candidate unchanged. Read-only procedures
 retain evidence without becoming product publication candidates.
 
+The published outcome commit carries the task id and deliberately shareable
+findings only. Provider transcripts are evidence of the task and stay on its task
+ref; provider memory is knowledge the next task starts from and publishes with the
+work. The private tasks remote is where accepted task refs, and with them the
+transcripts, become durable off-host.
+
 A conflict or actionable red gate returns its exact inputs and diagnostics to the
 owning task's native cognition. The publisher does not reason about edits. Missing
 intent asks and waits; an unchanged product tree remaining red on the

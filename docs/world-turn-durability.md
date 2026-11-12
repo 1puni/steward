@@ -168,7 +168,8 @@ Refusals due to local work or pending recovery are logged. Removal uses Git
 `worktree remove` without force and `worktree prune`, keeping accepted history and
 native session records. The next turn recreates the checkout from the world.
 Owner homes hold their native records outright, so removing a checkout never
-strands them; see [native records in Git](native-session-host.md#native-records-in-git).
+strands them; see the
+[storage boundary](native-provider-runtime.md#native-workflows-and-storage-boundary).
 [Retention tests](../tests/test_retention.py) exercise the age and custody boundaries.
 
 ## Verification

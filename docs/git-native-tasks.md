@@ -17,7 +17,9 @@ Use a globally unique task ID, including across managed repositories. Controller
 storage is `<state_db>.tasks.git`, holding `refs/heads/tasks/<id>`.
 `tasks.remote_url` optionally configures a separate private Git remote whose
 protected `refs/heads/tasks/*` supply tasks to a fresh controller; an agent-writable
-work branch never supplies that authority. Fetch must only accept fast-forward changes, retain local decisions,
+work branch never supplies that authority. An instance that keeps provider
+transcripts off its default branch should set it: the task store is then the only
+durable copy of those records, and the remote is where they survive the host. Fetch must only accept fast-forward changes, retain local decisions,
 and refuse divergence rather than guessing whose decision wins. Remote deletion
 is not cancellation. Accepted records and reply routing are private by default;
 public product commits contain only the task ID and deliberately shareable findings.
