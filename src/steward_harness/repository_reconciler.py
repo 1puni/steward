@@ -146,6 +146,11 @@ class RepositoryReconciler:
             self.worktrees_root,
             transport=transport,
             execution_broker=self.broker,
+            # Transcripts only: they are evidence of the task and stay on its
+            # ref. A provider's memories are knowledge the next task in this
+            # repository starts from, so they publish with the work.
+            session_state=tuple(prefix for prefix in self.state.tasks.session_state
+                                if prefix.startswith("artefacts/")),
         ).prepare(task.branch, head, base, title=task.title)
         # The candidate ref keeps imported objects alive only for this pass: a
         # repair has copied them into the task store, a push onto the remote,
