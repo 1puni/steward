@@ -108,6 +108,10 @@ class CognitionRequest:
             )
 
 
+# Every provider declined before any ran; the turn did no native work.
+NO_PROVIDER_PREFIX = "No provider can satisfy this turn"
+
+
 class Cognition:
     """Select, guard, and run any model-powered operation."""
 
@@ -319,7 +323,7 @@ class Cognition:
                     f"Execution ID {request.execution_id!r} was cancelled"
                 )
             detail = "; ".join(unavailable)
-            raise RuntimeUnavailable(f"No provider can satisfy this turn: {detail}")
+            raise RuntimeUnavailable(f"{NO_PROVIDER_PREFIX}: {detail}")
         finally:
             with self._lock:
                 self._active.pop(execution_id, None)
