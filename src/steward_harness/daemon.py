@@ -1182,6 +1182,10 @@ class StewardDaemon:
         """Deliver incident state changes without making transport part of policy."""
         self._notify_topic("incidents", text)
 
+    # A hold or a stall is one condition however many intervals it spans: it is
+    # said once a day per rhythm, not once an hour (llmpsych, 2026-11-12..14).
+    _DAILY_ALERT_PREFIXES = ("held:", "rhythm-stalled:")
+
     def _alert(self, key: str, text: str, *, quiet_seconds: float = 3600) -> None:
         """Tell the operator, without a model, that the harness itself stalled.
 
@@ -1190,6 +1194,8 @@ class StewardDaemon:
         storage reserve it was reporting. This path is the transport alone.
         Each key speaks at most once per quiet period.
         """
+        if key.startswith(self._DAILY_ALERT_PREFIXES):
+            quiet_seconds = max(quiet_seconds, 86400)
         now = time.monotonic()
         if now - self._alerted.get(key, -quiet_seconds) < quiet_seconds:
             return

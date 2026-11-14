@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -11,7 +12,8 @@ from steward_harness.config.schema import StewardConfig
 from steward_harness.daemon import StewardDaemon
 from steward_harness.lease import Busy
 from steward_harness.procedures import Procedures
-from steward_harness.runtime.contracts import RuntimeExecutionError
+from steward_harness.cognition import NO_PROVIDER_PREFIX
+from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 from steward_harness.state import ConversationId
 from test_world_durability import Crash, EditingCognition, runtime
 
@@ -115,6 +117,91 @@ def test_failed_interval_stays_held_rather_than_retried(tmp_path):
     assert list(procedures.due_world_rhythms(now=NOW + DAY)) == []
     assert procedures.world_rhythm_observations(now=NOW + DAY)["sleep"]["progress"] == "held"
     assert not (checkpoint.world.root / "decision.md").exists()
+
+
+def test_an_attempt_no_provider_ran_is_continued_by_itself_after_a_backoff(tmp_path):
+    """A usage limit or an expired login refuses the turn before native work.
+
+    Nothing external can have happened, so the controller queues the same
+    continuation `/rhythm run` would, once the backoff since the attempt has
+    passed. Polling inside the backoff queues nothing, so a provider that
+    keeps refusing is asked at most twice an hour, not every pass.
+    """
+    class Unavailable(EditingCognition):
+        def run(self, request, *, execution_id=None):
+            self.calls += 1
+            raise RuntimeUnavailable(f"{NO_PROVIDER_PREFIX}: codex: unavailable: usage limit")
+
+    config, state, checkpoint, service, cognition, _ = _rhythm(tmp_path, Unavailable())
+    alerts = []
+    procedures = Procedures(config, state, {}, world=checkpoint.world,
+                            alert=lambda key, text: alerts.append((key, text)))
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    [(key, text)] = alerts
+    assert key == "held:sleep" and "retried every thirty minutes" in text
+    real = time.time()
+    assert procedures.world_rhythm_observations(now=real)["sleep"]["progress"] == "held"
+    assert procedures.continue_unreached_world_rhythms(now=real) == []
+    assert procedures.world_rhythm_observations(now=real)["sleep"]["progress"] == "held"
+
+    later = real + Procedures.HELD_RETRY_SECONDS + 1
+    assert procedures.continue_unreached_world_rhythms(now=later) == ["rhythm:sleep:20"]
+    observed = procedures.world_rhythm_observations(now=later)["sleep"]
+    assert observed["progress"] == "continuation_queued" and observed["eligible"]
+    assert list(procedures.due_world_rhythms(now=later)) == [("sleep", "rhythm:sleep:20")]
+    # Queued once: the next pass finds the continuation, not a second one.
+    assert procedures.continue_unreached_world_rhythms(now=later) == []
+    turns = state.rhythm_turns(ConversationId("rhythm:sleep"))
+    assert [turn.source_event_key for turn in turns] == [
+        "rhythm:sleep:20", f"rhythm:sleep:20:continue:{turns[0].turn_id}"]
+    assert "Consolidate the world." in turns[1].input_text and "Continue the open obligation" in turns[1].input_text
+    # The rhythm pass runs it through the same path as the explicit command.
+    procedures.advance_rhythms(now=later)
+    assert cognition.calls == 1  # Still refusing: the retry is a queued source, not a provider call here.
+    # The provider refuses the continuation too; the next retry restates the
+    # instruction once rather than nesting one continuation inside another.
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    assert cognition.calls == 2
+    assert procedures.world_rhythm_observations(now=later)["sleep"]["progress"] == "held"
+    again = later + Procedures.HELD_RETRY_SECONDS + 1
+    assert procedures.continue_unreached_world_rhythms(now=again) == ["rhythm:sleep:20"]
+    turns = state.rhythm_turns(ConversationId("rhythm:sleep"))
+    assert turns[-1].source_event_key == f"rhythm:sleep:20:continue:{turns[1].turn_id}"
+    assert turns[-1].input_text.count("Continue the open obligation") == 1
+    assert turns[-1].input_text.startswith(turns[1].input_text.split("\n\nContinue")[0])
+
+
+def test_a_paused_rhythm_is_not_continued_by_itself(tmp_path):
+    class Unavailable(EditingCognition):
+        def run(self, request, *, execution_id=None):
+            raise RuntimeUnavailable(f"{NO_PROVIDER_PREFIX}: codex: unavailable: usage limit")
+
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, Unavailable())
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    later = time.time() + Procedures.HELD_RETRY_SECONDS + 1
+    state.set_rhythm_paused("sleep", True)
+    assert procedures.continue_unreached_world_rhythms(now=later) == []
+    state.set_rhythm_paused("sleep", False)
+    state.set_paused(True)
+    assert procedures.continue_unreached_world_rhythms(now=later) == []
+    state.set_paused(False)
+    assert procedures.continue_unreached_world_rhythms(now=later) == ["rhythm:sleep:20"]
+
+
+def test_an_attempt_that_ran_native_work_keeps_its_hold_for_explicit_continuation(tmp_path):
+    class Failing(EditingCognition):
+        def run(self, request, *, execution_id=None):
+            self.calls += 1
+            request()
+            raise RuntimeExecutionError("provider failed")
+
+    config, state, checkpoint, service, cognition, procedures = _rhythm(tmp_path, Failing())
+    procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
+    later = time.time() + DAY
+    assert procedures.continue_unreached_world_rhythms(now=later) == []
+    procedures.advance_rhythms(now=later)
+    assert procedures.world_rhythm_observations(now=later)["sleep"]["progress"] == "held"
+    assert len(state.rhythm_turns(ConversationId("rhythm:sleep"))) == 1
 
 
 def test_a_held_intervals_due_at_scales_with_a_later_schedule_change_but_stays_ineligible(tmp_path):
@@ -1136,8 +1223,9 @@ def test_a_held_rhythm_alerts_the_operator_without_a_model(tmp_path):
                             alert=lambda key, text: alerts.append((key, text)))
     procedures.run_world_rhythm(service, "sleep", "rhythm:sleep:20")
     [(key, text)] = alerts
-    assert key == "held:rhythm:sleep:20"
+    assert key == "held:sleep"  # One key per rhythm: a hold is said once, not once per interval.
     assert "provider failed" in text and "/rhythm run sleep" in text
+    assert "retried every thirty minutes" not in text
 
 
 def test_driving_world_rhythm_submits_owned_task_through_live_capability(tmp_path):
