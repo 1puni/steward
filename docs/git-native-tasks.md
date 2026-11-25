@@ -270,8 +270,13 @@ checks the running execution and bound provider generation under the same SQL
 transaction as authorization. Interrupted or cleared executions cannot mutate.
 Calls cannot select a conversation, operator, provider or authorization policy. Submission requires a
 currently configured repository. A conversation may inspect and steer its own
-tasks; an operator turn can also address ownerless work. Automated turns cannot
-steer ownerless work. Existing task status guards still apply.
+tasks; an operator turn can also address ownerless work. An automated turn (a
+`harness:` speaker, such as the controller's own task-result observation) can
+list, show, notify and cancel, but cannot submit, answer, retry or note: the
+authorizing source of a steering call must be an operator input, or the run a
+rhythm configured with `drive_tasks`. A live operator input arriving during an
+automated run authorizes steering through its own `source_id`. Existing task
+status guards still apply.
 Task notes and answers retain controller provenance, never operator provenance.
 
 Admission is independent of conversation/world completion. An accepted task can

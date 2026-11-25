@@ -46,6 +46,12 @@ in the final reply; they will not be sent. Most runs should notify no one."""
 
 _DELIVERY_WORDS = (("rejected", "rejected"), ("done", "delivered"), ("delivery_error", "deferred"))
 
+#: Operations that admit, resume or redirect execution. Looking (list, show),
+#: telling (notify, telegram) and withdrawing (cancel) are not among them.
+STEERING = frozenset({"submit", "answer", "retry", "note"})
+AUTOMATIC_STEERING_REFUSED = ("a controller observation cannot admit or resume work; only an "
+                              "operator input, or a rhythm configured to drive tasks, may")
+
 
 def delivery_status(receipt):
     """One word for where a queued notification stands."""
@@ -122,7 +128,15 @@ class TaskCalls:
     def operations(self):
         """Exactly the operations `__call__` accepts for this run."""
         rhythm = self.owner.kind == "rhythm"
-        steer, inspect = not rhythm or self.drive_tasks, not rhythm or bool(self.notify_owner)
+        # A run the controller started by observing its own task result may
+        # look and tell, never admit or resume work. On 2026-11-14 a topic's
+        # model answered 67 such observations in a row and the task ran every
+        # 90 s until its prompt hit the request cap; the same loop ran in
+        # every organisation. A live operator input arriving during the run
+        # still authorizes steering through its own source_id.
+        automatic = self.operator_id.startswith("harness:")
+        steer = (not rhythm and not automatic) or self.drive_tasks
+        inspect = not rhythm or bool(self.notify_owner)
         offered = {"telegram": self.owner.kind == "telegram" and self.telegram_admin is not None,
                    "notify": self.notifies, "submit": steer, "list": inspect, "show": inspect,
                    "answer": steer, "retry": steer, "note": steer, "cancel": not rhythm}
@@ -253,6 +267,8 @@ class TaskCalls:
                         self.cancel(str(ConversationId.for_task(task_id)))
                     return dict(operation=operation, key=key, task_id=str(task_id),
                                 revision=revision, accepted=True, replayed=True)
+            if operation in STEERING and operator_id.startswith("harness:") and not self.drive_tasks:
+                raise ValueError(AUTOMATIC_STEERING_REFUSED)
             require_current_source()
             if operation == "submit":
                 lineage = self.state._lineage_in(connection, str(self.owner))
@@ -264,7 +280,8 @@ class TaskCalls:
                 task_id = TaskId(request["task_id"])
                 _, rejection = self.state._apply_task_action(
                     self.task_owner, operator_id,
-                    TaskAction(task_id, operation, request["text"]), source=source)
+                    TaskAction(task_id, operation, request["text"]), source=source,
+                    automated_steering=self.drive_tasks)
                 if rejection:
                     raise ValueError(rejection)
             if operation == "cancel":

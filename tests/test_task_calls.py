@@ -643,3 +643,52 @@ def test_bridge_names_the_failure_when_the_socket_is_unreachable():
     reply = json.loads(result.stdout)['result']
     assert reply['isError']
     assert 'No such file or directory' in reply['content'][0]['text']
+
+
+def test_observation_rooted_run_can_look_and_tell_but_not_steer(tmp_path):
+    """A controller observation of a task result authorizes no new or resumed work.
+
+    From 2026-11-12 the same loop ran in every organisation: a task stopped to
+    ask, the controller observed the result into the owning topic, the topic's
+    model answered through the live task tool, and the task ran again, every
+    90 s, until its prompt hit the runtime cap and took the controller down.
+    """
+    from test_conversations import close_task_slice
+    submitted = []
+
+    def admit(request):
+        submitted.append(call(request.task_call_socket, **submission())['task_id'])
+    service = _service(tmp_path, CallingCognition(admit))
+    _turn(service, 'ask', operator_id='operator')
+    task = TaskId(submitted[0])
+    close_task_slice(service._state, task, 'ask', detail='Which index?')
+    assert service._state.tasks.get(task).status.value == 'waiting'
+
+    offered = []
+
+    def observe(request):
+        offered.append(set(request.task_call_operations))
+        url = request.task_call_socket
+        for action in (dict(operation='answer', key='a', task_id=str(task), text='Package index'),
+                       dict(operation='retry', key='r', task_id=str(task), text='Again'),
+                       dict(operation='note', key='n', task_id=str(task), text='Context'),
+                       submission('follow-up')):
+            receipt = call(url, **action)
+            assert receipt['accepted'] is False, action['operation']
+            assert 'controller observation' in receipt['error']
+        assert call(url, operation='show', task_id=str(task))['status'] == 'waiting'
+        assert len(call(url, operation='list')['tasks']) == 1
+    service._cognition = CallingCognition(observe)
+    _turn(service, 'result', 'Harness task result', operator_id='harness:task-result')
+    assert not offered[0] & {'submit', 'answer', 'retry', 'note'}
+    assert {'list', 'show', 'cancel'} <= offered[0]
+    assert service._state.tasks.get(task).status.value == 'waiting'
+    assert len(service._state.tasks.all()) == 1
+
+    def answer(request):
+        receipt = call(request.task_call_socket, operation='answer', key='a', task_id=str(task),
+                       text='Package index')
+        assert receipt['accepted'] is True
+    service._cognition = CallingCognition(answer)
+    _turn(service, 'operator-answer', 'Package index', operator_id='operator')
+    assert service._state.tasks.get(task).status.value == 'queued'

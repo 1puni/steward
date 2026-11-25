@@ -283,8 +283,16 @@ block that send. A receipt already selected for transport remains owed even if t
 task advances; it describes the retained outcome. Before later assessment the
 controller rechecks current task outcome and owner, skipping obsolete task questions
 or reassigned work. Assessment uses the ordinary world-turn path and current
-authority. The [live task tool](git-native-tasks.md#live-conversation-task-calls)
-can answer, retry, note or cancel authorized work; prose cannot resume it.
+authority. An assessment turn speaks as `harness:task-result`, and from it the
+[live task tool](git-native-tasks.md#live-conversation-task-calls) can look
+(list, show), tell (notify, telegram) and cancel; it cannot submit, answer,
+retry or note. Only an operator input, or a rhythm configured with
+`drive_tasks`, admits or resumes work, and prose never does. Without this,
+a task that stopped to ask was answered by the model observing its own result,
+ran again, asked again, and looped every 90 s in every organisation until its
+prompt hit the runtime cap (2026-11-14). Task prompts carry the newest
+accepted inputs within a fixed budget and name how many older ones they leave
+to the branch's commits.
 
 Automatic runs remain quiet unless they explicitly request notification; null owners
 retain evidence only. A requested message is delivered as retained. Assessment cannot
@@ -511,6 +519,8 @@ and a harness defect.
 | Provider exits without prepared world work | Retain actual unfinished evidence; do not fabricate success |
 | Prepared world candidate | Recover acceptance without repeating cognition or task admission |
 | Task checkpoint | Git retains the work and disposition; SQL retains only its remaining decisions |
+| Task request the runtime would refuse | Hold that task with the reason; the pass and the process continue |
+| Task store publication | A refused branch stays local and is named; the rest publish; startup logs and alerts instead of exiting |
 | Possible push | Observe remote truth; an already-landed effect cannot be cancelled retroactively |
 | Release activation | The symlink alone does not prove a healthy running release |
 | Failed deployment | Preserve the failed marker and prior-release evidence; report rollback failure honestly |
