@@ -261,7 +261,10 @@ class GitTaskStore:
             timeout=120, umask=0o077,
         )
         if result.returncode:
-            raise RuntimeError(f"task Git {args[0]} failed (exit {result.returncode})")
+            # The last stderr lines are the cause; without them ten days of
+            # "push failed (exit 1)" said nothing about a refused 186 MB blob.
+            detail = " ".join(result.stderr.strip().splitlines()[-3:])[-400:]
+            raise RuntimeError(f"task Git {args[0]} failed (exit {result.returncode}): {detail}")
         return result.stdout.strip()
 
     def refs(self, prefix: str = PREFIX) -> dict[str, str]:
@@ -690,9 +693,30 @@ class GitTaskStore:
             # Validate all accepted records before publishing any local decision.
             self.all()
             refs = self.refs()
-            if refs:
+            incoming = self.refs("refs/steward/incoming/")
+            unpublished = {ref: sha for ref, sha in refs.items()
+                           if incoming.get("refs/steward/incoming/" + ref.removeprefix(PREFIX)) != sha}
+            if not unpublished:
+                return
+            try:
                 self.git("push", "--atomic", "--", self.remote,
-                         *(f"{sha}:{ref}" for ref, sha in refs.items()))
+                         *(f"{sha}:{ref}" for ref, sha in unpublished.items()))
+            except RuntimeError:
+                # One refused branch must not keep every other decision local:
+                # on 2026-11-16 a record the remote would not take held back
+                # 681 branches for ten days. Publish the rest one by one and
+                # name what stays behind; it retries on every sync.
+                refused: dict[str, str] = {}
+                for ref, sha in unpublished.items():
+                    try:
+                        self.git("push", "--", self.remote, f"{sha}:{ref}")
+                    except RuntimeError as error:
+                        refused[ref] = str(error)
+                if refused:
+                    names = ", ".join(sorted(ref.removeprefix(PREFIX) for ref in refused))
+                    raise RuntimeError(
+                        f"{len(refused)} task branch(es) could not publish and remain local: "
+                        f"{names}; first cause: {next(iter(refused.values()))}")
 
     def retain_work(self, repository, broker, sha):
         """Fetch one exact agent commit's closure into this store, checking every object."""

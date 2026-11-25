@@ -412,3 +412,31 @@ def test_gates_verify_committed_media_byte_exact_in_the_landing_worktree(tmp_pat
     assert _git("show", "main:artefacts/codex/sessions/rollout.jsonl", cwd=bare).strip() == "{}"
     if advance:
         assert _git("show", "main:artefacts/codex/sessions/later.jsonl", cwd=bare).strip() == "new base record"
+
+
+def test_sync_publishes_the_rest_when_one_branch_is_refused(tmp_path):
+    """One refused branch stays local and is named; every other decision publishes.
+
+    On 2026-11-16 a 186 MB record the remote would not take, pushed
+    `--atomic` with 680 other branches, kept all of them local for ten days.
+    """
+    from state_fixtures import admit_task
+    bare, clone = _repository(tmp_path)
+    task_remote = tmp_path / "tasks.git"
+    _git("init", "--bare", str(task_remote), cwd=tmp_path)
+    state, _, _, _ = harness(tmp_path / "h", bare, clone, InvestigationAdapter())
+    state.tasks.remote = str(task_remote)
+    first = admit_task(state, TaskSpec("app", "First", "One")).task_id
+    second = admit_task(state, TaskSpec("app", "Second", "Two")).task_id
+    # A stale ref lock stands in for whatever the remote refuses a branch for.
+    lock = task_remote / "refs" / "heads" / "tasks" / f"{second}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("")
+    with pytest.raises(RuntimeError, match=f"1 task branch.*{second}"):
+        state.tasks.sync()
+    published = _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    assert str(first) in published and str(second) not in published
+    lock.unlink()
+    state.tasks.sync()
+    assert str(second) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    state.tasks.sync()  # Nothing unpublished: no push, no error.
