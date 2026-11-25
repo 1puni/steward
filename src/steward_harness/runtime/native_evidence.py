@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -71,6 +72,14 @@ def check_headroom(paths: list[Path], required: int = 0) -> None:
         reserve = min(MAX_RESERVE_BYTES, max(MIN_FREE_BYTES, int(usage.total * MIN_FREE_FRACTION)))
         if usage.free - required < reserve:
             raise RuntimeError('native evidence storage reserve reached; retain evidence and stop new native work')
+
+
+log = logging.getLogger(__name__)
+
+#: A record past this stays in its home, uncaptured. Hosted Git refuses blobs
+#: of 100 MB; on 2026-11-16 one 186 MB transcript, captured into a task
+#: branch, kept every task decision from publishing for ten days.
+MAX_RECORD_BYTES = 90 * 1024 * 1024
 
 
 def _git(workspace: Path, *args: str, input_text: str | None = None,
@@ -142,8 +151,17 @@ def capture(home: Path, mappings: dict[str, str], workspace: Path, *, force: boo
                 continue
             meta, path = line.split('\t', 1)
             mode, blob, _ = meta.split(' ')
-            if mode in {'100644', '100755'}:
-                entries.append((mode, blob, f'{relative}/{path}'))
+            if mode not in {'100644', '100755'}:
+                continue
+            try:
+                size = (root / path).stat().st_size
+            except OSError:
+                size = 0
+            if size > MAX_RECORD_BYTES:
+                log.warning('native record %s/%s is %d bytes, over the %d byte retention cap; '
+                            'left in the home, not captured', name, path, size, MAX_RECORD_BYTES)
+                continue
+            entries.append((mode, blob, f'{relative}/{path}'))
     if not entries:
         return 0
     _git(workspace, 'update-index', '--add', '-z', '--index-info', input_text=''.join(

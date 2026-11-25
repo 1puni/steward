@@ -21,7 +21,9 @@ way you count errors.
 | --- | --- | --- |
 | Provider selection | Skip unavailable or incapable adapters before execution | A post-start authentication error proves no tools ran |
 | Native execution | Preserve known session provenance; stop the owned process on cancellation, shutdown or a non-task deadline | All detached descendants stopped, or a second provider can safely replay the work |
-| Task slice | Autosave where possible; shutdown or a bound-session procedure deadline can continue; declared failures block; live account offers are accepted or refused visibly | A reply without validated closure grants publication |
+| Task slice | Autosave where possible; shutdown or a bound-session procedure deadline can continue; declared failures block; a request the runtime would refuse blocks the task with its reason before any model runs; live account offers are accepted or refused visibly | A reply without validated closure grants publication, or one task's defect ends the pass |
+| Task store publication | Push what the remote has not got; when it refuses, publish the other branches one by one and name the refused; at startup log and alert, do not exit | A refused branch means the controller must stop, or that local decisions were lost |
+| Native record capture | Records over the retention cap stay in the home and are logged | A record too large for the remote is evidence the branch may carry |
 | Gate | Launch errors, deadline, nonzero exit and changed input fail validation | A programming fault is an ordinary red command |
 | Repository publication | Validation failures block the task; declared transport/runtime failures are logged at the repository boundary | A lost push response proves nothing landed |
 | Incident probe | Declared probe failure becomes an unhealthy sample under incident policy | A controller defect authorizes a repair task |
