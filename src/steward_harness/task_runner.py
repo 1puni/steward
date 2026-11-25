@@ -25,6 +25,7 @@ from steward_harness.prompts import RHYTHM_FINDINGS, RHYTHM_SUBMIT, build_task_p
 from steward_harness.provider_types import ProviderFamily
 from steward_harness.runtime.contracts import (
     NativeInputClosed, RuntimeExecutionError, RuntimeInput, RuntimeInputResult, RuntimeUnavailable,
+    PROMPT_LIMIT,
 )
 from steward_harness.runtime.execution import ExecutionBoundaryUnavailable, UntrustedExecutionBroker
 from steward_harness.runtime.process import ProcessTimeout
@@ -75,6 +76,15 @@ class _LiveTask:
     consumed: set[str]
     attempted: set[str]
     send: Callable[[RuntimeInput], None] | None = None
+
+
+class TaskRequestRejected(ValueError):
+    """A slice whose request the runtime would refuse before any model ran.
+
+    The defect is the task's own, so the task is held with the reason. Left
+    to escape, it ended the pass and the process: on 2026-11-14 one task's
+    169 surplus characters restarted the controller 1,500 times.
+    """
 
 
 def _task_input(commit: str, kind: str, text: str, source: str) -> RuntimeInput:
@@ -343,6 +353,8 @@ class TaskRunner:
                 self._autosave_and_interrupt(
                     task, opened_at, str(error) or type(error).__name__
                 )
+        except TaskRequestRejected as error:
+            self._autosave_and_interrupt(task, opened_at, f"request rejected: {error}")
         except (WorktreeError, WorktreeCheckpointError, GitTransportError, OSError) as error:
             if _boundary_failed(error):
                 raise
@@ -532,6 +544,10 @@ class TaskRunner:
             on_input_ready=input_ready,
             on_input_result=input_result,
         )
+        if not request.prompt.strip() or len(request.prompt) > PROMPT_LIMIT:
+            raise TaskRequestRejected(
+                f"the assembled request is {len(request.prompt)} characters against the runtime "
+                f"limit of {PROMPT_LIMIT}; shorten the brief or retained inputs before retrying")
 
         def prepared() -> CognitionRequest:
             # Registered with cognition before this runs, so a shutdown either

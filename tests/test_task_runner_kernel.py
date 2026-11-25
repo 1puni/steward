@@ -1263,3 +1263,43 @@ def test_continue_that_moved_nothing_commits_nothing_and_waits(tmp_path: Path) -
     state.tasks.note(admitted.task_id, "The write-up is up.")
     assert run_task(runner) == admitted.task_id
     assert len(adapter.requests) == 3
+
+
+def test_oversized_request_holds_only_that_task(tmp_path: Path, monkeypatch) -> None:
+    """A request the runtime would refuse blocks its task; it does not end the pass.
+
+    On 2026-11-14 one task's prompt was 169 characters over the cap. The
+    `ValueError` left `prepare`, the pass, and the process, and systemd
+    restarted the controller into the same task 1,500 times.
+    """
+    import steward_harness.task_runner as task_runner_module
+    monkeypatch.setattr(task_runner_module, "PROMPT_LIMIT", 500)
+    bare, clone = _repository(tmp_path)
+    state = StateDatabase(tmp_path / "state.db")
+    admitted = admit_task(
+        state,
+        TaskSpec("app", "Too much to ask", "A brief that, with the standing prompt, exceeds the cap."),
+        provider="claude",
+        profile="balanced",
+    )
+    adapter = EditingAdapter()
+    runner = TaskRunner(
+        state=state,
+        repositories={"app": RepositoryConfig(path=str(clone), remote_url=str(bare))},
+        transports={
+            "app": ControllerGitTransport(
+                tmp_path / "controller.db", "app", str(bare), "main", allow_local=True,
+            )
+        },
+        worktrees_root=tmp_path / "worktrees",
+        broker=UntrustedExecutionBroker(UntrustedExecutionConfig()),
+        cognition=Cognition({"claude": adapter}),
+        provider_fallbacks=(),
+        timeout_seconds=30,
+    )
+    assert run_task(runner) == admitted.task_id
+    assert adapter.requests == []
+    task = state.tasks.get(admitted.task_id)
+    assert task.status is TaskStatus.BLOCKED
+    assert "request rejected" in task.reason and "limit of 500" in task.reason
+    assert state.tasks.queued() == ()

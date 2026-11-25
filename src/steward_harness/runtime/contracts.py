@@ -29,6 +29,13 @@ def validated_uuid(value: str) -> str | None:
     return value if value.lower() == str(parsed) else None
 
 
+#: The longest request a native invocation accepts. Task prompts are built to
+#: stay under it (`prompts.OPERATOR_CONTEXT_BUDGET`) and checked against it
+#: before any model runs (`task_runner.TaskRequestRejected`).
+PROMPT_LIMIT = 128_000
+TEXT_ONLY_PROMPT_LIMIT = 2_097_152
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderCapabilities:
     """Capabilities an adapter can honestly satisfy for one complete turn.
@@ -263,7 +270,7 @@ class RuntimeRequest:
             raise ValueError("Native owner must be nonblank and bounded")
         if type(self.native_generation) is not int or self.native_generation < 1:
             raise ValueError("Native generation must be a positive integer")
-        if not self.prompt.strip() or len(self.prompt) > (2_097_152 if self.text_only else 128_000):
+        if not self.prompt.strip() or len(self.prompt) > (TEXT_ONLY_PROMPT_LIMIT if self.text_only else PROMPT_LIMIT):
             raise ValueError("Prompt must be non-empty and bounded")
         if not self.cwd.is_absolute():
             raise ValueError("Working directory must be absolute")
