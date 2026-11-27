@@ -175,7 +175,6 @@ class ConversationService:
                     receipt = self._state.prepared_turn(str(turn.execution_turn_id))
                     if receipt is not None:
                         accepted = self.accept_prepared(str(turn.execution_turn_id))
-                        assert isinstance(accepted, ConversationTurnResult)
                         return ConversationTurnResult(
                             accepted.conversation_id, turn.turn_id, accepted.reply_text,
                             accepted.task_admission, accepted.task_rejection,
@@ -196,9 +195,7 @@ class ConversationService:
             started = (turn.state == "running" and self._claimed(event_id) is None)
         if not started:
             if self._state.prepared_turn(event_id) is not None:
-                accepted = self.accept_prepared(event_id)
-                assert isinstance(accepted, ConversationTurnResult)
-                return accepted
+                return self.accept_prepared(event_id)
             if self._state.active_turn(conversation.conversation_id) is not None:
                 raise ConversationBusy("execution has not reached durable acceptance")
             raise RuntimeExecutionError(
@@ -220,21 +217,18 @@ class ConversationService:
                 delivery_roots=self._delivery_roots,
             )
 
-        accepted = self._execute_turn(
+        return self._execute_turn(
             conversation,
             turn,
             build_prompt=build_prompt,
             episode_input=episode_input if episode_input is not None else text,
             images=images,
-            live_input=True,
             allow_empty_output=allow_empty_output,
             procedure=procedure,
             keep_unclaimed=reserved_rhythm,
             notify_owner=notify_owner,
             drive_tasks=drive_tasks,
         )
-        assert isinstance(accepted, ConversationTurnResult)
-        return accepted
 
     def _execute_turn(
         self,
@@ -244,13 +238,12 @@ class ConversationService:
         build_prompt: Callable[[], str],
         episode_input: str,
         images: tuple[Path, ...],
-        live_input: bool,
         allow_empty_output: bool = True,
         procedure: ProcedureConfig | None = None,
         keep_unclaimed: bool = False,
         notify_owner: str | None = None,
         drive_tasks: bool = False,
-    ) -> ConversationTurnResult | Turn:
+    ) -> ConversationTurnResult:
         """Run, retain and accept one declared world-session turn.
 
         The prompt arrives unbuilt because the guard below is what releases a
@@ -355,12 +348,12 @@ class ConversationService:
                 allow_empty_output=allow_empty_output,
                 on_session_started=session_started,
                 on_session_invalidated=session_invalidated,
-                on_input_ready=input_ready if live_input else None,
+                on_input_ready=input_ready,
                 on_input_result=(
                     lambda evidence: self._state.record_native_input_result(
                         turn.turn_id, evidence.source_id, evidence.disposition
                     )
-                ) if live_input else (lambda _evidence: None),
+                ),
             )
         try:
             try:
@@ -485,7 +478,7 @@ class ConversationService:
         self._state.save_result_receipt(receipt)
         return receipt["reply"]
 
-    def accept_prepared(self, event_id: str) -> ConversationTurnResult | Turn:
+    def accept_prepared(self, event_id: str) -> ConversationTurnResult:
         row = self._state.prepared_turn(event_id)
         if row is None:
             raise ValueError("world-session output is not prepared")
