@@ -1182,9 +1182,11 @@ class StewardDaemon:
         """Deliver incident state changes without making transport part of policy."""
         self._notify_topic("incidents", text)
 
-    # A hold or a stall is one condition however many intervals it spans: it is
-    # said once a day per rhythm, not once an hour (llmpsych, 2026-11-12..14).
-    _DAILY_ALERT_PREFIXES = ("held:", "rhythm-stalled:")
+    # A hold the controller retries by itself, or a stall, is one condition
+    # however many intervals it spans: it is said once a day per rhythm, not
+    # once an hour (llmpsych, 2026-11-12..14). A hold that needs the operator
+    # is keyed by its interval and is not among these.
+    _DAILY_ALERT_PREFIXES = ("held-retrying:", "rhythm-stalled:")
 
     def _alert(self, key: str, text: str, *, quiet_seconds: float = 3600) -> None:
         """Tell the operator, without a model, that the harness itself stalled.

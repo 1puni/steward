@@ -66,17 +66,16 @@ def rhythm_attempts(runs):
 CONTINUATION_MARKER = "\n\nContinue the open obligation "
 
 
-def never_reached_provider(name, key, attempt):
-    """Did this interrupted attempt stop before any provider ran?
+def never_reached_provider(attempt):
+    """Did this interrupted attempt stop because every provider declined it?
 
-    Two records say so: every configured provider declined (the cognition's
-    own refusal), or preparation failed before a source existed and the
-    controller wrote only the scheduling placeholder. Either way there is no
-    native work to reconcile, so a retry repeats nothing.
+    The cognition's own refusal is the one record that says no native work
+    ran and that asking again can succeed: a usage limit resets, a login is
+    renewed. A hold from anything else waits for the operator, including a
+    preparation failure that left only the scheduling placeholder: an
+    unreadable instructions file fails the same way on every retry.
     """
-    reason = attempt.status_reason or ""
-    return (attempt.input_text == f"Scheduled {name} rhythm ({key})."
-            or reason.startswith(NO_PROVIDER_PREFIX))
+    return (attempt.status_reason or "").startswith(NO_PROVIDER_PREFIX)
 
 
 def superseded(runs, name, receipt):
@@ -189,6 +188,8 @@ class Procedures:
         self._observed_bucket = {}
         # Per watched world rhythm: (interval, its watch's answer and output).
         self._watched = {}
+        # Per held world rhythm: when queueing its own continuation last failed.
+        self._continuation_failed = {}
 
     def request(self, name, repository, candidate, base, *, event="", owner=None, activity=None, workdir=None):
         config = self.config.procedures[name]
@@ -553,7 +554,14 @@ class Procedures:
         ran native work and was interrupted keeps its hold for explicit
         continuation. Returns the keys queued.
         """
-        if self.state.paused() or not any(r.input == "world" for r in self.config.rhythms.values()):
+        if self.state.paused():
+            return []
+        # Most passes hold nothing: look before asking for the lease, which a
+        # running world rhythm keeps for as long as it runs.
+        if not any(attempts[-1].state == "interrupted" and never_reached_provider(attempts[-1])
+                   for name, rhythm in self.config.rhythms.items() if rhythm.input == "world"
+                   for attempts in rhythm_attempts(
+                       self.state.rhythm_turns(ConversationId(f"rhythm:{name}"))).values()):
             return []
         now = time.time() if now is None else now
         queued = []
@@ -565,16 +573,24 @@ class Procedures:
                     key = observed["event"]
                     owner = ConversationId(f"rhythm:{name}")
                     prior = rhythm_attempts(self.state.rhythm_turns(owner))[int(key.split(":")[2])][-1]
-                    if not never_reached_provider(name, key, prior):
+                    if not never_reached_provider(prior):
                         continue
-                    stamp = prior.completed_at or prior.started_at
-                    if now - datetime.fromisoformat(stamp).timestamp() < self.HELD_RETRY_SECONDS:
+                    stamp = max(datetime.fromisoformat(prior.completed_at or prior.started_at).timestamp(),
+                                self._continuation_failed.get(name, 0))
+                    if now - stamp < self.HELD_RETRY_SECONDS:
                         continue
-                    self._queue_continuation(name, key)
+                    try:
+                        self._queue_continuation(name, key)
+                    except (ConversationBusy, OSError, ValueError) as error:
+                        # This rhythm's own trouble: it waits out a backoff
+                        # like a refusal, and the rhythms after it still go.
+                        self._continuation_failed[name] = now
+                        log.warning("world rhythm %s: continuation not queued: %s", key, error)
+                        continue
                     log.info("world rhythm %s: no provider ran its last attempt; continuation queued", key)
                     queued.append(key)
-        except (Busy, ConversationBusy, OSError, ValueError) as error:
-            log.info("held world rhythm retry deferred: %s", error)
+        except Busy as error:
+            log.debug("held world rhythm retry deferred: %s", error)
         return queued
 
     def _queue_continuation(self, name, key):
@@ -654,8 +670,13 @@ class Procedures:
                     owner, source, "harness:rhythm", f"Scheduled {name} rhythm ({key}).")
                 self.state.interrupt_turn(failed.turn_id, str(error))
             log.error("world rhythm %s held: %s", key, error)
-            retried = isinstance(error, RuntimeUnavailable)
-            self.alert(f"held:{name}", f"⚠️ The {name} rhythm is held ({key}): {str(error)[-600:]}\n"
+            # A refusal by every provider is retried by itself and said once a
+            # day per rhythm. Any other hold needs the operator and keeps its
+            # own key, so an earlier "retried by itself" never silences it.
+            held = self.state.turn_for_source(owner, source)
+            retried = held is not None and never_reached_provider(held)
+            self.alert(f"held-retrying:{name}" if retried else f"held:{key}",
+                       f"⚠️ The {name} rhythm is held ({key}): {str(error)[-600:]}\n"
                        + ("No provider ran it, so it is retried every thirty minutes until one does; "
                           if retried else "Once the cause is fixed, ")
                        + f"`/rhythm run {name}` continues it.")

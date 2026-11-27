@@ -349,11 +349,15 @@ Each explicit request permits one attempt. Polling and restarts never authorize 
 provider retry of an attempt that ran native work: its hold waits for `/rhythm run`,
 because something external may already have happened. An attempt that never reached a
 provider is different. When every configured provider declined (a usage limit, an
-expired login) or preparation failed before a source existed, nothing ran, so the
+expired login), nothing ran, so the
 controller queues the same continuation by itself once thirty minutes have passed since
 that attempt, and again after each refusal. A provider that keeps refusing is asked
-at most twice an hour; the operator hears about the hold once a day per rhythm, and
-the same daily bound applies to the stall alert below. From October 10 to November
+at most twice an hour; the operator hears about such a hold once a day per rhythm, and
+the same daily bound applies to the stall alert below. Every other hold, including a
+preparation failure that left no source (an unreadable instructions file fails the
+same way each time), waits for `/rhythm run` and alerts under its own interval, so an
+earlier self-retrying hold never silences it. A continuation that cannot be queued
+delays only its own rhythm, for the same thirty minutes. From October 10 to November
 14, 2026, llmpsych's five world rhythms sat held on a usage limit and an expired
 login that had both long cleared, and the hourly stall alert said so 250 times.
 A held interval prevents newer intervals of that rhythm from replacing

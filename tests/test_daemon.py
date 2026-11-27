@@ -1286,11 +1286,12 @@ def test_hold_and_stall_alerts_repeat_at_most_daily_per_key(tmp_path) -> None:
     sent: list[str] = []
     daemon._notify_topic = lambda topic, text: sent.append(text)
     two_hours_ago = time.monotonic() - 7200
-    for key in ("held:sleep", "rhythm-stalled:sleep", "watch:sleep"):
+    for key in ("held-retrying:sleep", "rhythm-stalled:sleep", "held:rhythm:sleep:20", "watch:sleep"):
         daemon._alerted[key] = two_hours_ago
         daemon._alert(key, key)
-    # An ordinary key spoke two hours ago and speaks again; a hold or stall waits a day.
-    assert sent == ["watch:sleep"]
+    # A self-retrying hold or a stall waits a day; a hold that needs the
+    # operator, like any ordinary key, spoke two hours ago and speaks again.
+    assert sent == ["held:rhythm:sleep:20", "watch:sleep"]
 
 
 def test_rhythm_lane_alerts_the_operator_once_when_an_unconditional_rhythm_stalls(tmp_path) -> None:
