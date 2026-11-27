@@ -39,7 +39,6 @@ def accept_conversation_turn(
     model="gpt",
     provider_session_id=None,
     profile="balanced",
-    spec=None,
 ):
     event_id = str(turn_id)
     prepare_turn(
@@ -54,12 +53,20 @@ def accept_conversation_turn(
         provider_session_id=provider_session_id,
         profile=profile,
     )
-    return state.accept_turn(
-        event_id,
-        visible_reply=reply_text,
-        spec=spec,
-        rejection=None,
-    )
+    return state.accept_turn(event_id)
+
+
+def submit_turn_task(state, turn_id, spec):
+    """Submit through the running turn's controller-granted task capability."""
+    from steward_harness.task_calls import TaskCalls
+    if state.tasks.repositories is None:
+        state.tasks.repositories = {spec.repository}
+    receipt = TaskCalls(state, turn_id)({
+        "operation": "submit", "key": str(turn_id), "repository": spec.repository,
+        "title": spec.title, "brief": spec.brief,
+    })
+    return TaskId(receipt["task_id"])
+
 
 
 _ADMISSIONS = count()

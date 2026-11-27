@@ -145,9 +145,7 @@ def _finish(checkpoint, turn, event, user, reply):
     )
     checkpoint.apply(
         event_id,
-        lambda: state.accept_turn(
-            event_id, visible_reply=reply, spec=None, rejection=None
-        ),
+        lambda: state.accept_turn(event_id),
     )
 
 
@@ -619,9 +617,7 @@ def test_retry_after_unprepared_commit_replaces_only_that_attempt(tmp_path, monk
     )
     with pytest.raises(WorldUpdatePending, match="prepared world turns"):
         checkpoint.retain(resumed, event_id, "input", "must not replace prepared output", "retry")
-    checkpoint.apply(event_id, lambda: state.accept_turn(
-        event_id, visible_reply="resumed reply", spec=None, rejection=None,
-    ))
+    checkpoint.apply(event_id, lambda: state.accept_turn(event_id))
     assert (world.root / "first.txt").read_text() == "work from the first attempt"
     assert (world.root / "second.txt").read_text() == "work from the resumed attempt"
     entries = _episodes(world.root)

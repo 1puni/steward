@@ -653,16 +653,8 @@ class StateDatabase:
             if prepared.rowcount != 1:
                 raise RuntimeError("world turn has no retained output to prepare")
 
-    def accept_turn(
-        self,
-        event_id: str,
-        *,
-        visible_reply: str,
-        spec: TaskSpec | None,
-        rejection: str | None,
-        action: TaskAction | None = None,
-    ) -> sqlite3.Row:
-        """Accept a prepared world turn. A task Git commit is independently durable; source identity makes receipt replay idempotent."""
+    def accept_turn(self, event_id: str) -> sqlite3.Row:
+        """Accept retained output and its native lineage, or return the original receipt."""
         with self.connect(write=True) as connection:
             row = connection.execute(
                 f"SELECT * FROM turns WHERE turn_id=? AND {self._PREPARED}", (event_id,)
@@ -671,17 +663,6 @@ class StateDatabase:
                 raise LookupError("world turn is not prepared")
             if row["state"] == "completed":
                 return row
-            turn_id = TurnId(event_id)
-            owner = ConversationId(row["conversation_id"])
-            # There is no cancelled branch here because no path can reach one.
-            # `record_candidate` runs after `cognition.run` has returned, and
-            # its `finally` has already popped `Cognition._active`, so by the
-            # time this row exists the process `/cancel` would signal has
-            # exited: cancellation finds no bound conversation and says so.
-            if spec is not None and action is not None:
-                raise ValueError("a turn may propose one task or steer one task")
-            if (spec is not None or action is not None) and rejection is not None:
-                raise ValueError("a rejected proposal cannot be admitted")
             if row["state"] != "running":
                 raise RuntimeError("turn is not running")
             lineage = self._lineage_in(connection, row["conversation_id"])
@@ -695,46 +676,10 @@ class StateDatabase:
                     connection, row["conversation_id"], row["provider"],
                     row["provider_session_id"], expected_generation=generation,
                 ).generation
-            task_id = None
-            if spec is not None:
-                # The ref first, then the row: the ref is the task, and a crash
-                # between the two leaves a task with no bookkeeping, which is a
-                # legal state rather than a corrupt one.
-                admission = self._insert_task(
-                    connection,
-                    spec,
-                    task_id=TaskId("task-" + uuid.uuid5(uuid.NAMESPACE_URL, event_id).hex),
-                    source=event_id,
-                    kind=TaskOriginKind.CONVERSATION,
-                    origin_ref=None,
-                    conversation_id=owner,
-                    provider=row["provider"],
-                    profile=row["profile"],
-                )
-                task_id = str(admission.task_id)
-                notice = f"Task admitted: {task_id}"
-            elif action is not None:
-                notice, rejection = self._apply_task_action(
-                    owner, row["operator_id"], action, source=event_id,
-                )
-                notice = rejection or notice
-            else:
-                notice = rejection
-            if rejection is not None and row["operator_id"].startswith("harness:"):
-                # An automatic turn's refused proposal or action is the
-                # steward's own bookkeeping. The turn keeps it and the log
-                # names it; the operator did not ask, so it is not news to them.
-                log.warning("turn %s (%s): %s", event_id, row["operator_id"], rejection)
-                notice = None
-            reply = (
-                f"{visible_reply}\n\n{notice}"
-                if notice and visible_reply
-                else notice or visible_reply
-            )
             connection.execute(
                 "UPDATE turns SET state='completed', generation=?, completed_at=?, "
-                "reply_text=?, task_id=?, rejection=? WHERE turn_id=?",
-                (generation, _now(), reply, task_id, rejection, event_id),
+                "reply_text=? WHERE turn_id=?",
+                (generation, _now(), row["output"].strip(), event_id),
             )
             return connection.execute(
                 "SELECT * FROM turns WHERE turn_id=?", (event_id,)

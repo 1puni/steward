@@ -28,7 +28,7 @@ rhythm → procedure → accepted Git task                   │          │
                                       observed refs → named target drivers
 ```
 
-A world update may admit a task, steer an existing task, or do neither. A repository
+A running conversation can admit or steer work through its live task capability. Accepting or replaying its retained world output only seals the reply and native lineage. A repository
 task may produce code, findings or a question. Its checkpoint records what the session
 concluded; an idle checkpoint becomes eligible for publication. Product files need not
 change for the task account to be useful.

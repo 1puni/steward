@@ -15,7 +15,7 @@ from textwrap import dedent
 
 import pytest
 
-from state_fixtures import accept_conversation_turn, advance
+from state_fixtures import accept_conversation_turn, advance, submit_turn_task
 from task_tool_fixtures import TaskCognition as Cognition
 from steward_harness.config.schema import (
     RepositoryConfig,
@@ -27,7 +27,7 @@ from steward_harness.runtime.execution import UntrustedExecutionBroker
 from steward_harness.runtime import process as process_module
 from steward_harness.runtime.process import ProcessController
 from steward_harness.runtime.providers.claude import ClaudeRuntime
-from steward_harness.state import StateDatabase, TaskId, TaskSpec
+from steward_harness.state import StateDatabase, TaskSpec
 from steward_harness.task_runner import TaskRunner
 from steward_harness.task_lock import locked_tasks
 from test_task_runner_kernel import (
@@ -94,18 +94,16 @@ def setup_task(tmp_path, adapter, state_type=StateDatabase):
     turn, _ = state.start_turn(
         conversation.conversation_id, "request", "operator", "Inspect consumer"
     )
-    receipt = accept_conversation_turn(
+    task_id = submit_turn_task(state, turn.turn_id, TaskSpec("app", "Inspect consumer", "Find the consumer, ask if needed."))
+    accept_conversation_turn(
         state,
         turn.turn_id,
         reply_text="Investigating.",
         provider="claude",
         model="model",
         provider_session_id="claude-session",
-        spec=TaskSpec("app", "Inspect consumer", "Find the consumer, ask if needed."),
-        # Admission is the branch, so the fixture opens a real one.
-
     )
-    admitted = state.tasks.get(TaskId(receipt["task_id"]))
+    admitted = state.tasks.get(task_id)
     repository = RepositoryConfig(
         path=str(clone),
         remote_url=str(bare),

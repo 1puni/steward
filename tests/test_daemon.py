@@ -18,6 +18,7 @@ from steward_harness.world_events import ExchangeDue
 from steward_harness.world.turn_checkpoint import WorldContentConflict, WorldUpdatePending
 from steward_harness.runtime.contracts import NativeStorageDeferred, RuntimeExecutionError, RuntimeUnavailable
 from state_fixtures import (
+    submit_turn_task,
     accept_conversation_turn,
     admit_task,
     close_task_slice,
@@ -268,16 +269,17 @@ def test_commands_route_multiple_tasks_independently_of_the_steward(tmp_path) ->
         turn, _ = state.start_turn(
             conversation.conversation_id, f"task-{index}", "operator", "Do the work"
         )
-        receipt = accept_conversation_turn(
+        state.bind_conversation_provider(conversation.conversation_id, "codex", "steward-session")
+        task_id = submit_turn_task(state, turn.turn_id, TaskSpec("app", f"Task {index}", "Complete this work."))
+        accept_conversation_turn(
             state,
             turn.turn_id,
             reply_text="Proposed work",
             provider="codex",
             model="model",
             provider_session_id="steward-session",
-            spec=TaskSpec("app", f"Task {index}", "Complete this work."),
         )
-        tasks.append(state.tasks.get(TaskId(receipt["task_id"])))
+        tasks.append(state.tasks.get(task_id))
     first, second = tasks
     assert len({first.session_id, second.session_id, conversation.conversation_id}) == 3
     # A task's session is named after the task, so it cannot be another task's
@@ -442,16 +444,15 @@ def _cancel_conversation_task(
         "operator",
         "Please do this",
     )
-    receipt = accept_conversation_turn(
+    task_id = submit_turn_task(state, turn.turn_id, TaskSpec("app", "Report completion", "Do the work."))
+    accept_conversation_turn(
         state,
         turn.turn_id,
         reply_text="Task admitted.",
         provider="codex",
         model="gpt",
         provider_session_id=None,
-        spec=TaskSpec("app", "Report completion", "Do the work."),
     )
-    task_id = TaskId(receipt["task_id"])
     state.tasks.cancel(task_id, "operator stopped it")
     return task_id
 
