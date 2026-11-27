@@ -240,15 +240,13 @@ including what happens when a process dies at each boundary.
 ## One budget, no scheduler
 
 `controller.workers` (default **8**, range 1–32) bounds background cognition and work.
-Task slices, publication, deployment, rhythms, probes and result
-assessment all compete for the same slots, first asked, first served. No
+Task slices, publication, deployment, rhythms and probes all compete for the same slots, first asked, first served. No
 per-lane reservation, no fairness ordering, because both of those are a
 scheduler, and a scheduler wants a starvation story and a tuning knob that
 nothing here has needed yet.
 
 Retained results have one separate transport worker. They reach their owner without
-waiting for assessment or a free cognition slot; assessment may follow and add
-judgment. See the [delivery latency contract](docs/kernel-contract.md#task-results).
+waiting for a cognition slot. The next external turn sees recent outcomes. See the [delivery latency contract](docs/kernel-contract.md#task-results).
 
 A live conversation never waits in that queue. Telegram and desk messages share one
 inbox and one drain of their own, so the budget can be full and the operator still

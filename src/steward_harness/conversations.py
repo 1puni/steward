@@ -14,10 +14,10 @@ from typing import Literal, cast
 from steward_harness.task_calls import TaskCalls, TaskCallServer
 from steward_harness.cognition import Cognition, CognitionRequest
 from steward_harness.config.schema import ProcedureConfig
-from steward_harness.prompts import build_turn_prompt, build_result_assessment_request
+from steward_harness.prompts import build_turn_prompt
 from steward_harness.provider_types import ProviderFamily, ProviderProfile
 from steward_harness.runtime.contracts import (
-    NativeStorageDeferred, RuntimeInput, RuntimeExecutionError, RuntimeUnavailable,
+    NativeStorageDeferred, RuntimeInput, RuntimeExecutionError,
 )
 from steward_harness.world.orientation import repository_orientation, world_orientation
 from steward_harness.world.turn_checkpoint import WorldTurnCheckpoint, WorldTurnWorktree, WorldUpdatePending, WorldContentConflict
@@ -135,19 +135,10 @@ class ConversationService:
         reserved_rhythm: bool = False,
         notify_owner: str | None = None,
         drive_tasks: bool = False,
-        automatic: bool = False,
     ) -> ConversationTurnResult:
         """Produce, retain, and accept one source event; replay never admits work.
 
-        `episode_input` is what the world records as the turn's input, and it
-        defaults to `text` because for an operator message the two are the same
-        thing. They part company when the harness itself is the speaker: a
-        task-result turn's `text` is a page of controller instruction wrapped
-        around a brief that already lives on the task's own branch, and copying
-        that into the world commit stores it twice while telling the next pass
-        nothing it could not derive. Pass the short form there. The provider
-        still receives `text` whole — this changes what is remembered, never
-        what is asked.
+        Scheduled rhythms can record a shorter episode input than their instructions.
         """
         conversation = self.conversation_for(transport, transport_key)
         prior = self._state.turn_for_source(conversation.conversation_id, source_event_key)
@@ -184,7 +175,6 @@ class ConversationService:
                     receipt = self._state.prepared_turn(str(turn.execution_turn_id))
                     if receipt is not None:
                         accepted = self.accept_prepared(str(turn.execution_turn_id))
-                        assert isinstance(accepted, ConversationTurnResult)
                         return ConversationTurnResult(
                             accepted.conversation_id, turn.turn_id, accepted.reply_text,
                             accepted.task_admission, accepted.task_rejection,
@@ -205,9 +195,7 @@ class ConversationService:
             started = (turn.state == "running" and self._claimed(event_id) is None)
         if not started:
             if self._state.prepared_turn(event_id) is not None:
-                accepted = self.accept_prepared(event_id)
-                assert isinstance(accepted, ConversationTurnResult)
-                return accepted
+                return self.accept_prepared(event_id)
             if self._state.active_turn(conversation.conversation_id) is not None:
                 raise ConversationBusy("execution has not reached durable acceptance")
             raise RuntimeExecutionError(
@@ -224,26 +212,23 @@ class ConversationService:
                 transport=transport,
                 orientation=orientation,
                 event_id=event_id,
+                outcomes=self._state.recent_task_outcomes(turn, notify_owner),
                 telegram_actions=self._telegram_actions,
                 delivery_roots=self._delivery_roots,
             )
 
-        accepted = self._execute_turn(
+        return self._execute_turn(
             conversation,
             turn,
             build_prompt=build_prompt,
             episode_input=episode_input if episode_input is not None else text,
             images=images,
-            live_input=True,
             allow_empty_output=allow_empty_output,
             procedure=procedure,
             keep_unclaimed=reserved_rhythm,
             notify_owner=notify_owner,
             drive_tasks=drive_tasks,
-            automatic=automatic,
         )
-        assert isinstance(accepted, ConversationTurnResult)
-        return accepted
 
     def _execute_turn(
         self,
@@ -253,14 +238,12 @@ class ConversationService:
         build_prompt: Callable[[], str],
         episode_input: str,
         images: tuple[Path, ...],
-        live_input: bool,
         allow_empty_output: bool = True,
         procedure: ProcedureConfig | None = None,
         keep_unclaimed: bool = False,
         notify_owner: str | None = None,
         drive_tasks: bool = False,
-        automatic: bool = False,
-    ) -> ConversationTurnResult | Turn:
+    ) -> ConversationTurnResult:
         """Run, retain and accept one declared world-session turn.
 
         The prompt arrives unbuilt because the guard below is what releases a
@@ -335,11 +318,11 @@ class ConversationService:
             task_calls = TaskCallServer(TaskCalls(self._state, turn.turn_id, cancel=self.cancel,
                                                  notify_owner=notify_owner, telegram_admin=self._telegram_admin,
                                                  drive_tasks=drive_tasks,
-                                                 reply_delivered=not automatic and conversation.conversation_id.kind != "rhythm"))
+                                                 reply_delivered=conversation.conversation_id.kind != "rhythm"))
             if conversation.conversation_id.kind != "rhythm" or drive_tasks:
                 prompt += "\n\n" + task_calls.prompt
                 if drive_tasks:
-                    prompt += "\nThis rhythm may submit, answer, retry or note tasks for its configured owner. It cannot cancel tasks or resume cancelled work. Results return to the owner for normal assessment."
+                    prompt += "\nThis rhythm may submit, answer, retry or note tasks for its configured owner. It cannot cancel tasks or resume cancelled work. Results are delivered to the owner."
             return CognitionRequest(
                 execution_id=event_id,
                 task_call_socket=task_calls.path,
@@ -365,12 +348,12 @@ class ConversationService:
                 allow_empty_output=allow_empty_output,
                 on_session_started=session_started,
                 on_session_invalidated=session_invalidated,
-                on_input_ready=input_ready if live_input else None,
+                on_input_ready=input_ready,
                 on_input_result=(
                     lambda evidence: self._state.record_native_input_result(
                         turn.turn_id, evidence.source_id, evidence.disposition
                     )
-                ) if live_input else (lambda _evidence: None),
+                ),
             )
         try:
             try:
@@ -488,16 +471,6 @@ class ConversationService:
         receipt = self._state.retain_pending_result(conversation_id)
         if receipt is None:
             return None
-        if "reply" not in receipt:
-            # A legacy receipt without a frozen message is not a send decision
-            # for a quiet automatic task. Only explicit notify receipts carry one.
-            quiet = bool(receipt.get("task_id") and receipt["source_key"].endswith(":done")
-                         and self._state.tasks.get(
-                TaskId(receipt["task_id"])).quiet)
-            receipt["reply"] = "" if quiet else receipt["result_text"]
-            # Freeze the delivery decision before attempting external transport.
-            receipt["assess"] = bool(receipt.get("task_id")) and not quiet
-            self._state.save_result_receipt(receipt)
         if receipt["reply"]:
             send(receipt["reply"], receipt["source_key"])
         receipt.pop("delivery_error", None)
@@ -505,67 +478,7 @@ class ConversationService:
         self._state.save_result_receipt(receipt)
         return receipt["reply"]
 
-    def assess_task_result(self, conversation_id: ConversationId) -> None:
-        """Optional judgment after delivery; final prose creates no second send."""
-        receipt = next((r for r in self._state.pending_result_assessments()
-                        if r["owner"] == str(conversation_id)), None)
-        if receipt is None:
-            return
-        task = self._state.tasks.get(TaskId(receipt["task_id"]))
-        current_source = f"task_result:{task.task_id}:{task.outcome}:{task.status.value}"
-        if task.owner != str(conversation_id) or (
-            receipt["source_key"].startswith("task_result:")
-            and receipt["source_key"] != current_source
-        ):
-            receipt["assessment_done"] = True
-            receipt["assessment_skipped"] = "task outcome or owner changed"
-            self._state.save_result_receipt(receipt)
-            return
-        try:
-            self._assess_task_result(
-                conversation_id, TaskId(receipt["task_id"]),
-                receipt["result_text"], receipt["source_key"],
-            )
-        except (RuntimeExecutionError, RuntimeUnavailable) as error:
-            receipt["assessment_error"] = str(error)
-        # Busy/world-acceptance failures propagate and remain pending. Accepted
-        # world turns replay their own receipt if this write is interrupted.
-        receipt["assessment_done"] = True
-        self._state.save_result_receipt(receipt)
-
-    def _assess_task_result(
-        self, conversation_id: ConversationId, task_id: TaskId,
-        result_text: str, source_event_key: str,
-    ) -> str:
-        task = self._state.tasks.get(task_id)
-        target_result = source_event_key.startswith("target_result:")
-        self._state.open_conversation(conversation_id,
-                                      provider=self._state.tasks.default_provider,
-                                      profile=self._state.tasks.default_profile)
-        conversation = self._state.get_conversation(conversation_id)
-        prior = self._state.turn_for_source(conversation_id, source_event_key)
-        text = prior.input_text if prior is not None else build_result_assessment_request(
-            task.brief, result_text,
-        )
-        result = self.run_turn(
-            transport=conversation.transport,
-            transport_key=conversation.transport_key,
-            source_event_key=source_event_key,
-            operator_id="harness:task-result",
-            automatic=True,
-            text=text,
-            allow_empty_output=True,
-            # The episode names the result; it does not restate it. Everything
-            # `text` adds — the controller preamble, the brief, the worker's
-            # findings — is either a constant or already committed on the
-            # task's own branch, so an episode carrying it records the
-            # harness's own instructions as though they were an observation.
-            episode_input=(result_text if target_result else
-                           f"Harness task result for {task_id} in {task.repository}."),
-        )
-        return result.reply_text
-
-    def accept_prepared(self, event_id: str) -> ConversationTurnResult | Turn:
+    def accept_prepared(self, event_id: str) -> ConversationTurnResult:
         row = self._state.prepared_turn(event_id)
         if row is None:
             raise ValueError("world-session output is not prepared")

@@ -24,7 +24,7 @@ rhythm → procedure → accepted Git task                   │          │
                                                          ▼          │
                               collapsed outcome → integrate → gates/reviews → push
                                                          │          │
-                                      owned result → delivery + assessment ────┘
+                                      owned result → delivery ────┘
                                       observed refs → named target drivers
 ```
 
@@ -205,7 +205,7 @@ steer unowned/other-owner work, cancel tasks, or resume cancelled work. An
 opted-in organisation rhythm's procedure run may submit, once per key per rhythm,
 to the same owner; it cannot steer. Admission
 retains the rhythm source and idempotency key; results return to the owner's normal
-transport and assessment loop. Default rhythms remain observational. A task
+transport. Default rhythms remain observational. A task
 session may use its provider's native subagents freely, but it cannot admit further
 tasks; native work becomes a harness task only when it needs its own scope, admission
 or deliverable. A native subtask ID is correlation, not a task ID.
@@ -276,29 +276,12 @@ Telegram results return to the admitted owner's topic in the configured chat,
 including topics absent from `telegram.topics`. That mapping names configured
 destinations; it is not an allow-list for ordinary conversations or their results.
 
-Delivery and assessment have separate decisions and completion receipts. Delivery
-freezes the selected outcome and existing owner/source in the private result receipt,
-sends it, then marks it delivered. A busy or cleared owning conversation cannot
-block that send. A receipt already selected for transport remains owed even if the
-task advances; it describes the retained outcome. Before later assessment the
-controller rechecks current task outcome and owner, skipping obsolete task questions
-or reassigned work. Assessment uses the ordinary world-turn path and current
-authority. An assessment turn speaks as `harness:task-result`, and from it the
-[live task tool](git-native-tasks.md#live-conversation-task-calls) can look
-(list, show), tell (notify, telegram) and cancel; it cannot submit, answer,
-retry or note. Only an operator input, or a rhythm configured with
-`drive_tasks`, admits or resumes work, and prose never does. Without this,
-a task that stopped to ask was answered by the model observing its own result,
-ran again, asked again, and looped every 90 s in every organisation until its
-prompt hit the runtime cap (2026-11-14). Task prompts carry the newest
-accepted inputs within a fixed budget and name how many older ones they leave
-to the branch's commits.
-
-Automatic runs remain quiet unless they explicitly request notification; null owners
-retain evidence only. A requested message is delivered as retained. Assessment cannot
-replace or silence it, and assessment final prose does not send a second notification.
-New operator-facing judgment requires a separate explicit notification decision
-through the same result receipt transport. Full evidence remains in Git and the receipt.
+Delivery freezes the outcome, owner and source before transport. It sends the retained
+message and marks its receipt delivered. A busy or cleared conversation can still
+receive delivery. The next externally started turn sees a bounded summary of recent
+outcomes for its owner and can inspect full task evidence through the native task tool.
+Only operator input or a configured task-driving rhythm can steer the next task.
+Task prompts carry the newest accepted inputs within a fixed budget and give the count of older inputs retained in Git.
 
 **Latency expectation:** with a running controller, healthy local storage and an
 available route, a newly reportable outcome is queued on the next controller pass
@@ -315,11 +298,7 @@ a promised successful-delivery deadline. Host stalls and actual transport latenc
 require deployed measurement.
 
 Transport retries replay saved replies, including historical silence, without
-repeating cognition. Existing accepted assessment alone is not proof of delivery.
-Optional assessment follows delivery through the shared worker budget. Its accepted
-world receipt survives restart; provider failure is recorded as an assessment error
-and cannot retract the delivered evidence. Checkpoints have no separate broadcast
-channel. Telegram reuses per-piece receipts across retry and restart. Preserve both
+repeating cognition. Telegram reuses per-piece receipts across retry and restart. Preserve both
 adjacent receipt directories during upgrades. A crash between remote acceptance and
 the local receipt write can duplicate that piece: delivery is at-least-once,
 not exactly-once. A reply Telegram refuses on its content (a deleted topic,
@@ -331,8 +310,7 @@ Notification calls use the existing private result receipts. Stable owner/source
 and key identify one intent; exact replay returns its receipt and changed-payload
 replay is rejected. Accepted queuing survives provider failure and world
 acceptance failure. Zero calls send nothing; several calls remain distinct.
-A provider without a working tool channel records evidence only. Neither final
-reply parsing nor assessment is a fallback send mechanism.
+A provider without a working tool channel records evidence only. Final reply parsing never sends a notification.
 
 
 ### Inbound messages
@@ -450,7 +428,7 @@ files. See [world durability](world-turn-durability.md).
 
 `controller.workers` is one shared budget — default **8**, range **1–32** — and it is
 the budget for background cognition and work. Tasks, repository convergence, probes,
-rhythms and task-result assessment all compete for the same slots. The executor's own
+and rhythms all compete for the same slots. The executor's own
 queue is the assignment: first asked, first served, without per-lane reservation or
 fairness ordering among cognition jobs. Retained result transport has one separate worker as
 described in [task results](#task-results); it cannot run cognition.
@@ -467,8 +445,7 @@ alive, the task lock who runs a task, the repository lease who publishes, the wo
 lease who applies a world update.
 
 Repositories run independently. Each task has its own lock. One rhythm dispatch owner
-resumes incomplete scheduled work before choosing another due definition. Result
-assessment is keyed by the owning conversation. No separate repository-observation pool
+resumes incomplete scheduled work before choosing another due definition. Result transport is keyed by the owning conversation. No separate repository-observation pool
 exists.
 
 A days-long task turn holds one slot for all of those days; the remedy is operator
@@ -482,7 +459,7 @@ resumes the turn it finds open.
 
 Pause is a filter on that derivation, not a branch around it. It stops the steward
 taking on work: new task slices, probes and rhythms. Already submitted jobs
-finish. Repository convergence and result assessment stay active, because a repository
+finish. Repository convergence and result delivery stay active, because a repository
 that owes a publication does not stop owing it. A crash-interrupted task stays queued,
 so pause also delays its next slice. Pause is not a quiescence barrier; do not treat it
 as one before an upgrade.
@@ -585,7 +562,7 @@ isolated probe cannot establish the health of a deployed steward.
 
 Every run has one voice to its owner. An operator conversation's final reply is
 delivered, and an ordinary task's result is its report, so neither is offered
-`notify`. Automatic result assessment, world rhythms and rhythm tasks record their
+`notify`. World rhythms and rhythm tasks record their
 finals instead, and speak only through explicit notifications.
 
 The native task tool supports `operation: telegram` with string fields `action`,

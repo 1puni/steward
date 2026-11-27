@@ -4,7 +4,6 @@ from state_fixtures import prepare_turn, FakeRemote, close_task_slice
 from test_conversations import FakeCognition, _reply, _service, _turn, _task_reply
 import pytest
 from steward_harness.state import TaskId
-from steward_harness.runtime.contracts import RuntimeExecutionError, RuntimeUnavailable
 
 
 def admitted(tmp_path):
@@ -83,8 +82,6 @@ def test_send_failure_then_restart_preserves_selected_outcome(tmp_path):
     assert 'Which source?' in restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
     assert sent == attempts
     assert len(cognition.requests) == 1
-    restarted.assess_task_result(owner)
-    assert len(cognition.requests) == 1, "stale question must not start an assessment"
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate')) is None
 
 
@@ -248,48 +245,30 @@ def test_notification_crash_after_send_keeps_at_least_once_semantics(tmp_path, m
     assert len(cognition.requests) == 1
 
 
-@pytest.mark.parametrize("narration", ["", "SILENT", "NOTIFY: extra message", "DISPOSITION: idle\ntrailing prose"])
-def test_assessment_narration_never_sends_again(tmp_path, narration):
-    service, facts, cognition, owner, task_id = completed_review(tmp_path, event="manual:review")
-    cognition.replies.append(_reply(narration))
-    sent = []
-    service.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    service.assess_task_result(owner)
-    assert len(sent) == 1 and "full retained evidence" in sent[0][0]
-    assert "already been delivered" in cognition.requests[-1].prompt
-    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("second send")) is None
-
-
-def test_assessment_failure_does_not_send_again(tmp_path):
-    service, facts, cognition, owner, task_id = completed_review(tmp_path, event="explicit:review")
-    cognition.replies.append(RuntimeUnavailable("no capacity"))
-    sent = []
-    service.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    service.assess_task_result(owner)
-    assert len(sent) == 1
-    assert not service._state.pending_result_assessments()
-    assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate')) is None
-
-
-def test_crash_after_assessment_acceptance_replays_without_another_turn(tmp_path, monkeypatch):
+def test_external_turn_receives_delivered_outcome_once(tmp_path):
     service, facts, cognition, owner, task_id = admitted(tmp_path)
     close_task_slice(service._state, task_id, 'ask', detail='Which source?')
     service.deliver_task_result(owner, send=lambda *_: None)
-    cognition.replies.append(_reply("Additional judgment."))
-    original = service._state.save_result_receipt
-    def crash(receipt):
-        if receipt.get("assessment_done"):
-            raise OSError("crash before assessment receipt")
-        original(receipt)
-    monkeypatch.setattr(service._state, "save_result_receipt", crash)
-    with pytest.raises(OSError):
-        service.assess_task_result(owner)
-    restarted = _service(tmp_path, cognition)
-    restarted._state.tasks.transports = {"app": facts}
-    restarted.assess_task_result(owner)
-    assert len(cognition.requests) == 2
-    assert not restarted._state.pending_result_assessments()
-    assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail('duplicate')) is None
+    assert len(cognition.requests) == 1
+    cognition.replies.extend([_reply("Answer"), _reply("Later")])
+    _turn(service, "follow-up")
+    assert str(task_id) in cognition.requests[-1].prompt
+    assert "Which source?" in cognition.requests[-1].prompt
+    _turn(service, "later")
+    assert "Recent task outcomes" not in cognition.requests[-1].prompt
+
+
+def test_outcome_summary_is_scoped_to_the_owner(tmp_path):
+    service, _, cognition, owner, task_id = admitted(tmp_path)
+    close_task_slice(service._state, task_id, 'ask', detail="Private owner question?")
+    service.deliver_task_result(owner, send=lambda *_: None)
+    cognition.replies.extend([_reply("Other"), _reply("Rhythm")])
+    service.run_turn(transport="telegram", transport_key="other", operator_id="operator",
+                     source_event_key="other-topic", text="Update", notify_owner=str(owner))
+    assert "Private owner question?" not in cognition.requests[-1].prompt
+    service.run_turn(transport="rhythm", transport_key="configured", operator_id="harness:rhythm",
+                     source_event_key="tick", text="Check progress", notify_owner=str(owner))
+    assert "Private owner question?" in cognition.requests[-1].prompt
 
 
 def test_procedure_worker_uses_git_instead_of_injected_peer_state(tmp_path):
@@ -332,32 +311,6 @@ def test_a_settled_backlog_is_not_rewalked_on_every_pass(tmp_path):
         state.pending_task_result_conversations()
 
     assert walks.count("log") == 0
-
-
-def test_a_long_task_record_cannot_push_its_result_past_the_prompt_bound():
-    """A 75-checkpoint task reached 184k characters; every result then failed unread."""
-    from steward_harness.prompts import build_result_assessment_request
-
-    admitted = "Build the phone gateway.\n"
-    record = admitted + "".join(f"## {n} — continue · slice {n}\n" + "x" * 2400 + "\n" for n in range(75))
-    request = build_result_assessment_request(record, "Target observation: satisfied")
-
-    assert len(request) < 20_000
-    assert admitted in request
-    assert "Target observation: satisfied" in request
-    assert "more characters on the task's branch" in request
-    short = build_result_assessment_request(admitted, "done")
-    assert "task's branch" not in short
-
-
-def test_an_assessment_is_told_a_named_file_reaches_nobody_unless_it_sends_it():
-    """10-17: a conversation promised a finished video "when it lands"; nothing sent it."""
-    from steward_harness.prompts import build_result_assessment_request
-
-    request = build_result_assessment_request("Render the trailer.", "Artifact: trailer.mp4")
-
-    assert "as text only" in request
-    assert "only if you send it now, with the telegram operation" in request
 
 
 def _day_after(state, task_id, days=1):
@@ -430,10 +383,7 @@ def test_result_delivers_while_owner_busy_and_after_clear_without_duplicate(tmp_
         from steward_harness.state import ConversationBusy
         with pytest.raises(ConversationBusy, match='lineage changed'):
             running.result()
-    cognition.replies.append(_reply('Later judgment.'))
-    service.assess_task_result(owner)
-    service.assess_task_result(owner)
-    assert len(cognition.requests) == 3
+    assert len(cognition.requests) == 2
     assert service.deliver_task_result(owner, send=lambda *_: pytest.fail('late assessment')) is None
 
 
@@ -448,28 +398,26 @@ def test_reassigned_task_delivers_to_current_owner_and_skips_old_assessment(tmp_
     service.deliver_task_result(other, send=lambda *_: None)
     service._state.tasks.change(task_id, lambda d: d.model_copy(update={'owner': str(owner)}),
                                message='Reassign after delivery')
-    service.assess_task_result(other)
     assert len(cognition.requests) == 1
-    assert not service._state.pending_result_assessments()
 
 
-def test_unprepared_legacy_rhythm_receipt_does_not_send_final_markers(tmp_path):
+@pytest.mark.parametrize("access", ["read-only", "workspace-write"])
+def test_unprepared_legacy_rhythm_receipt_does_not_send_final_markers(tmp_path, access):
     service, facts, cognition, owner, task_id = completed_review(tmp_path)
+    if access == "workspace-write":
+        service._state.tasks.change(task_id, lambda definition: definition.model_copy(update={
+            "procedure": definition.procedure.model_copy(update={"access": access})
+        }), message="Retain writing procedure")
     service._state.save_result_receipt(dict(owner=str(owner), task_id=str(task_id),
         source_key="legacy:done", result_text=FLAGGED, done=False))
+    import runpy
+    from pathlib import Path
+    script = Path(__file__).resolve().parents[1] / "scripts/freeze-pending-result-replies.py"
+    freeze = runpy.run_path(str(script))["freeze"]
+    assert freeze(service._state.path) == 1
+    assert freeze(service._state.path) == 0
     assert service.deliver_task_result(owner, send=lambda *_: pytest.fail("legacy marker sent")) == ""
-    assert not service._state.pending_result_assessments()
     assert len(cognition.requests) == 1
-
-
-def test_automatic_assessment_keeps_recorded_only_final_instruction(tmp_path):
-    service, facts, cognition, owner, task_id = admitted(tmp_path)
-    close_task_slice(service._state, task_id, 'ask', detail='Needs help')
-    service.deliver_task_result(owner, send=lambda *_: None)
-    cognition.replies.append(_reply('Recorded.'))
-    service.assess_task_result(owner)
-    prompt = cognition.requests[-1].prompt
-    assert 'Final replies from automatic runs are recorded only' in prompt
 
 
 def test_a_task_reports_once_its_result_is_its_only_voice(tmp_path):

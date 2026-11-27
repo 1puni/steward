@@ -35,9 +35,6 @@ STAGES = {
     "review": "Required review",
     "repair": "Task repair",
     "ownership-answer": "Task · resumed with ownership answer",
-    "assessment": "Task result assessment",
-    "reflection-assessment": "Scheduled review assessment",
-    "target-assessment": "Target result assessment",
     "world-repair": "World conflict reconciliation",
     "world-repair-configured": "World conflict · configured procedure",
     "old-conversation": "Conversation · historical composer",
@@ -118,13 +115,9 @@ def render_prompt(stage: str) -> dict:
                 read_text += "\n\nNo reflection policy ships with the harness: it belongs to the instance that configures the procedure. Set STEWARD_REFLECTION_POLICY to a repository-relative path to preview one."
         output = "Final findings are recorded. Native close declares disposition; candidate reviews also record a verdict call. See the closure instructions above."
     else:
-        request = "<operator message>"
-        if not stage.startswith("conversation"):
-            request = prompts.build_result_assessment_request("<accepted task brief>", "<dated target observation>" if stage=="target-assessment" else "<accepted task findings>")
-            source.append(prompts.build_result_assessment_request)
         enabled_telegram = stage == "conversation-telegram"
         prompt = prompts.build_turn_prompt(
-            request, orientation.world_orientation(), "<world turn id>",
+            "<operator message>", orientation.world_orientation(), "<world turn id>",
             transport="desk" if stage == "conversation-desk" else "telegram",
             telegram_actions=("pin_message",) if enabled_telegram else (),
             delivery_roots=("<configured absolute delivery root>",) if enabled_telegram else (),

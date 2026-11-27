@@ -495,10 +495,7 @@ def test_daemon_delivers_task_truth_to_the_desk_that_admitted_it(tmp_path, monke
     with running(daemon) as errors:
         assert sent.wait(5), errors
 
-    # Delivery can precede the next pass that schedules optional assessment.
-    assert len(reviewer.requests) <= 1
-    if reviewer.requests:
-        assert "Harness task result" in reviewer.requests[0].prompt
+    assert reviewer.requests == []
     assert str(task_id) in events.read_text()
     assert "Task cancelled" in events.read_text()
 
@@ -650,10 +647,7 @@ def test_daemon_delivers_task_truth_to_the_telegram_topic_that_admitted_it(
     with running(daemon) as errors:
         assert delivered.wait(5), errors
 
-    # Delivery can precede the next pass that schedules optional assessment.
-    assert len(reviewer.requests) <= 1
-    if reviewer.requests:
-        assert "Harness task result" in reviewer.requests[0].prompt
+    assert reviewer.requests == []
     assert len(sent) == 1
     assert sent[0][:2] == (99, topic_id)
     assert str(task_id) in sent[0][2]

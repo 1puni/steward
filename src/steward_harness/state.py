@@ -1404,7 +1404,7 @@ class StateDatabase:
                 continue
             text = ("Still open after a day or more. Nothing re-queues these; "
                     "each needs an answer, a retry or a cancel.\n\n" + "\n\n".join(entries))[:10_000]
-            # A prepared reply: delivery sends it as is and assesses nothing.
+            # A prepared reply: delivery sends it as is.
             self.save_result_receipt({"owner": owner, "task_id": None, "source_key": key,
                                       "result_text": text, "reply": text})
             recorded += 1
@@ -1432,18 +1432,52 @@ class StateDatabase:
                                  receipt.get("sequence", 0), receipt["source_key"]),
         )
 
-    def pending_result_assessments(self) -> list[dict]:
-        return [receipt for path in self.result_receipt_path("").parent.glob("*.json")
-                if (receipt := json.loads(path.read_text())).get("done")
-                and receipt.get("assess") and not receipt.get("assessment_done")]
+    def recent_task_outcomes(self, turn: Turn, notify_owner: str | None = None) -> tuple[str, ...]:
+        """Retained outcomes since the last successfully completed execution began."""
+        with self.connect() as connection:
+            since = connection.execute(
+                "SELECT MAX(started_at) FROM turns WHERE conversation_id=? "
+                "AND execution_turn_id IS NULL AND state='completed' AND started_at<?",
+                (str(turn.conversation_id), turn.started_at),
+            ).fetchone()[0] or ""
+        owner = notify_owner if turn.conversation_id.kind == "rhythm" else str(turn.conversation_id)
+        if not owner:
+            return ()
+        since_timestamp = datetime.fromisoformat(since).timestamp() if since else 0
+        recent = []
+        for path in self.result_receipt_path("").parent.glob("*.json"):
+            # Retention writes the receipt after observing the outcome. Skip old,
+            # potentially large files before reading their frozen message bodies.
+            if path.stat().st_mtime < since_timestamp:
+                continue
+            receipt = json.loads(path.read_text())
+            at = receipt.get("outcome_at", "")
+            if receipt.get("owner") == owner and since < at <= turn.started_at:
+                recent.append((at, receipt["outcome_summary"]))
+        return tuple(summary for _, summary in sorted(recent)[-12:])
 
     def pending_task_result_for(self, conversation_id):
+        receipt = self._next_result(conversation_id)
+        if receipt:
+            task_id = TaskId(receipt["task_id"]) if receipt.get("task_id") else None
+            return task_id, receipt["result_text"], receipt["source_key"]
+        return None
+
+    def _next_result(self, conversation_id) -> dict | None:
         for receipt in self.pending_result_receipts():
             if receipt["owner"] == str(conversation_id):
-                return (TaskId(receipt["task_id"]) if receipt.get("task_id") else None), receipt["result_text"], receipt["source_key"]
+                return receipt
         for task, key in self._undelivered_task_results():
-            if task.owner == str(conversation_id):
-                return task.task_id, self._task_result_text(task), key
+            if task.owner != str(conversation_id):
+                continue
+            result = self._task_result_text(task)
+            reason = " ".join((task.reason or "").split())[:240]
+            summary = f"{task.task_id} {task.status.value}: {task.title}"
+            return {
+                "owner": task.owner, "task_id": str(task.task_id), "source_key": key,
+                "result_text": result, "reply": result, "outcome_at": _now(),
+                "outcome_summary": summary + (f" — {reason}" if reason else ""),
+            }
         return None
 
     def notification_sources(self) -> set[str]:
@@ -1474,17 +1508,9 @@ class StateDatabase:
         return sorted(world) + sorted(tasks)
 
     def retain_pending_result(self, conversation_id) -> dict | None:
-        """Retain the selected outcome before assessment or route diagnostics."""
-        pending = self.pending_task_result_for(conversation_id)
-        if pending is None:
-            return None
-        task_id, result_text, source_key = pending
-        receipt = self.result_receipt(source_key)
-        if not receipt:
-            receipt = {
-                "owner": str(conversation_id), "task_id": str(task_id) if task_id else None,
-                "source_key": source_key, "result_text": result_text,
-            }
+        """Retain the selected outcome before transport or route diagnostics."""
+        receipt = self._next_result(conversation_id)
+        if receipt and not self.result_receipt_path(receipt["source_key"]).exists():
             self.save_result_receipt(receipt)
         return receipt
 

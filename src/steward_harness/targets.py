@@ -185,10 +185,9 @@ class Targets:
                                f"Desired revision: {revision}\n{message}\n"
                                + (f"Observed: {observed.model_dump_json()}" if observed else "No driver observation available."),
             }
-            # Live is fully stated by the observation, so an owner's model could
-            # only restate it. A failure is owed the owner's assessment.
-            if task_id is None or outcome == "satisfied":
-                receipt["reply"] = reply
+            receipt["reply"] = (receipt["result_text"] if task_id and outcome == "failed" else reply)
+            if task_id:
+                receipt.update(outcome_at=at, outcome_summary=f"{task_id} {name}: {reply.splitlines()[0]}")
             self.state.save_result_receipt(receipt)
 
     def _satisfied_age(self, name, revision):

@@ -85,7 +85,7 @@
    ["evidence", 1, 4, "Required reviews", "ordinary tasks + verdict", "cognition"],
    ["main", 0, 5, "Published ref", "one outcome / write task", "fact"],
    ["target", 1, 5, "Named target", "ready / busy / blocked", "fact"],
-   ["assessment", 0, 6, "Result assessment", "world turn · may be silent", "cognition"],
+   ["delivery", 0, 6, "Result delivery", "retained message", "fact"],
    ["external", 1, 6, "Destination", "observed SHA + readiness", "external"]
   ],
   "edges": [
@@ -103,10 +103,9 @@
    ["target", "evidence", "same SHA", ["release"], "Targets.advance → Procedures.require; target review covers whole tree", "up"],
    ["evidence", "target", "verdict", ["release"], "Procedures.require checks accepted verdict bound to exact candidate and policy before target satisfaction"],
    ["target", "external", "observe / apply", ["release"], "Observe first; busy or blocked defers reviews and apply. Otherwise require evidence, apply if needed, then observe exact readiness. Failed desired revisions do not imply successful deployment"],
-   ["main", "assessment", "owned outcome", ["conversation", "rhythm"], "Observed publication → pending task result → owning conversation; retained candidate/base/work provenance survives lost push observation"],
-   ["assessment", "world", "accepted follow-up", ["conversation", "rhythm", "readonly", "repair", "release"], "ConversationService world acceptance; frozen receipts prevent repeat accepted effects; completed scheduled review may remain SILENT", "outer"],
-   ["work", "assessment", "owned findings", ["rhythm", "readonly", "repair"], "Accepted read-only findings, questions and failures return through task-result receipts. Workspace-write completion waits for publication. owner:null and requirement-only reviews retain evidence without owner assessment", "feedback"],
-   ["external", "assessment", "dated observation", ["release"], "Targets._retain_result → existing result receipt → ConversationService assessment. Only an owned task whose published candidate exactly equals the desired target revision receives it. Identical observations are deduplicated; changed and recovered states may return again", "gap"],
+   ["main", "delivery", "owned outcome", ["conversation", "rhythm"], "Observed publication → pending task result → owning conversation; retained candidate/base/work provenance survives lost push observation"],
+   ["work", "delivery", "owned findings", ["rhythm", "readonly", "repair"], "Accepted read-only findings, questions and failures return through task-result receipts. Workspace-write completion waits for publication. owner:null and requirement-only reviews retain evidence without delivery", "feedback"],
+   ["external", "delivery", "dated observation", ["release"], "Targets._retain_result → existing result receipt → result delivery. Only an owned task whose published candidate exactly equals the desired target revision receives it. Identical observations are deduplicated; changed and recovered states may return again", "gap"],
    ["work", "task", "query", ["ownership"], "Native query call during execution → controller reads accepted task metadata and live locks → receipt returns without stopping the task. At most 10 matching tasks; no task bodies or owner identities; results are dated evidence, not an authority grant", "back"],
    ["world", "reconcile", "conflict", ["world-repair"], "WorldTurnCheckpoint invokes the configured resolver only when world integration conflicts; daemon.py:resolve composes the conflict prompt", "diagonal"],
    ["reconcile", "world", "retry acceptance", ["world-repair"], "Resolver edits return to world integration and acceptance checks; the resolver does not admit task effects", "reconcile-return"]
@@ -157,7 +156,7 @@
  const stageSelect=root.querySelector('#sf-stage');
  const localInspector=location.protocol==='http:'&&['127.0.0.1','localhost'].includes(location.hostname);
  let promptRequest=0;
- const stageForNode={new:{conversation:'conversation',work:'task',evidence:'review',assessment:'assessment',reconcile:'world-repair'},old:{conversation:'old-conversation',work:'old-task',runner:'old-reflection',assessment:'old-assessment'}};
+ const stageForNode={new:{conversation:'conversation',work:'task',evidence:'review',reconcile:'world-repair'},old:{conversation:'old-conversation',work:'old-task',runner:'old-reflection',assessment:'old-assessment'}};
  async function showPrompt(id){
   if(!localInspector)return;
   const request=++promptRequest;
@@ -200,7 +199,7 @@
  // Each edge retains the source that justifies it. These are curated contracts,
  // not a dependency graph inferred from import counts or a live event stream.
  const models=JSON.parse(root.querySelector('#sf-models').textContent);
- const details={'world-repair':'Only an integration conflict invokes repair cognition. Its edits return to world acceptance before dependent task effects may proceed.',all:'Same task engine for work and reviews; publication, target readiness and accepted world knowledge remain separate facts.',conversation:'Intent → accepted world effect → task → observed publication → owner assessment → accepted follow-up.',rhythm:'Intervals or new Git activity after quiet; no overlap. Monitoring includes configured rhythms with no runs and distinguishes quiet inactivity from missed intervals.',readonly:'Read-only findings → configured owner → world acceptance; no product push. Current task ownership is available through an explicit query.',ownership:'An explicit read through the existing ask/answer boundary. No match is not proof that differently titled work is unowned.',repair:'Actionable failure returns to its owning task. Unknown intent asks; repeated unchanged failure waits. Owner assessment returns through world acceptance to an authorized answer or retry on the same task.',release:'Exact evidence gates publication and targets. Dated target changes return to the exact published task’s owner; ownerless or skipped candidates get no inferred recipient. An authorized follow-up crosses world acceptance before task action.'};
+ const details={'world-repair':'Only an integration conflict invokes repair cognition. Its edits return to world acceptance before dependent task effects may proceed.',all:'Same task engine for work and reviews; publication, target readiness and accepted world knowledge remain separate facts.',conversation:'Intent → accepted world effect → task → observed publication → retained result delivery.',rhythm:'Intervals or new Git activity after quiet; no overlap. Monitoring includes configured rhythms with no runs and distinguishes quiet inactivity from missed intervals.',readonly:'Read-only findings → configured owner → world acceptance; no product push. Current task ownership is available through an explicit query.',ownership:'An explicit read through the existing ask/answer boundary. No match is not proof that differently titled work is unowned.',repair:'Actionable failure returns to its owning task. Unknown intent asks; repeated unchanged failure waits. The owner can answer or retry the same task on a later turn.',release:'Exact evidence gates publication and targets. Dated target changes return to the exact published task’s owner; ownerless or skipped candidates get no inferred recipient. An authorized follow-up crosses world acceptance before task action.'};
  const proofs={
   'world:reconcile':['world/turn_checkpoint.py; daemon.py:resolve','Source-inspected conditional path; resolver tests were outside the recorded lifecycle run'],
   'reconcile:world':['world/turn_checkpoint.py','Source-inspected return to acceptance; no new runtime verification claimed'],
@@ -217,10 +216,9 @@
   'target:evidence':['targets.py:advance; procedures.py:require','test_target_requires_exact_input_and_procedure_evidence_and_external_observation'],
   'evidence:target':['procedures.py:require','test_target_requires_exact_input_and_procedure_evidence_and_external_observation'],
   'target:external':['targets.py:advance','test_blocked_target_keeps_observing_without_applying_or_sticking_to_old_ref'],
-  'main:assessment':['conversations.py:deliver_task_result','test_task_result_delivery.py'],
-  'assessment:world':['conversations.py:_assess_task_result','test_crash_after_accepted_assessment_replays_without_repeating_cognition'],
-  'work:assessment':['conversations.py:_assess_task_result','test_owned_rhythm_finding_updates_world_and_admits_only_authorized_followup; test_silent_scheduled_review_keeps_evidence_and_stays_quiet_after_restart'],
-  'external:assessment':['targets.py:_retain_result → conversations.py:_assess_task_result','test_target_feedback_follows_exact_owner_transitions_and_restarts'],
+  'main:delivery':['conversations.py:deliver_task_result','test_task_result_delivery.py'],
+  'work:delivery':['conversations.py:deliver_task_result','test_external_turn_receives_delivered_outcome_once'],
+  'external:delivery':['targets.py:_retain_result → conversations.py:deliver_task_result','test_target_feedback_follows_exact_owner_transitions_and_restarts'],
   'work:task':['task_query.py:ownership_answer → TaskRunner._answer_query','test_query_answers_same_task_and_survives_crash_before_answer; test_query_bounds_results_and_observes_live_lock_without_exposing_content'],
   'conversation:world':['conversations.py; world/turn_checkpoint.py','World-acceptance tests were outside this review’s 52-test run']
  };
@@ -337,8 +335,6 @@
    if(key==='new'&&id==='work'&&select.value==='repair')stage='repair';
    if(key==='new'&&id==='work'&&select.value==='ownership')stage='ownership-answer';
    if(key==='new'&&id==='work'&&['rhythm','readonly'].includes(select.value))stage='reflection';
-   if(key==='new'&&id==='assessment'&&['rhythm','readonly'].includes(select.value))stage='reflection-assessment';
-   if(key==='new'&&id==='assessment'&&select.value==='release')stage='target-assessment';
    if(stage){
     const link=make('a',{href:localInspector?'#sf-prompts':'http://127.0.0.1:8766/?stage='+stage+'#sf-prompts',class:'sf-node-link','aria-label':'Inspect '+stage+' prompt'});
     if(localInspector)link.addEventListener('click',()=>{root.querySelector('#sf-prompts').open=true;showPrompt(stage);});

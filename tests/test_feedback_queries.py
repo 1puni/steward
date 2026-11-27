@@ -91,14 +91,9 @@ def test_target_feedback_follows_exact_owner_transitions_and_restarts(tmp_path, 
     assert sent[1] == sent[2] and "repair required" in sent[1][0]
     assert "Desired revision: " + revision in sent[1][0]
     assert cognition.requests == []
-    restarted.assess_task_result(owner)
-    assert len(cognition.requests) == 1
-    assert "Desired revision: " + revision in cognition.requests[-1].prompt
     restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert len(cognition.requests) == 1
-    restarted.deliver_task_result(owner, send=lambda *args: sent.append(args))
-    assert {text for text, _ in sent[-2:]} == {
-        f"production recovered and reached {revision[:12]}.\nrecovered", "Deployment requires repair."}
+    assert sent[-1][0] == f"production recovered and reached {revision[:12]}.\nrecovered"
+    assert cognition.requests == []
     assert restarted.deliver_task_result(owner, send=lambda *_: pytest.fail("replayed")) is None
 
 
