@@ -40,9 +40,18 @@ remote ancestry and live locks together. SQL alone cannot tell you whether work
 is done. Do not flatten a task's questions, pending notes, retained branch or
 provider lineage into a guessed terminal status.
 
-Find prepared world updates, possibly-pushed publications, pending operator
-replies and unfinished result assessments. These are obligations someone is
-still owed.
+Find prepared world updates, possibly-pushed publications, and pending operator
+or result replies. Before upgrading from a release with automatic result
+assessment, run the following once as the controller service account on the
+quiescent state, rehearsing on the preserved copy first:
+
+```sh
+uv run scripts/freeze-pending-result-replies.py /path/to/state.db
+```
+
+The converter preserves frozen messages and completed receipts. For outstanding
+receipts without a send decision it applies the original release's rule, including
+silent rhythm completions. A second run should report zero.
 
 Inspection must really be read-only. `git status` rewrites the index; use
 `--no-optional-locks` and plumbing, and pass `-c safe.directory=` on the command

@@ -173,11 +173,8 @@ protected procedure binding or configured publication/target requirements.
 Every rhythm explicitly declares `owner`. A configured `telegram:<topic>` or
 `desk:<conversation>` retains that protected result owner in each accepted task.
 Reportable completion, questions and failures enter the retained-result transport
-path independently of cognition. Later optional assessment in the owner's native
-conversation can commit world knowledge and propose useful follow-up tasks within
-configured repository authority. Assessment cannot grant itself new
-repository access. Durable delivery receipts prevent a transport retry from
-repeating accepted world edits or follow-up admission.
+path independently of cognition. The next external turn sees recent outcomes for
+its owner. Transport retries use the frozen message in the delivery receipt.
 
 A finished rhythm run queues a message only through a native `notify` call ([what a rhythm sends](#what-a-rhythm-sends)). The shared turn prompt supplies that tool
 contract once; the conversation runner supplies the capability. Procedures say
@@ -191,8 +188,7 @@ because consolidation is the run's job and notification is a separate choice.
 A writing run that changed no file lands nothing, whatever its findings say:
 what it saw is already on its input branch, so it is done at that candidate
 without an empty commit, and its findings stay on its task ref as a review's do.
-Its result says it changed no files. A question or a blocked run still enters
-assessment as above.
+Its result says it changed no files. A question or a blocked run still reports to its owner.
 
 `owner: null` deliberately retains the task's evidence without assessment or
 notification. Requirement-only review tasks also retain evidence without an owner.
@@ -553,7 +549,7 @@ answer, retry and note on that owner's tasks. An organisation (`workdir`)
 rhythm with `drive_tasks: true` and an owner can submit from its procedure run;
 the key belongs to the rhythm, so a later run submitting the same key gets the
 admitted task back rather than a duplicate. New tasks belong to the configured
-owner, so normal result delivery and assessment continue the work there.
+owner, so later external turns can follow up there.
 It cannot cancel tasks or resume cancelled work; unowned and other-topic tasks
 remain inaccessible. Repository allowlists, source receipts, session fences,
 publication gates and deployment policy still apply. Retries retain their exact
@@ -601,8 +597,7 @@ A procedure rhythm's full final narration is its evidence commit. Notification
 calls queue their own receipts without an assessment turn; they neither replace
 nor depend on that narration. Questions, failures and explicitly requested runs
 keep their outcome-report route. Already prepared delivery receipts replay their
-frozen messages through upgrades. An automatic assessment's final reply is also
-recorded only; any additional message requires its own notification call.
+frozen messages through upgrades.
 A refused task operation in an automatic turn is retained and logged.
 
 There are no built-in light, sleep or REM rhythms and no seeded world files; the

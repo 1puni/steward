@@ -36,7 +36,7 @@ class Dispatch:
 
     `controller.workers` bounds background work. Everything the
     steward schedules for itself — task slices, repository publication,
-    rhythms, probes, result assessment — competes for the same
+    rhythms and probes — competes for the same
     slots, and the executor's own queue is the assignment: first asked, first
     served. There is no per-lane reservation and no fairness ordering, because
     both are a scheduler, and a scheduler is the thing this row deletes.

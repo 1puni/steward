@@ -858,19 +858,6 @@ class StewardDaemon:
                     WorldUpdatePending, subprocess.CalledProcessError) as error:
                 log.info("task result deferred: %s", deferral_cause(error))
 
-        def assess_result(owner: ConversationId) -> None:
-            try:
-                conversations.assess_task_result(owner)
-            except (Busy, ConversationBusy, GitTransportError, OSError,
-                    subprocess.TimeoutExpired, WorldContentConflict,
-                    WorldUpdatePending, subprocess.CalledProcessError) as error:
-                log.info("task assessment deferred: %s", deferral_cause(error))
-
-        def assessments() -> Iterator[Owner]:
-            for owner in dict.fromkeys(ConversationId(r["owner"])
-                                      for r in state.pending_result_assessments()):
-                yield ("assessment", owner), lambda owner=owner: assess_result(owner)
-
         def probes() -> Iterator[Owner]:
             if paused():
                 return
@@ -1053,7 +1040,7 @@ class StewardDaemon:
                 if (due.pending.is_set() or due.deadline) and due.due(None):
                     yield ("repository-reader", name), lambda n=name, t=transport, d=due: refresh_reader(n, t, d)
 
-        lanes = (kernel.owners, probes, rhythm, targets, assessments, world_remote, repository_notices)
+        lanes = (kernel.owners, probes, rhythm, targets, world_remote, repository_notices)
 
         def sync_tasks():
             try:

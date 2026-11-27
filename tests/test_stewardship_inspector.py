@@ -75,7 +75,9 @@ def test_focused_traces_preserve_followup_and_conditional_repair():
     edges = models["new"]["edges"]
     for trace in ("repair", "release"):
         pairs = {tuple(edge[:2]) for edge in edges if trace in edge[3]}
-        assert {("assessment", "world"), ("world", "task"), ("task", "work"), ("work", "publish")} <= pairs
+        assert any(destination == "delivery" for _, destination in pairs)
+        assert not any(source == "delivery" for source, _ in pairs)
+        assert { ("world", "task"), ("task", "work"), ("work", "publish")} <= pairs
     for edge in edges:
         if "reconcile" in edge[:2]:
             assert edge[3] == ["world-repair"]
