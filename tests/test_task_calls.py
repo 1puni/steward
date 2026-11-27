@@ -95,6 +95,8 @@ def test_ownership_and_receipt_after_lost_reply(tmp_path, monkeypatch):
     monkeypatch.setattr(state.tasks, 'create', original)
     receipt = calls(submission())
     assert receipt['accepted'] and receipt['replayed']
+    assert len(state.tasks.all()) == 1
+    assert state.get_conversation(ConversationId.for_task(receipt['task_id'])).provider == 'codex'
     other, _ = state.tasks.create(TaskSpec('app', 'Other', 'Other brief'), owner='telegram:other')
     with pytest.raises(ValueError, match='does not own'):
         calls(dict(operation='show', task_id=str(other)))

@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from state_fixtures import (
-    prepare_turn,
     accept_conversation_turn,
     admit_task,
     close_task_slice,
@@ -329,60 +328,18 @@ def test_tasks_cannot_use_synthetic_or_incomplete_conversation_identity(
             TaskId(rejected)
 
 
-def test_git_task_survives_sql_rollback_and_replay_admits_once(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    """The ref is the task; the row is bookkeeping about it, in that order.
-
-    A crash between the two leaves a branch nothing has a row for, and that is
-    a legal state — a ref under `refs/heads/tasks/` *is* a task. So what has to
-    hold is not "nothing happened" but "an accepted turn never admits twice".
-    """
+def test_replay_preserves_historical_task_receipt(tmp_path):
     state = StateDatabase(tmp_path / "state.db")
-    conversation = state.get_or_create_conversation(
-        "telegram", "topic", provider="claude", profile="balanced",
-    )
+    conversation = state.get_or_create_conversation("telegram", "topic", provider="claude", profile="balanced")
     turn, _ = state.start_turn(conversation.conversation_id, "request", "operator", "Fix it.")
-    event_id = str(turn.turn_id)
-    prepare_turn(state, event_id, world_root=None, base_sha=None,
-        candidate_sha=None, output="Repair proposed.", provider="claude", model="model",
-        provider_session_id=None, profile="balanced",
-    )
-    spec = TaskSpec("repo", "Repair parser", "Fix the failing parser.")
-    insert = state._insert_task
-
-    def fail_after_insert(*args, **kwargs):
-        insert(*args, **kwargs)
-        raise RuntimeError("crash after task insertion")
-
-    with monkeypatch.context() as fault:
-        fault.setattr(state, "_insert_task", fail_after_insert)
-        with pytest.raises(RuntimeError, match="crash after task insertion"):
-            state.accept_turn(
-                event_id, visible_reply="Repair proposed.", spec=spec,
-                rejection=None,
-            )
-    # The branch went first, so it survives the row that did not.
-    assert len(state.tasks.all()) == 1
-    accepted_id = state.tasks.all()[0].task_id
-    assert state.active_turn(conversation.conversation_id) == turn
-    assert state.prepared_turn(event_id)["state"] == "running"
-
-    first = state.accept_turn(
-        event_id, visible_reply="Repair proposed.", spec=spec, rejection=None,
-
-    )
-    replay = state.accept_turn(
-        event_id, visible_reply="Changed policy", spec=None, rejection="Now denied",
-
-    )
-
-    # An accepted turn is finished: the replay opens no second branch.
-    assert TaskId(first["task_id"]) == accepted_id
-    assert dict(replay) == dict(first)
-    assert state.active_turn(conversation.conversation_id) is None
-    assert len(state.tasks.all()) == 1
-    assert state.tasks.read(accepted_id)[1].owner == str(conversation.conversation_id)
+    accept_conversation_turn(state, turn.turn_id)
+    # Seed the previously deployed receipt shape, including its operator-visible reply.
+    with state.connect(write=True) as connection:
+        connection.execute("UPDATE turns SET reply_text=?, task_id=? WHERE turn_id=?",
+                           ("Original task receipt", "legacy-task", str(turn.turn_id)))
+    replay = state.accept_turn(str(turn.turn_id))
+    assert (replay["reply_text"], replay["task_id"]) == ("Original task receipt", "legacy-task")
+    assert state.tasks.all() == []
 
 
 def test_task_provider_switch_keeps_task_lineage_and_drops_private_session(

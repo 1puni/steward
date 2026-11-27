@@ -573,13 +573,7 @@ class ConversationService:
         fresh = row["state"] != "completed"
 
         def finalize():
-            current = self._state.prepared_turn(event_id)
-            if current["state"] == "completed":
-                return current
-            # Reply text is narration only: operations are live task calls.
-            return self._state.accept_turn(
-                event_id, visible_reply=current["output"].strip(), spec=None, rejection=None,
-            )
+            return self._state.accept_turn(event_id)
 
         if fresh and row["world_root"] is not None:
             if not isinstance(self._workspace, WorldTurnCheckpoint):

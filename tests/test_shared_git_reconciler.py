@@ -27,7 +27,7 @@ def prepare(checkpoint, turn, key):
         base_sha=base, candidate_sha=sha, output='saved', provider='codex', model='model',
         provider_session_id=None, profile='balanced',
     )
-    return event, lambda: state.accept_turn(event, visible_reply='saved', spec=None, rejection=None)
+    return event, lambda: state.accept_turn(event)
 
 
 def conflicting_world(tmp_path):
