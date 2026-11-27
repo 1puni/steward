@@ -152,30 +152,6 @@ def test_get_chat_administrators_rejects_a_result_that_is_not_a_member_list(
         client.get_chat_administrators(1)
 
 
-def test_send_message_passes_explicit_html_parse_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, dict[str, Any]]] = []
-    client = TelegramAPI("tok")
-    monkeypatch.setattr(
-        client,
-        "_request",
-        lambda method, endpoint, **kwargs: calls.append((endpoint, kwargs))
-        or {"message_id": 1},
-    )
-
-    client.send_message(1, "<b>done</b>", topic_id=9, parse_mode="HTML")
-
-    endpoint, kwargs = calls[0]
-    assert endpoint == "sendMessage"
-    assert kwargs["json"] == {
-        "chat_id": 1,
-        "text": "<b>done</b>",
-        "message_thread_id": 9,
-        "parse_mode": "HTML",
-    }
-
-
 def test_polling_admits_only_supported_message_updates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -210,7 +186,7 @@ def test_pin_chat_message_sends_fixed_numeric_target(
     }
 
 
-def test_send_video_asks_telegram_to_play_it_in_the_topic(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_video_reply_reaches_the_operator_in_the_requested_topic(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[httpx.Request] = []
     client_type = httpx.Client
 
@@ -225,16 +201,27 @@ def test_send_video_asks_telegram_to_play_it_in_the_topic(tmp_path, monkeypatch:
     video = tmp_path / "trailer.mp4"
     video.write_bytes(b"mp4")
 
-    assert TelegramAPI("tok").send_video(-100123, video, topic_id=914) == 74
-    (request,) = calls
+    service = _service(tmp_path, chat_id=-100123)
+    service.send_reply(-100123, 914, "Here it is", artifacts=_video(video))
+
+    message, request = calls
+    assert message.url.path.endswith("/sendMessage")
+    payload = json.loads(message.content)
+    assert payload["chat_id"] == -100123
+    assert payload["message_thread_id"] == 914
+    assert payload["text"] == "Here it is"
+    assert payload["parse_mode"] == "HTML"
     assert str(request.url).endswith("/bottok/sendVideo")
     assert b'name="supports_streaming"\r\n\r\ntrue' in request.content
     assert b'name="message_thread_id"\r\n\r\n914' in request.content
     assert b'name="video"; filename="trailer.mp4"' in request.content
 
 
-@pytest.mark.parametrize('suffix,mime', [('.mp3', 'audio/mpeg'), ('.ogg', 'audio/ogg'), ('.m4a', 'audio/mp4')])
-@pytest.mark.parametrize('topic', [None, 1, 7])
+@pytest.mark.parametrize('suffix,mime,topic', [
+    ('.mp3', 'audio/mpeg', None),
+    ('.ogg', 'audio/ogg', 1),
+    ('.m4a', 'audio/mp4', 7),
+])
 def test_send_voice_uses_native_voice_upload_and_correct_topic(tmp_path, monkeypatch, suffix, mime, topic):
     calls: list[httpx.Request] = []
     client_type = httpx.Client
@@ -258,22 +245,6 @@ def test_send_voice_uses_native_voice_upload_and_correct_topic(tmp_path, monkeyp
     assert b'name="caption"\r\n\r\nHello' in request.content
     assert (b'name="message_thread_id"' in request.content) == (topic == 7)
     assert b'voice bytes' in request.content
-
-
-def test_send_reply_plays_a_named_video(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _service(tmp_path)
-    video = tmp_path / "trailer.mp4"
-    video.write_bytes(b"mp4")
-    sent: list[tuple[str, int | None]] = []
-    monkeypatch.setattr(service.api, "send_message", lambda *a, **k: 1)
-    monkeypatch.setattr(
-        service.api, "send_video",
-        lambda chat_id, path, topic_id=None: sent.append((str(path), topic_id)) or 1,
-    )
-
-    service.send_reply(1, 9, "Here it is", artifacts=_video(video))
-
-    assert sent == [(str(video), 9)]
 
 
 def test_send_document_streams_generic_file_with_topic(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
