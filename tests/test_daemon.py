@@ -1275,6 +1275,19 @@ def test_world_exchange_follows_remote_notices_and_new_local_commits(tmp_path, m
     assert not world_work()
 
 
+def test_hold_and_stall_alerts_repeat_at_most_daily_per_key(tmp_path) -> None:
+    daemon = StewardDaemon(_config(tmp_path), tmp_path / "steward.yaml")
+    sent: list[str] = []
+    daemon._notify_topic = lambda topic, text: sent.append(text)
+    two_hours_ago = time.monotonic() - 7200
+    for key in ("held-retrying:sleep", "rhythm-stalled:sleep", "held:rhythm:sleep:20", "watch:sleep"):
+        daemon._alerted[key] = two_hours_ago
+        daemon._alert(key, key)
+    # A self-retrying hold or a stall waits a day; a hold that needs the
+    # operator, like any ordinary key, spoke two hours ago and speaks again.
+    assert sent == ["held:rhythm:sleep:20", "watch:sleep"]
+
+
 def test_rhythm_lane_alerts_the_operator_once_when_an_unconditional_rhythm_stalls(tmp_path) -> None:
     instructions = tmp_path / "x.md"
     instructions.write_text("Evaluate x-posting.\n")
@@ -1318,3 +1331,32 @@ def test_rhythm_lane_alerts_the_operator_once_when_an_unconditional_rhythm_stall
     state.set_paused(True)
     step()
     assert sent == [] and daemon._rhythm_health["stalled"] == ["x-posting"]
+
+
+@pytest.mark.parametrize("failure", [
+    RuntimeError("1 task branch(es) could not publish and remain local: task-a"),
+    TimeoutError("task Git push timed out after 120 s"),
+])
+def test_a_failed_task_sync_reaches_the_operator_from_the_pass(tmp_path, failure) -> None:
+    """Startup has no transport to alert through; the pass does, and says so once."""
+    config = StewardConfig.model_validate({
+        **_config(tmp_path).model_dump(),
+        "telegram": {"chat_id": 1, "allowed_users": [7], "topics": {"incidents": 42}},
+    })
+    state = StateDatabase(config.provider.state_db)
+    def failing_sync():
+        raise failure
+    state.tasks.sync = failing_sync
+    daemon, queued, step = _result_pass(tmp_path, config, state)
+    sent: list[tuple[int, int, str]] = []
+    daemon._telegram = SimpleNamespace(
+        config=config.telegram,
+        send_reply=lambda chat_id, topic_id, text: sent.append((chat_id, topic_id, text)))
+    for _ in range(2):  # The same key speaks once per quiet period.
+        queued.clear()
+        step()
+        [intake] = [work for key, work in queued if key == ("task-intake", "git")]
+        intake()  # Deferred, never raised into the dispatch.
+    [(chat_id, topic_id, text)] = sent
+    assert (chat_id, topic_id) == (1, 42)
+    assert "Task store did not sync" in text and str(failure) in text

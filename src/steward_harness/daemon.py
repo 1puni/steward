@@ -578,7 +578,15 @@ class StewardDaemon:
         state.tasks.repositories = set(self.config.repositories)
         state.tasks.default_provider = self.config.provider.default_family
         state.tasks.default_profile = self.config.provider.default_profile
-        state.tasks.sync()
+        try:
+            state.tasks.sync()
+        except (RuntimeError, ValueError, OSError) as error:
+            # Ten days of November 2026: one branch the remote refused made
+            # this line fatal, and the service restarted into it 12,000 times
+            # with nothing polling Telegram. Local decisions are intact and
+            # publication retries each pass. No transport exists yet, so the
+            # pass's own sync is what alerts the operator.
+            log.warning("task store sync failed at startup: %s", deferral_cause(error))
         transports = {
             name: controller_transport(self.config, name)
             for name in self.config.repositories
@@ -1047,6 +1055,8 @@ class StewardDaemon:
                 state.tasks.sync()
             except (RuntimeError, ValueError, OSError) as error:
                 log.warning("task intake deferred: %s", deferral_cause(error))
+                self._alert("tasks-sync", "⚠️ Task store did not sync: "
+                            + deferral_cause(error)[:1500])
 
         next_retention = 0.0
 
@@ -1169,6 +1179,12 @@ class StewardDaemon:
         """Deliver incident state changes without making transport part of policy."""
         self._notify_topic("incidents", text)
 
+    # A hold the controller retries by itself, or a stall, is one condition
+    # however many intervals it spans: it is said once a day per rhythm, not
+    # once an hour (llmpsych, 2026-11-12..14). A hold that needs the operator
+    # is keyed by its interval and is not among these.
+    _DAILY_ALERT_PREFIXES = ("held-retrying:", "rhythm-stalled:")
+
     def _alert(self, key: str, text: str, *, quiet_seconds: float = 3600) -> None:
         """Tell the operator, without a model, that the harness itself stalled.
 
@@ -1177,6 +1193,8 @@ class StewardDaemon:
         storage reserve it was reporting. This path is the transport alone.
         Each key speaks at most once per quiet period.
         """
+        if key.startswith(self._DAILY_ALERT_PREFIXES):
+            quiet_seconds = max(quiet_seconds, 86400)
         now = time.monotonic()
         if now - self._alerted.get(key, -quiet_seconds) < quiet_seconds:
             return

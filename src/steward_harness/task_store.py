@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -30,6 +31,9 @@ from steward_harness.lease import Busy, Lease
 
 PREFIX = "refs/heads/tasks/"
 ZERO = "0" * 40
+GIT_TIMEOUT_SECONDS = 120
+#: How long a branch the remote refused is left alone before one more attempt.
+REFUSED_RETRY_SECONDS = 3600
 
 
 class TaskWorkConflict(RuntimeError):
@@ -236,6 +240,8 @@ class GitTaskStore:
         self.locks_root = path.with_name(path.name + ".locks")
         self.default_provider = "codex"
         self.default_profile = "balanced"
+        # (ref, sha) the remote refused -> (when, cause); see `sync`.
+        self._refused: dict[tuple[str, str], tuple[float, str]] = {}
         self.lease = Lease(
             path.parent, lock_name=f".{path.name}.lock", require_existing=not create,
         )
@@ -255,13 +261,22 @@ class GitTaskStore:
         env.update(GIT_AUTHOR_NAME="Steward", GIT_AUTHOR_EMAIL="steward@localhost",
                    GIT_COMMITTER_NAME="Steward", GIT_COMMITTER_EMAIL="steward@localhost",
                    GIT_NO_LAZY_FETCH="1")
-        result = subprocess.run(
-            hardened_git_argv("-c", "core.fsync=committed", "-c", "commit.gpgsign=false", f"--git-dir={self.path}", *args),
-            env=env, input=input_text, text=True, capture_output=True,
-            timeout=120, umask=0o077,
-        )
+        try:
+            result = subprocess.run(
+                hardened_git_argv("-c", "core.fsync=committed", "-c", "commit.gpgsign=false", f"--git-dir={self.path}", *args),
+                env=env, input=input_text, text=True, capture_output=True,
+                timeout=GIT_TIMEOUT_SECONDS, umask=0o077,
+            )
+        except subprocess.TimeoutExpired:
+            # An OSError, which every caller that survives a failed sync
+            # already handles; TimeoutExpired is not, and a slow push killed
+            # the controller into the same push on restart.
+            raise TimeoutError(f"task Git {args[0]} timed out after {GIT_TIMEOUT_SECONDS} s") from None
         if result.returncode:
-            raise RuntimeError(f"task Git {args[0]} failed (exit {result.returncode})")
+            # The last stderr lines are the cause; without them ten days of
+            # "push failed (exit 1)" said nothing about a refused 186 MB blob.
+            detail = " ".join(result.stderr.strip().splitlines()[-3:])[-400:]
+            raise RuntimeError(f"task Git {args[0]} failed (exit {result.returncode}): {detail}")
         return result.stdout.strip()
 
     def refs(self, prefix: str = PREFIX) -> dict[str, str]:
@@ -673,7 +688,9 @@ class GitTaskStore:
             return
         validate_git_remote_url(self.remote, allow_local=True)
         with self.lease:
-            self.git("fetch", "--no-tags", "--no-write-fetch-head", "--atomic", "--",
+            # Pruned, so a branch the remote no longer has counts as
+            # unpublished again: a replaced or emptied remote is refilled.
+            self.git("fetch", "--no-tags", "--no-write-fetch-head", "--atomic", "--prune", "--",
                      self.remote, "+refs/heads/tasks/*:refs/steward/incoming/*")
             local = self.refs()
             for ref, remote_sha in self.refs("refs/steward/incoming/").items():
@@ -690,9 +707,41 @@ class GitTaskStore:
             # Validate all accepted records before publishing any local decision.
             self.all()
             refs = self.refs()
-            if refs:
-                self.git("push", "--atomic", "--", self.remote,
-                         *(f"{sha}:{ref}" for ref, sha in refs.items()))
+            incoming = self.refs("refs/steward/incoming/")
+            unpublished = {ref: sha for ref, sha in refs.items()
+                           if incoming.get("refs/steward/incoming/" + ref.removeprefix(PREFIX)) != sha}
+            # A branch the remote refused waits out its quiet period unless its
+            # sha changes: pushed again on every sync, a 150 MB record would
+            # upload continuously under this lease.
+            now = time.monotonic()
+            self._refused = {(ref, sha): (at, cause) for (ref, sha), (at, cause) in self._refused.items()
+                             if now - at < REFUSED_RETRY_SECONDS and unpublished.get(ref) == sha}
+            refused = {ref: cause for (ref, _sha), (_at, cause) in self._refused.items()}
+            attempt = {ref: sha for ref, sha in unpublished.items() if (ref, sha) not in self._refused}
+            if attempt:
+                try:
+                    self.git("push", "--atomic", "--", self.remote,
+                             *(f"{sha}:{ref}" for ref, sha in attempt.items()))
+                except (RuntimeError, TimeoutError):
+                    # One refused branch must not keep every other decision local:
+                    # on 2026-11-16 a record the remote would not take held back
+                    # 681 branches for ten days. Publish the rest one by one and
+                    # name what stays behind.
+                    for ref, sha in attempt.items():
+                        try:
+                            self.git("push", "--", self.remote, f"{sha}:{ref}")
+                        except (RuntimeError, TimeoutError) as error:
+                            refused[ref] = str(error)
+                            self._refused[ref, sha] = now, str(error)
+                            if isinstance(error, TimeoutError):
+                                # One slow branch per sync: the rest go out
+                                # together next time, without it.
+                                break
+            if refused:
+                names = ", ".join(sorted(ref.removeprefix(PREFIX) for ref in refused))
+                raise RuntimeError(
+                    f"{len(refused)} task branch(es) could not publish and remain local: "
+                    f"{names}; first cause: {next(iter(refused.values()))}")
 
     def retain_work(self, repository, broker, sha):
         """Fetch one exact agent commit's closure into this store, checking every object."""

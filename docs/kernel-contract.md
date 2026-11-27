@@ -281,6 +281,7 @@ message and marks its receipt delivered. A busy or cleared conversation can stil
 receive delivery. The next externally started turn sees a bounded summary of recent
 outcomes for its owner and can inspect full task evidence through the native task tool.
 Only operator input or a configured task-driving rhythm can steer the next task.
+Task prompts carry the newest accepted inputs within a fixed budget and give the count of older inputs retained in Git.
 
 **Latency expectation:** with a running controller, healthy local storage and an
 available route, a newly reportable outcome is queued on the next controller pass
@@ -495,6 +496,8 @@ and a harness defect.
 | Provider exits without prepared world work | Retain actual unfinished evidence; do not fabricate success |
 | Prepared world candidate | Recover acceptance without repeating cognition or task admission |
 | Task checkpoint | Git retains the work and disposition; SQL retains only its remaining decisions |
+| Task request the runtime would refuse | Hold that task with the reason; the pass and the process continue |
+| Task store publication | A refused branch stays local and is named; the rest publish; startup logs instead of exiting and the pass alerts |
 | Possible push | Observe remote truth; an already-landed effect cannot be cancelled retroactively |
 | Release activation | The symlink alone does not prove a healthy running release |
 | Failed deployment | Preserve the failed marker and prior-release evidence; report rollback failure honestly |

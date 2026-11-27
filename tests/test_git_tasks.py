@@ -412,3 +412,151 @@ def test_gates_verify_committed_media_byte_exact_in_the_landing_worktree(tmp_pat
     assert _git("show", "main:artefacts/codex/sessions/rollout.jsonl", cwd=bare).strip() == "{}"
     if advance:
         assert _git("show", "main:artefacts/codex/sessions/later.jsonl", cwd=bare).strip() == "new base record"
+
+
+def test_sync_publishes_the_rest_when_one_branch_is_refused(tmp_path):
+    """One refused branch stays local and is named; every other decision publishes.
+
+    On 2026-11-16 a 186 MB record the remote would not take, pushed
+    `--atomic` with 680 other branches, kept all of them local for ten days.
+    """
+    from state_fixtures import admit_task
+    bare, clone = _repository(tmp_path)
+    task_remote = tmp_path / "tasks.git"
+    _git("init", "--bare", str(task_remote), cwd=tmp_path)
+    state, _, _, _ = harness(tmp_path / "h", bare, clone, InvestigationAdapter())
+    state.tasks.remote = str(task_remote)
+    first = admit_task(state, TaskSpec("app", "First", "One")).task_id
+    second = admit_task(state, TaskSpec("app", "Second", "Two")).task_id
+    # A stale ref lock stands in for whatever the remote refuses a branch for.
+    lock = task_remote / "refs" / "heads" / "tasks" / f"{second}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("")
+    with pytest.raises(RuntimeError, match=f"1 task branch.*{second}"):
+        state.tasks.sync()
+    published = _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    assert str(first) in published and str(second) not in published
+    lock.unlink()
+    state.tasks._refused.clear()  # As after its quiet period, or a restart.
+    state.tasks.sync()
+    assert str(second) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    state.tasks.sync()  # Nothing unpublished: no push, no error.
+
+
+def _pushes(store, monkeypatch):
+    """Record every push this store attempts from here on."""
+    pushed, git = [], store.git
+    def recording(*args, **kwargs):
+        if args[0] == "push":
+            pushed.append(args)
+        return git(*args, **kwargs)
+    monkeypatch.setattr(store, "git", recording)
+    return pushed
+
+
+def test_sync_republishes_what_a_replaced_remote_no_longer_has(tmp_path):
+    """The published set is what the remote holds now, not what it once took."""
+    import shutil
+    from state_fixtures import admit_task
+    bare, clone = _repository(tmp_path)
+    task_remote = tmp_path / "tasks.git"
+    _git("init", "--bare", str(task_remote), cwd=tmp_path)
+    state, _, _, _ = harness(tmp_path / "h", bare, clone, InvestigationAdapter())
+    state.tasks.remote = str(task_remote)
+    first = admit_task(state, TaskSpec("app", "First", "One")).task_id
+    second = admit_task(state, TaskSpec("app", "Second", "Two")).task_id
+    state.tasks.sync()
+    # One branch deleted remotely: it comes back, and custody never left.
+    _git("update-ref", "-d", f"refs/heads/tasks/{second}", cwd=task_remote)
+    state.tasks.sync()
+    assert str(second) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    # The whole remote replaced with an empty repository: everything arrives.
+    shutil.rmtree(task_remote)
+    _git("init", "--bare", str(task_remote), cwd=tmp_path)
+    state.tasks.sync()
+    published = _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    assert str(first) in published and str(second) in published
+
+
+def test_sync_leaves_a_refused_branch_alone_until_it_changes(tmp_path, monkeypatch):
+    """A refused (ref, sha) is named on every sync and pushed on none of them.
+
+    Sync runs every poll under the task lease; re-pushing a 150 MB record the
+    remote refuses, twice each time, would upload it continuously.
+    """
+    from state_fixtures import admit_task
+    import steward_harness.task_store as task_store
+    bare, clone = _repository(tmp_path)
+    task_remote = tmp_path / "tasks.git"
+    _git("init", "--bare", str(task_remote), cwd=tmp_path)
+    state, _, _, _ = harness(tmp_path / "h", bare, clone, InvestigationAdapter())
+    state.tasks.remote = str(task_remote)
+    first = admit_task(state, TaskSpec("app", "First", "One")).task_id
+    second = admit_task(state, TaskSpec("app", "Second", "Two")).task_id
+    lock = task_remote / "refs" / "heads" / "tasks" / f"{second}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("")
+    with pytest.raises(RuntimeError, match=f"1 task branch.*{second}"):
+        state.tasks.sync()
+    pushed = _pushes(state.tasks, monkeypatch)
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match=f"1 task branch.*{second}"):
+            state.tasks.sync()
+    assert pushed == []
+    # Other decisions still publish past it, without it.
+    third = admit_task(state, TaskSpec("app", "Third", "Three")).task_id
+    with pytest.raises(RuntimeError, match=f"1 task branch.*{second}"):
+        state.tasks.sync()
+    assert len(pushed) == 1 and str(second) not in " ".join(pushed[0])
+    assert str(third) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    # A new sha is a new question for the remote.
+    lock.unlink()
+    pushed.clear()
+    state.tasks.hold(second, "cancelled", "withdrawn")
+    state.tasks.sync()
+    assert len(pushed) == 1
+    assert str(second) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    # And the same sha is asked again once its quiet period has passed.
+    fourth = admit_task(state, TaskSpec("app", "Fourth", "Four")).task_id
+    lock = task_remote / "refs" / "heads" / "tasks" / f"{fourth}.lock"
+    lock.write_text("")
+    with pytest.raises(RuntimeError, match=f"1 task branch.*{fourth}"):
+        state.tasks.sync()
+    lock.unlink()
+    monkeypatch.setattr(task_store, "REFUSED_RETRY_SECONDS", 0)
+    state.tasks.sync()
+    assert str(fourth) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    assert str(first) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+
+
+def test_a_push_that_times_out_is_a_failed_sync_not_a_crash(tmp_path, monkeypatch):
+    """`TimeoutExpired` is neither RuntimeError nor OSError; no caller of sync caught it."""
+    import subprocess
+    from state_fixtures import admit_task
+    import steward_harness.task_store as task_store
+    bare, clone = _repository(tmp_path)
+    task_remote = tmp_path / "tasks.git"
+    _git("init", "--bare", str(task_remote), cwd=tmp_path)
+    state, _, _, _ = harness(tmp_path / "h", bare, clone, InvestigationAdapter())
+    state.tasks.remote = str(task_remote)
+    slow = admit_task(state, TaskSpec("app", "Slow", "One")).task_id
+    quick = admit_task(state, TaskSpec("app", "Quick", "Two")).task_id
+    run = subprocess.run
+    def slow_push(argv, **kwargs):
+        if "push" in argv and any(str(slow) in arg for arg in argv):
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return run(argv, **kwargs)
+    monkeypatch.setattr(task_store.subprocess, "run", slow_push)
+    # The slow branch is named and set aside; nothing escapes as TimeoutExpired.
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match=f"1 task branch.*{slow}.*timed out after 120 s"):
+            state.tasks.sync()
+    assert str(quick) in _git("ls-remote", str(task_remote), "refs/heads/tasks/*", cwd=tmp_path)
+    # A fetch that times out is an OSError, which every caller of sync handles.
+    def slow_fetch(argv, **kwargs):
+        if "fetch" in argv:
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return run(argv, **kwargs)
+    monkeypatch.setattr(task_store.subprocess, "run", slow_fetch)
+    with pytest.raises(OSError, match="task Git fetch timed out"):
+        state.tasks.sync()

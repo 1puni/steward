@@ -114,12 +114,31 @@ def _event_block(event_id: str | None) -> str:
     )
 
 
-def _operator_context_block(operator_context: tuple[str, ...]) -> str:
+#: Accepted inputs are already commits on the task branch, so the prompt
+#: carries the newest ones and says how many older ones it leaves to Git.
+#: Unbounded, 67 inputs put one request over the runtime cap on 2026-11-14.
+OPERATOR_CONTEXT_BUDGET = 48_000
+
+
+def _operator_context_block(operator_context: tuple[str, ...],
+                            budget: int = OPERATOR_CONTEXT_BUDGET) -> str:
     if not operator_context:
         return ""
-    return "## Incoming task context\n" + "\n".join(
-        f"- {item}" for item in operator_context
-    )
+    kept: list[str] = []
+    used = 0
+    for item in reversed(operator_context):
+        line = f"- {item}"
+        if kept and used + len(line) > budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    kept.reverse()
+    elided = len(operator_context) - len(kept)
+    head = "## Incoming task context\n"
+    if elided:
+        head += (f"{elided} earlier input(s) are not repeated here: they are commits on this "
+                 "branch (git log) and their effect is in its retained work.\n")
+    return head + "\n".join(kept)
 
 
 #: A world rhythm's edits and reply are accepted as one world commit, so the

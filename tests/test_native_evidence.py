@@ -177,3 +177,51 @@ def test_capture_runs_once_at_start_then_waits_for_the_interval_or_force(tmp_pat
     old = time.time() - 2 * native_evidence.CAPTURE_INTERVAL
     os.utime(marker, (old, old))
     assert native_evidence.capture(home, mapping, world, force=False) == 1
+
+
+def test_capture_leaves_records_over_the_cap_in_the_home(tmp_path, world, monkeypatch):
+    monkeypatch.setattr(native_evidence, 'MAX_RECORD_BYTES', 16)
+    home = tmp_path / 'home'
+    (home / 'projects/steward').mkdir(parents=True)
+    (home / 'projects/steward/small.jsonl').write_bytes(b'ok\n')
+    (home / 'projects/steward/huge.jsonl').write_bytes(b'x' * 64)
+    assert native_evidence.capture(home, {'projects': 'artefacts/claude/projects'}, world) == 1
+    assert _git(world, 'ls-files').splitlines() == ['artefacts/claude/projects/steward/small.jsonl']
+    assert (home / 'projects/steward/huge.jsonl').read_bytes() == b'x' * 64
+
+
+def test_capture_settles_when_every_record_is_over_the_cap(tmp_path, world, monkeypatch, caplog):
+    """Nothing capturable is still a finished look: it waits for the interval, and logs once."""
+    monkeypatch.setattr(native_evidence, 'MAX_RECORD_BYTES', 16)
+    home = tmp_path / 'home'
+    (home / 'projects/steward').mkdir(parents=True)
+    (home / 'projects/steward/huge.jsonl').write_bytes(b'x' * 64)
+    mapping = {'projects': 'artefacts/claude/projects'}
+    with caplog.at_level('WARNING', logger=native_evidence.__name__):
+        assert native_evidence.capture(home, mapping, world, force=False) == 0
+        assert native_evidence.capture(home, mapping, world, force=False) == -1
+    assert len([record for record in caplog.records if 'retention cap' in record.message]) == 1
+
+
+@pytest.mark.parametrize('replace_record', [False, True])
+def test_capture_checks_the_staged_blob_when_a_record_rotates(tmp_path, world, monkeypatch, replace_record):
+    monkeypatch.setattr(native_evidence, 'MAX_RECORD_BYTES', 16)
+    home = tmp_path / 'home'
+    records = home / 'sessions'
+    records.mkdir(parents=True)
+    record = records / 'rotating.jsonl'
+    record.write_bytes(b'x' * 64)
+    (records / 'small.jsonl').write_bytes(b'ok')
+    git = native_evidence._git
+
+    def rotate_after_staging(workspace, *args, **kwargs):
+        output = git(workspace, *args, **kwargs)
+        if workspace == records and args[0] == 'add':
+            record.unlink()
+            if replace_record:
+                record.write_bytes(b'new')
+        return output
+
+    monkeypatch.setattr(native_evidence, '_git', rotate_after_staging)
+    assert native_evidence.capture(home, {'sessions': 'artefacts/sessions'}, world) == 1
+    assert _git(world, 'ls-files').splitlines() == ['artefacts/sessions/small.jsonl']

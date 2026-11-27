@@ -18,7 +18,10 @@ def test_accepted_assistant_answer_retains_its_source_after_restart(tmp_path):
     state = service._state
     close_task_slice(state, task, "ask", detail="Can missing deployment evidence be waived?")
     cognition.replies.append(_task_reply(dict(operation='answer', key='clarification', task_id=str(task), text='Operator clarification: retain the limitation.')))
-    result = _turn(service, "answer-with-context", operator_id="harness:task-result")
+    # An operator's message is what authorizes the answer; the controller's own
+    # task-result observation cannot (see test_task_calls). The answer still
+    # carries controller provenance: the model relayed it, no operator wrote it.
+    result = _turn(service, "answer-with-context", operator_id="operator")
     assert result.task_rejection is None
     fresh = StateDatabase(state.path)
     [(commit, kind, text, source)] = fresh.tasks.get(task).pending
