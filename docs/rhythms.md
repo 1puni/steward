@@ -345,8 +345,22 @@ providers or insufficient bounds. If the policy file could not be read at all,
 its text is first captured when a continuation can read it. The command does no provider work: the ordinary rhythm worker executes the
 reserved source within the shared budget, and duplicate requests find that same
 source. A restart preserves a queued source whose checkout was never claimed.
-Each explicit request permits one attempt; polling and restarts never authorize provider
-retries. A held interval prevents newer intervals of that rhythm from replacing
+Each explicit request permits one attempt. Polling and restarts never authorize a
+provider retry of an attempt that ran native work: its hold waits for `/rhythm run`,
+because something external may already have happened. An attempt that never reached a
+provider is different. When every configured provider declined (a usage limit, an
+expired login), nothing ran, so the
+controller queues the same continuation by itself once thirty minutes have passed since
+that attempt, and again after each refusal. A provider that keeps refusing is asked
+at most twice an hour; the operator hears about such a hold once a day per rhythm, and
+the same daily bound applies to the stall alert below. Every other hold, including a
+preparation failure that left no source (an unreadable instructions file fails the
+same way each time), waits for `/rhythm run` and alerts under its own interval, so an
+earlier self-retrying hold never silences it. A continuation that cannot be queued
+delays only its own rhythm, for the same thirty minutes. From October 10 to November
+14, 2026, llmpsych's five world rhythms sat held on a usage limit and an expired
+login that had both long cleared, and the hourly stall alert said so 250 times.
+A held interval prevents newer intervals of that rhythm from replacing
 it, while unrelated rhythms remain eligible. Only a later *accepted* interval
 settles an older interrupted one, because a procedure reads from its own cursor
 and that run already covered the gap; a dependent owes nothing for a settled
@@ -511,7 +525,7 @@ never controls scheduling. It becomes stale after the greater of 60 seconds
 and three controller polls. A missing sample is unknown, not healthy. The sample also
 lists `stalled`: world rhythms gated by nothing (`after`, `paths`, `sources` or `watch`)
 whose latest evidence is older than four of their intervals; while not paused, the
-controller tells the operator about each of them once per alert period.
+controller tells the operator about each of them at most once a day.
 
 `scheduled` means a result receipt settled this interval; `active` means a turn
 is running, and `receipt_pending` means acceptance needs its receipt completed.
