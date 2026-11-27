@@ -239,7 +239,7 @@ def test_receipts_from_before_outcomes_do_not_repeat_a_live_message(tmp_path, mo
         assert len(target.receipts()) == 1
 
 
-def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, monkeypatch):
+def test_an_owning_task_receives_live_and_failed_target_observations(tmp_path, monkeypatch):
     with _harness(tmp_path) as (daemon, clone, _calls):
         revision = _git("rev-parse", "HEAD", cwd=clone)
         targets = daemon._targets
@@ -257,9 +257,9 @@ def test_an_owning_task_hears_live_plainly_and_assesses_only_failure(tmp_path, m
         assert (live["owner"], live["task_id"]) == ("telegram:42", "task-1")
         # A live observation says everything; no model turn restates it.
         assert live["reply"] == f"production reached {revision[:12]}.\nready at t=2"
-        # A failure is the owner's to assess, so it carries no canned reply.
+        # Preserve the complete failure evidence in the transport receipt.
         assert (failed["owner"], failed["task_id"]) == ("telegram:42", "task-1")
-        assert "reply" not in failed
+        assert failed["reply"] == failed["result_text"]
 
 
 def test_empty_site_target_does_not_claim_live_application(tmp_path, monkeypatch):

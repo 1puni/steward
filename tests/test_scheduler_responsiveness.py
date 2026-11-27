@@ -60,9 +60,6 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
         progressed[name].set()
 
     def respond(request):
-        if "Harness task result" in request.prompt:
-            advance("task-results")
-            return ""
         advance("desk")
         return "Desk completed."
 
@@ -89,6 +86,7 @@ def test_slow_owner_does_not_block_the_other_drains(tmp_path, monkeypatch, block
     def record(events, kind, text, msg_id=""):
         append(events, kind, text, msg_id)
         if "Task cancelled" in text:
+            advance("task-results")
             delivered.set()
 
     monkeypatch.setattr(EventLog, "append", record)
