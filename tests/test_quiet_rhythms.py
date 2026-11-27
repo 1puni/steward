@@ -750,6 +750,12 @@ def test_only_a_driving_rhythm_run_may_submit(tmp_path):
     light = TaskExecutionCalls(state, run("task-light", "rhythm:light:quiet:1"), {"app"}, drive_tasks=True)
     admitted = light(repair)
     assert admitted["accepted"] and state.tasks.get(admitted["task_id"]).owner == "telegram:3"
+    # Another tick can name the same defect. Preserve the run that first
+    # admitted the work so the child can be traced to its actual clock input.
+    later = TaskExecutionCalls(state, run("task-light-again", "rhythm:light:quiet:2"), {"app"}, drive_tasks=True)
+    assert later(repair)["replayed"]
+    assert state.tasks.git("show", "-s", "--format=%(trailers:key=Steward-Parent,valueonly)",
+                           admitted["revision"]) == f"{light.task_id}@{light.baseline}"
     # Another rhythm's identical key is a different intent.
     other = TaskExecutionCalls(state, run("task-other", "rhythm:other:quiet:1"), {"app"}, drive_tasks=True)
     assert other(repair)["task_id"] != admitted["task_id"]

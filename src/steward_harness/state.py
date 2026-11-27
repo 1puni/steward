@@ -1297,12 +1297,12 @@ class StateDatabase:
 
     def _insert_task(self, connection, spec, *, task_id, kind, origin_ref,
                      conversation_id, provider, profile, status=TaskStatus.QUEUED,
-                     status_reason=None, source=None):
+                     status_reason=None, source=None, parent=None):
         task_id, created = self.tasks.create(
             spec, kind=kind, source=source or (f"{kind.value}:{origin_ref}" if origin_ref else None),
             owner=str(conversation_id) if conversation_id else None,
             hold=status.value if status is not TaskStatus.QUEUED else None,
-            reason=status_reason, task_id=task_id,
+            reason=status_reason, task_id=task_id, parent=parent,
         )
         self._open_in(connection, str(ConversationId.for_task(task_id)), provider=provider, profile=profile)
         return TaskAdmission(task_id, created)

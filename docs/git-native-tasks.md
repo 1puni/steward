@@ -250,6 +250,11 @@ revision rather than repeating the mutation. Rejections create no task commit.
 There is no operation table or second task registry. Native work parents cannot
 supply controller receipts.
 
+When a scheduled task submits a child task, the child's admission commit records
+`Steward-Parent: <task id>@<accepted revision>`. The parent revision contains the
+procedure's schedule event. A later run reusing the same submission key receives
+the original task and preserves its first parent attribution.
+
 Each call can include `source_id`, referring to the initial Turn id or the
 controller-provided source id of a live input. The controller resolves its
 speaker from its own retained row; caller-supplied speaker claims are refused.
