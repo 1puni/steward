@@ -148,12 +148,12 @@ def capture(home: Path, mappings: dict[str, str], workspace: Path, *, force: boo
         _git(root, 'add', '--all', '--force', '--', '.', env=private)
         # Providers may rotate a file after Git stages it. Measure the blob
         # we will publish, even if its path now names a smaller file.
-        fields = '--format=%(objectmode) %(objectname) %(objectsize)%x09%(path)'
-        for line in _git(root, 'ls-files', fields, '-z', env=private).split('\0'):
+        tree = _git(root, 'write-tree', env=private).strip()
+        for line in _git(root, 'ls-tree', '-r', '-l', '-z', tree, env=private).split('\0'):
             if not line:
                 continue
             meta, path = line.split('\t', 1)
-            mode, blob, object_size = meta.split(' ')
+            mode, _kind, blob, object_size = meta.split()
             if mode not in {'100644', '100755'}:
                 continue
             size = int(object_size)
