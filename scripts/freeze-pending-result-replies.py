@@ -19,8 +19,13 @@ def freeze(database: Path) -> int:
         receipt = json.loads(path.read_text())
         if receipt.get("done") or "reply" in receipt:
             continue
-        quiet = (receipt.get("task_id") and receipt["source_key"].endswith(":done")
-                 and store.get(TaskId(receipt["task_id"])).quiet)
+        quiet = False
+        if receipt.get("task_id") and receipt["source_key"].endswith(":done"):
+            # The receipt identifies the reported status. A copy of the task
+            # store alone cannot establish a writing task's remote landing.
+            _, definition, _ = store.read(TaskId(receipt["task_id"]))
+            run = definition.procedure
+            quiet = run is not None and run.event.startswith("rhythm:")
         receipt["reply"] = "" if quiet else receipt["result_text"]
         write_receipt(path, receipt)
         count += 1

@@ -1431,7 +1431,9 @@ class StateDatabase:
                 "AND execution_turn_id IS NULL AND state='completed' AND started_at<?",
                 (str(turn.conversation_id), turn.started_at),
             ).fetchone()[0] or ""
-        owner = notify_owner or str(turn.conversation_id)
+        owner = notify_owner if turn.conversation_id.kind == "rhythm" else str(turn.conversation_id)
+        if not owner:
+            return ()
         since_timestamp = datetime.fromisoformat(since).timestamp() if since else 0
         recent = []
         for path in self.result_receipt_path("").parent.glob("*.json"):

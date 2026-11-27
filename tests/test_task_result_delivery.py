@@ -258,6 +258,19 @@ def test_external_turn_receives_delivered_outcome_once(tmp_path):
     assert "Recent task outcomes" not in cognition.requests[-1].prompt
 
 
+def test_outcome_summary_is_scoped_to_the_owner(tmp_path):
+    service, _, cognition, owner, task_id = admitted(tmp_path)
+    close_task_slice(service._state, task_id, 'ask', detail="Private owner question?")
+    service.deliver_task_result(owner, send=lambda *_: None)
+    cognition.replies.extend([_reply("Other"), _reply("Rhythm")])
+    service.run_turn(transport="telegram", transport_key="other", operator_id="operator",
+                     source_event_key="other-topic", text="Update", notify_owner=str(owner))
+    assert "Private owner question?" not in cognition.requests[-1].prompt
+    service.run_turn(transport="rhythm", transport_key="configured", operator_id="harness:rhythm",
+                     source_event_key="tick", text="Check progress", notify_owner=str(owner))
+    assert "Private owner question?" in cognition.requests[-1].prompt
+
+
 def test_procedure_worker_uses_git_instead_of_injected_peer_state(tmp_path):
     from test_task_runner_kernel import _repository
     from test_git_tasks import harness
@@ -388,8 +401,13 @@ def test_reassigned_task_delivers_to_current_owner_and_skips_old_assessment(tmp_
     assert len(cognition.requests) == 1
 
 
-def test_unprepared_legacy_rhythm_receipt_does_not_send_final_markers(tmp_path):
+@pytest.mark.parametrize("access", ["read-only", "workspace-write"])
+def test_unprepared_legacy_rhythm_receipt_does_not_send_final_markers(tmp_path, access):
     service, facts, cognition, owner, task_id = completed_review(tmp_path)
+    if access == "workspace-write":
+        service._state.tasks.change(task_id, lambda definition: definition.model_copy(update={
+            "procedure": definition.procedure.model_copy(update={"access": access})
+        }), message="Retain writing procedure")
     service._state.save_result_receipt(dict(owner=str(owner), task_id=str(task_id),
         source_key="legacy:done", result_text=FLAGGED, done=False))
     import runpy
