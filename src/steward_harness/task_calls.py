@@ -382,16 +382,23 @@ class TaskCallServer:
     def prompt(self):
         notify = ("- notify: operation, key, text (durably queue a message to this run's owner)\n"
                   if self._notifies else "")
+        # What `operations` refuses is not described as available.
+        steer = "submit" in self.operations
+        observing = ("" if steer else
+                     "This run was started by the controller, not by an operator input: it may look,\n"
+                     "tell and cancel. submit, answer, retry and note are refused here, and what\n"
+                     "follows about them does not apply to this run.\n")
         return '''\n## Live task operations
 Use the native steward_tasks task tool during this execution. Arguments:
 ''' + notify + '''\
 - telegram: operation, action (info/set_photo/set_description), key, text
   (configured chat only; text is a description, absolute photo path, or empty for info;
    cosmetic changes must be enabled by the controller and requested by the operator)
-- submit: operation, key, repository, title, brief
+''' + ("- submit: operation, key, repository, title, brief\n" if steer else "") + '''\
 - show: operation, task_id
 - list: operation
-- answer, retry, note, cancel: operation, key, task_id, text
+- ''' + ("answer, retry, note, cancel" if steer else "cancel") + ''': operation, key, task_id, text
+''' + observing + '''\
 All fields are strings. Include source_id naming the controller-provided input
 that authorizes the operation: the initial Turn id or a live incoming source_id.
 The controller resolves its speaker and requires accepted delivery; sender claims

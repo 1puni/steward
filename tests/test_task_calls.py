@@ -692,3 +692,17 @@ def test_observation_rooted_run_can_look_and_tell_but_not_steer(tmp_path):
     service._cognition = CallingCognition(answer)
     _turn(service, 'operator-answer', 'Package index', operator_id='operator')
     assert service._state.tasks.get(task).status.value == 'queued'
+
+
+@pytest.mark.parametrize("operator_id, steers", [("operator", True), ("harness:task-result", False)])
+def test_the_tool_description_offers_only_what_the_run_may_do(tmp_path, operator_id, steers):
+    """An observation run is refused steering, so its prompt does not offer it."""
+    prompts = []
+    service = _service(tmp_path, CallingCognition(lambda request: prompts.append(request.prompt)))
+    _turn(service, 'root', operator_id=operator_id)
+    described = prompts[0].split('## Live task operations')[1]
+    assert ('- submit:' in described) is steers
+    assert ('- answer, retry, note, cancel:' in described) is steers
+    assert ('- cancel: operation' in described) is not steers
+    assert ('started by the controller' in described) is not steers
+    assert '- show:' in described and '- list:' in described
