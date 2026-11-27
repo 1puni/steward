@@ -520,7 +520,7 @@ and a harness defect.
 | Prepared world candidate | Recover acceptance without repeating cognition or task admission |
 | Task checkpoint | Git retains the work and disposition; SQL retains only its remaining decisions |
 | Task request the runtime would refuse | Hold that task with the reason; the pass and the process continue |
-| Task store publication | A refused branch stays local and is named; the rest publish; startup logs and alerts instead of exiting |
+| Task store publication | A refused branch stays local and is named; the rest publish; startup logs instead of exiting and the pass alerts |
 | Possible push | Observe remote truth; an already-landed effect cannot be cancelled retroactively |
 | Release activation | The symlink alone does not prove a healthy running release |
 | Failed deployment | Preserve the failed marker and prior-release evidence; report rollback failure honestly |
