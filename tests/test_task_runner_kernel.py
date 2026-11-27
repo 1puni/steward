@@ -1226,7 +1226,7 @@ class WatchingAdapter(EditingAdapter):
         )
 
 
-def test_continue_that_moved_nothing_commits_nothing_and_waits(tmp_path: Path) -> None:
+def test_continue_that_moved_nothing_commits_nothing_and_waits(tmp_path: Path, monkeypatch) -> None:
     bare, clone = _repository(tmp_path)
     state = StateDatabase(tmp_path / "state.db")
     admitted = admit_task(state, TaskSpec("app", "Watch the vendor", "Look again until the write-up appears."))
@@ -1263,6 +1263,21 @@ def test_continue_that_moved_nothing_commits_nothing_and_waits(tmp_path: Path) -
     state.tasks.note(admitted.task_id, "The write-up is up.")
     assert run_task(runner) == admitted.task_id
     assert len(adapter.requests) == 3
+
+    # A native worker can commit its own work before returning a continuation.
+    # The index will then be clean against HEAD but ahead of the retained slice.
+    original_execute = adapter.execute
+    def commit_before_return(request):
+        (request.cwd / "observation.txt").write_text("The release is available.")
+        _git("add", "observation.txt", cwd=request.cwd)
+        _git("commit", "-qm", "Record the observed release", cwd=request.cwd)
+        return original_execute(request)
+    monkeypatch.setattr(adapter, "execute", commit_before_return)
+    prior = state.tasks.get(admitted.task_id).work_sha
+    assert run_task(runner) == admitted.task_id
+    retained = state.tasks.get(admitted.task_id).work_sha
+    assert retained != prior
+    assert state.tasks.git("show", f"{retained}:observation.txt") == "The release is available."
 
 
 def test_oversized_request_holds_only_that_task(tmp_path: Path, monkeypatch) -> None:

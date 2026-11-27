@@ -608,7 +608,7 @@ class TaskRunner:
         checkpointer.stage(expected_branch=task.branch)
         if (closure_error is None and closure.disposition == "continue"
                 and task.disposition == "continue" and not task.pending
-                and not self._moved(worktree)):
+                and task.work_sha and not self._moved(worktree, task.work_sha)):
             # The tip already says `continue`, so the task stays owed and its
             # staged session state waits for the next slice that does move.
             self._look_again_after[task.task_id] = time.monotonic() + CONTINUE_WAIT_SECONDS
@@ -676,9 +676,9 @@ class TaskRunner:
         )
         return manager, worktree, checkpointer
 
-    def _moved(self, worktree: Path) -> bool:
-        """Did this slice stage anything beyond its own session state?"""
-        result = run_agent_git(self.broker, "diff", "--cached", "--name-only", "-z",
+    def _moved(self, worktree: Path, retained_sha: str) -> bool:
+        """Compare staged content with the last retained slice, including native commits."""
+        result = run_agent_git(self.broker, "diff", "--cached", "--no-renames", "--name-only", "-z", retained_sha, "--",
                                cwd=worktree, timeout=60)
         if result.returncode:
             return True  # Not decidable here; a commit records whatever it was.
