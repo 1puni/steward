@@ -578,7 +578,15 @@ class StewardDaemon:
         state.tasks.repositories = set(self.config.repositories)
         state.tasks.default_provider = self.config.provider.default_family
         state.tasks.default_profile = self.config.provider.default_profile
-        state.tasks.sync()
+        try:
+            state.tasks.sync()
+        except (RuntimeError, ValueError, OSError) as error:
+            # Ten days of November 2026: one branch the remote refused made
+            # this line fatal, and the service restarted into it 12,000 times
+            # with nothing polling Telegram. Local decisions are intact and
+            # publication retries each pass. No transport exists yet, so the
+            # pass's own sync is what alerts the operator.
+            log.warning("task store sync failed at startup: %s", deferral_cause(error))
         transports = {
             name: controller_transport(self.config, name)
             for name in self.config.repositories
@@ -1060,6 +1068,8 @@ class StewardDaemon:
                 state.tasks.sync()
             except (RuntimeError, ValueError, OSError) as error:
                 log.warning("task intake deferred: %s", deferral_cause(error))
+                self._alert("tasks-sync", "⚠️ Task store did not sync: "
+                            + deferral_cause(error)[:1500])
 
         next_retention = 0.0
 

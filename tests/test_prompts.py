@@ -88,3 +88,23 @@ def test_recurring_run_is_not_asked_to_compress_its_scope_into_a_gate_token() ->
 def test_workspace_write_procedure_adds_no_scope_block() -> None:
     assert prompts.build_procedure_scope(
         candidate="abc", base="def", read_only=False, full_tree=True, verdict=True) == ""
+
+
+def test_task_context_keeps_the_newest_inputs_and_names_what_it_leaves_to_git() -> None:
+    inputs = tuple(f"note {i}: " + "x" * 1000 for i in range(60))
+    block = prompts._operator_context_block(inputs, budget=5000)
+    kept = block.count("\n- note")
+    assert 3 <= kept <= 5
+    assert "note 59:" in block and "note 0:" not in block
+    assert block.startswith(f"## Incoming task context\n{60 - kept} earlier input(s) are not repeated here")
+    short = prompts._operator_context_block(inputs[:2], budget=5000)
+    assert short.count("\n- note") == 2 and short.startswith("## Incoming task context\n- note 0")
+    assert "earlier input" not in short
+    # The newest input is always carried, even past the budget on its own.
+    assert "note 59:" in prompts._operator_context_block(inputs, budget=10)
+    prompt = prompts.build_task_prompt(
+        "Keep going", "The brief", procedure_scope="", repository="app",
+        operator_context=tuple(f"answer {i}: " + "y" * 2000 for i in range(100)),
+    )
+    assert len(prompt) < 128_000
+    assert "answer 99:" in prompt

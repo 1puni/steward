@@ -740,8 +740,14 @@ class StateDatabase:
                 "SELECT * FROM turns WHERE turn_id=?", (event_id,)
             ).fetchone()
 
-    def _apply_task_action(self, owner, operator_id, action, *, source):
-        """Enforce accepted ownership and configured repository authority before committing steering. Automated result assessment cannot grant itself operator authority over unowned work."""
+    def _apply_task_action(self, owner, operator_id, action, *, source, automated_steering=False):
+        """Enforce accepted ownership and configured repository authority before committing steering.
+
+        Automated result assessment cannot grant itself operator authority:
+        a `harness:` speaker may withdraw work but never resume or redirect
+        it, owned or not, unless the controller's configuration drives tasks
+        for that rhythm (`automated_steering`).
+        """
         with self.tasks.lease:
             try:
                 if self.tasks.has_source(action.task_id, source):
@@ -759,6 +765,9 @@ class StateDatabase:
             if task.owner is None and operator_id.startswith("harness:"):
                 return None, (f"Task action rejected: only an operator turn may steer "
                               f"{task.origin_kind.value} work.")
+            if operator_id.startswith("harness:") and action.kind != "cancel" and not automated_steering:
+                return None, (f"Task action rejected: a controller observation cannot {action.kind} "
+                              f"{action.task_id}; an operator input must.")
             allowed = {
                 "cancel": set(TaskStatus) - {TaskStatus.DONE},
                 "answer": {TaskStatus.WAITING},

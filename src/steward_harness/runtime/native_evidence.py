@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -71,6 +72,14 @@ def check_headroom(paths: list[Path], required: int = 0) -> None:
         reserve = min(MAX_RESERVE_BYTES, max(MIN_FREE_BYTES, int(usage.total * MIN_FREE_FRACTION)))
         if usage.free - required < reserve:
             raise RuntimeError('native evidence storage reserve reached; retain evidence and stop new native work')
+
+
+log = logging.getLogger(__name__)
+
+#: A record past this stays in its home, uncaptured. Hosted Git refuses blobs
+#: of 100 MB; on 2026-11-16 one 186 MB transcript, captured into a task
+#: branch, kept every task decision from publishing for ten days.
+MAX_RECORD_BYTES = 90 * 1024 * 1024
 
 
 def _git(workspace: Path, *args: str, input_text: str | None = None,
@@ -137,14 +146,26 @@ def capture(home: Path, mappings: dict[str, str], workspace: Path, *, force: boo
         Path(str(index) + '.lock').unlink(missing_ok=True)
         private = {'GIT_DIR': git_dir, 'GIT_WORK_TREE': str(root), 'GIT_INDEX_FILE': str(index)}
         _git(root, 'add', '--all', '--force', '--', '.', env=private)
-        for line in _git(root, 'ls-files', '--stage', '-z', env=private).split('\0'):
+        # Providers may rotate a file after Git stages it. Measure the blob
+        # we will publish, even if its path now names a smaller file.
+        fields = '--format=%(objectmode) %(objectname) %(objectsize)%x09%(path)'
+        for line in _git(root, 'ls-files', fields, '-z', env=private).split('\0'):
             if not line:
                 continue
             meta, path = line.split('\t', 1)
-            mode, blob, _ = meta.split(' ')
-            if mode in {'100644', '100755'}:
-                entries.append((mode, blob, f'{relative}/{path}'))
+            mode, blob, object_size = meta.split(' ')
+            if mode not in {'100644', '100755'}:
+                continue
+            size = int(object_size)
+            if size > MAX_RECORD_BYTES:
+                log.warning('native record %s/%s is %d bytes, over the %d byte retention cap; '
+                            'left in the home, not captured', name, path, size, MAX_RECORD_BYTES)
+                continue
+            entries.append((mode, blob, f'{relative}/{path}'))
     if not entries:
+        # Looked and found nothing to take (every record over the cap, say):
+        # that settles this interval too, or each call would look and log again.
+        captured_marker(home, tag).touch()
         return 0
     _git(workspace, 'update-index', '--add', '-z', '--index-info', input_text=''.join(
         f'{mode} {blob}\t{target}\0' for mode, blob, target in entries))
