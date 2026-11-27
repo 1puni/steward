@@ -188,3 +188,16 @@ def test_capture_leaves_records_over_the_cap_in_the_home(tmp_path, world, monkey
     assert native_evidence.capture(home, {'projects': 'artefacts/claude/projects'}, world) == 1
     assert _git(world, 'ls-files').splitlines() == ['artefacts/claude/projects/steward/small.jsonl']
     assert (home / 'projects/steward/huge.jsonl').read_bytes() == b'x' * 64
+
+
+def test_capture_settles_when_every_record_is_over_the_cap(tmp_path, world, monkeypatch, caplog):
+    """Nothing capturable is still a finished look: it waits for the interval, and logs once."""
+    monkeypatch.setattr(native_evidence, 'MAX_RECORD_BYTES', 16)
+    home = tmp_path / 'home'
+    (home / 'projects/steward').mkdir(parents=True)
+    (home / 'projects/steward/huge.jsonl').write_bytes(b'x' * 64)
+    mapping = {'projects': 'artefacts/claude/projects'}
+    with caplog.at_level('WARNING', logger=native_evidence.__name__):
+        assert native_evidence.capture(home, mapping, world, force=False) == 0
+        assert native_evidence.capture(home, mapping, world, force=False) == -1
+    assert len([record for record in caplog.records if 'retention cap' in record.message]) == 1

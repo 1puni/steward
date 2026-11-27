@@ -163,6 +163,9 @@ def capture(home: Path, mappings: dict[str, str], workspace: Path, *, force: boo
                 continue
             entries.append((mode, blob, f'{relative}/{path}'))
     if not entries:
+        # Looked and found nothing to take (every record over the cap, say):
+        # that settles this interval too, or each call would look and log again.
+        captured_marker(home, tag).touch()
         return 0
     _git(workspace, 'update-index', '--add', '-z', '--index-info', input_text=''.join(
         f'{mode} {blob}\t{target}\0' for mode, blob, target in entries))
