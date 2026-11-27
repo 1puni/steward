@@ -470,7 +470,7 @@ class GitTaskStore:
         return sha
 
     def create(self, spec: TaskSpec, *, kind=TaskOriginKind.CONVERSATION,
-               source=None, owner=None, hold=None, reason=None, task_id=None, procedure=None):
+               source=None, owner=None, hold=None, reason=None, task_id=None, procedure=None, parent=None):
         # Accepted source IDs make SQL/world/incident replay idempotent. They
         # are never chosen by product work. A direct Git author uses a UUID.
         identity = uuid.uuid5(uuid.NAMESPACE_URL, source).hex if source else uuid.uuid4().hex
@@ -486,7 +486,8 @@ class GitTaskStore:
                                     priority=spec.priority, hold=hold, reason=reason, procedure=procedure)
             self._commit(task_id, None, definition, spec.brief,
                          steward_accept_subject(spec.title, f"tasks/{task_id}")
-                         + (f"\n\nSteward-Source: {source}" if source else ""),
+                         + (f"\n\nSteward-Source: {source}" if source else "")
+                         + (f"\nSteward-Parent: {parent}" if parent else ""),
                          (procedure.candidate,) if procedure else ())
         return task_id, True
 

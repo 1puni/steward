@@ -584,7 +584,8 @@ class TaskExecutionCalls:
             lineage = self.state._lineage_in(connection, str(ConversationId.for_task(self.task_id)))
             admission = self.state._insert_task(connection, TaskSpec(repository=request["repository"],
                 title=request["title"], brief=request["brief"]), task_id=task_id,
-                source=source, kind=TaskOriginKind.CONVERSATION, origin_ref=None,
+                source=source, parent=f"{self.task_id}@{self.baseline}",
+                kind=TaskOriginKind.CONVERSATION, origin_ref=None,
                 conversation_id=ConversationId(self.owner), provider=lineage.provider, profile=lineage.profile)
         return dict(operation="submit", key=request["key"], task_id=str(task_id),
                     revision=tasks.read(task_id)[0], accepted=True, replayed=not admission.created)
