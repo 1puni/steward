@@ -146,17 +146,17 @@ def capture(home: Path, mappings: dict[str, str], workspace: Path, *, force: boo
         Path(str(index) + '.lock').unlink(missing_ok=True)
         private = {'GIT_DIR': git_dir, 'GIT_WORK_TREE': str(root), 'GIT_INDEX_FILE': str(index)}
         _git(root, 'add', '--all', '--force', '--', '.', env=private)
-        for line in _git(root, 'ls-files', '--stage', '-z', env=private).split('\0'):
+        # Providers may rotate a file after Git stages it. Measure the blob
+        # we will publish, even if its path now names a smaller file.
+        fields = '--format=%(objectmode) %(objectname) %(objectsize)%x09%(path)'
+        for line in _git(root, 'ls-files', fields, '-z', env=private).split('\0'):
             if not line:
                 continue
             meta, path = line.split('\t', 1)
-            mode, blob, _ = meta.split(' ')
+            mode, blob, object_size = meta.split(' ')
             if mode not in {'100644', '100755'}:
                 continue
-            try:
-                size = (root / path).stat().st_size
-            except OSError:
-                size = 0
+            size = int(object_size)
             if size > MAX_RECORD_BYTES:
                 log.warning('native record %s/%s is %d bytes, over the %d byte retention cap; '
                             'left in the home, not captured', name, path, size, MAX_RECORD_BYTES)

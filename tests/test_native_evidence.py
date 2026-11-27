@@ -201,3 +201,27 @@ def test_capture_settles_when_every_record_is_over_the_cap(tmp_path, world, monk
         assert native_evidence.capture(home, mapping, world, force=False) == 0
         assert native_evidence.capture(home, mapping, world, force=False) == -1
     assert len([record for record in caplog.records if 'retention cap' in record.message]) == 1
+
+
+@pytest.mark.parametrize('replace_record', [False, True])
+def test_capture_checks_the_staged_blob_when_a_record_rotates(tmp_path, world, monkeypatch, replace_record):
+    monkeypatch.setattr(native_evidence, 'MAX_RECORD_BYTES', 16)
+    home = tmp_path / 'home'
+    records = home / 'sessions'
+    records.mkdir(parents=True)
+    record = records / 'rotating.jsonl'
+    record.write_bytes(b'x' * 64)
+    (records / 'small.jsonl').write_bytes(b'ok')
+    git = native_evidence._git
+
+    def rotate_after_staging(workspace, *args, **kwargs):
+        output = git(workspace, *args, **kwargs)
+        if workspace == records and args[0] == 'add':
+            record.unlink()
+            if replace_record:
+                record.write_bytes(b'new')
+        return output
+
+    monkeypatch.setattr(native_evidence, '_git', rotate_after_staging)
+    assert native_evidence.capture(home, {'sessions': 'artefacts/sessions'}, world) == 1
+    assert _git(world, 'ls-files').splitlines() == ['artefacts/sessions/small.jsonl']
